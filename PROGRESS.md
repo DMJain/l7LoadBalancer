@@ -8,7 +8,7 @@ Live state of the project. Every agent updates this file per the protocol in `AG
 
 ## Sprint 1 — Foundation
 
-- [DONE] S1.T0 — Repository scaffold (bootstrap agent, 2026-08-31T00:00:00Z, commit: initial scaffold)
+- [DONE] S1.T0 — Repository scaffold (bootstrap agent, 2026-08-31T00:00:00Z, commit: 25c1952)
 - [TODO] S1.T1 — Add Go dependencies: `gopkg.in/yaml.v3`, `github.com/stretchr/testify`. Run `go mod tidy`.
 - [TODO] S1.T2 — Implement `internal/config`: YAML struct, loader, strict validation.
 - [TODO] S1.T3 — Implement `internal/backend`: `Backend` struct, `Registry` with atomic state.

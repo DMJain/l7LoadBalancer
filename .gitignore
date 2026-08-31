@@ -5,8 +5,7 @@
 *.out
 
 # Coverage
-coverage.txt
-coverage.html
+coverage.*
 
 # IDE
 .vscode/
