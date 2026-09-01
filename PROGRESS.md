@@ -4,11 +4,18 @@ Live state of the project. Every agent updates this file per the protocol in `AG
 
 ## Current status
 
-**No task in progress.** Bootstrap complete. Next: begin Sprint 1, Task S1.T1.
+**No task in progress.** S1.T0.5 (Interface & Schema Freeze, Phase A) complete. Next: begin Sprint 1, Task S1.T1.
 
 ## Sprint 1 — Foundation
 
 - [DONE] S1.T0 — Repository scaffold (bootstrap agent, 2026-08-31T00:00:00Z, commit: 25c1952)
+
+- [DONE] S1.T0.5 — Interface & Schema Freeze (Phase A) (claude, started 2026-09-01T16:04:36Z, completed 2026-09-01T16:35:00Z)
+  - Goal: freeze all cross-package contracts as compilable Go stubs + a design doc before any Sprint 1 implementation begins, so T1–T10 (potentially executed by different agents/sessions) cannot silently diverge.
+  - Files: `internal/config/config.go`; `internal/backend/backend.go`, `internal/backend/registry.go`; `internal/balancer/selector.go`, `roundrobin.go`, `leastconn.go`, `consistent_hash.go`, `p2c_ewma.go`; `internal/proxy/proxy.go`; `internal/logger/logger.go` (+doc.go); `internal/metrics/metrics.go` (+doc.go); `internal/health/health.go`; `internal/circuit/circuit.go`; `docs/design/sprint-1-contracts.md`; `docs/adr/0002-interface-placement-and-schema-freeze.md`
+  - Depends on: S1.T0
+  - Acceptance: `go build ./...` and `go vet ./...` pass with every stubbed body either `panic("not implemented: <task-id>")` or trivial (`logger.New`); compile-time `var _ Selector = (*X)(nil)` assertions in every selector file; design doc covers dependency graph, interface placement, YAML schema, algorithm identifier table, error convention, log field vocabulary, metric reservations, concurrency ownership table; ADR-0002 written; no changes to `main.go` behavior (still returns 501).
+  - Test approach: none — Phase A is analysis/contract-definition only, no logic, no test files.
 
 - [TODO] S1.T1 — Add Go dependencies
   - Goal: pull in the third-party deps Sprint 1 needs (YAML parsing, test assertions) so later tasks aren't blocked on dependency wrangling.
@@ -134,3 +141,4 @@ See `MILESTONES.md`. Tasks added per sprint.
 ## Session log
 
 - 2026-08-31 — bootstrap agent — repository scaffold created per BOOTSTRAP PROMPT. All Phase 7 verification checks passed.
+- 2026-09-01 — claude — S1.T0.5 Interface & Schema Freeze (Phase A): froze all Sprint 1 cross-package contracts as compiling Go stubs, wrote `docs/design/sprint-1-contracts.md` and ADR-0002. See `docs/sessions/2026-09-01-claude.md`.
