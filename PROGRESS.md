@@ -46,7 +46,7 @@ Live state of the project. Every agent updates this file per the protocol in `AG
   - Files: `internal/backend/backend.go`, `internal/backend/registry.go`, `internal/backend/registry_test.go` (replaces the placeholder `backend_test.go`)
   - Depends on: S1.T2
   - Acceptance:
-    - `Backend`: `Name string`; `URL *url.URL`; `Healthy atomic.Bool`; `ActiveConns atomic.Int64`.
+    - `Backend`: exported `Name string` and `URL *url.URL`; unexported `healthy` (`atomic.Bool`) and `active` (`atomic.Int64`) fields, reachable only via methods `IsHealthy()`, `IncActive()`, `DecActive()`, `ActiveConns() int64`. This matches the frozen contract in `docs/design/sprint-1-contracts.md` and ADR-0002.
     - `Backend` exposes an `IsHealthy() bool` method; downstream code (balancer, proxy) accesses health only via this method, never via the `Healthy` field directly. This isolates the field type from callers so Sprint 3 can replace `atomic.Bool` with a state enum without touching balancer or proxy code.
     - `NewRegistry(cfgs []config.BackendConfig) (*Registry, error)` builds backends from validated config.
     - `Registry.All()` and `Registry.Healthy()` each return a fresh slice per call — safe to iterate concurrently with registry mutation, no lock held by caller.
