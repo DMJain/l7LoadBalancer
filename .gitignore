@@ -22,3 +22,7 @@ bench/tmp/
 
 # Go build cache (not usually needed but just in case)
 /vendor/
+
+
+# Cross-tool agent skill copies (local convenience for Antigravity/OpenCode; not portfolio content)
+/.agents/

@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Canonical guidance for any coding agent working on this repository (Claude Code, Antigravity CLI, Omni Router, or others). `CLAUDE.md` and `GEMINI.md` are symlinks to this file.
+Canonical guidance for any coding agent working on this repository (Claude Code, Antigravity IDE, OpenCode CLI, or others). `CLAUDE.md` and `GEMINI.md` are symlinks to this file.
 
 ## Project
 
@@ -105,3 +105,21 @@ Per the user's discipline: do NOT set up any of these until Sprint 3 or later, a
 - Do not add features not in `MILESTONES.md`. Propose them to the user first; if accepted, add to `MILESTONES.md` before coding.
 - Do not skip tests to move faster.
 - Do not commit if `make test-race` fails.
+
+## Agent skills
+
+### Issue tracker
+
+Local markdown under `.scratch/<feature-slug>/`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default five canonical role names (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context (`CONTEXT.md` + `docs/adr/` at repo root). See `docs/agents/domain.md`.
+
+### Cross-tool skill availability
+
+Skills are copied into a gitignored, project-level `.agents/skills/` (in addition to the home-level `~/.agents/skills/`) so Antigravity IDE and OpenCode CLI can use them too. If a skill isn't registered by the tool you're using, its slash form won't actually run it. See `docs/agents/skills.md`.
