@@ -14,7 +14,7 @@ Every non-trivial architectural or design decision gets an ADR in `docs/adr/`, n
 
 ## Consequences
 
-- Positive: preserved context across sessions and agents; interview-defensible design record.
+- Positive: preserved context across sessions and agents; traceable design record.
 - Negative: small friction on decision points.
 
 ## Alternatives considered

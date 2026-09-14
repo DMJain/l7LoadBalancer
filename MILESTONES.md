@@ -71,7 +71,7 @@ Strategic plan. Each sprint = one weekend of focused work. Tasks under each spri
 
 ## Sprint 5 — HTTP/2, Benchmarks, Docs
 
-**Goal**: Shippable portfolio artifact.
+**Goal**: Production-ready artifact with benchmarks and documentation.
 
 **Deliverables**:
 - HTTP/2 client-facing: TLS with self-signed cert + ALPN; also h2c via `golang.org/x/net/http2/h2c`.
@@ -79,7 +79,7 @@ Strategic plan. Each sprint = one weekend of focused work. Tasks under each spri
 - Benchmark rig in `bench/`: docker-compose with LB + Nginx + 4 backends, wrk and vegeta harness, response-size matrix (200B, 10KB, 1MB), concurrency sweep, failure-mode benchmarks.
 - Published numbers: p50 / p99 / p99.9 at 50% and 90% of peak, plus throughput ceilings. Raw wrk/vegeta output committed alongside.
 - README with architecture diagram (Mermaid or Excalidraw export).
-- `docs/design-decisions.md` — the rationale-heavy doc for interviews.
+- `docs/design-decisions.md` — rationale-heavy doc covering every non-trivial choice.
 - `docs/what-id-do-differently.md` — honest retrospective.
 
 **Exit criteria**:

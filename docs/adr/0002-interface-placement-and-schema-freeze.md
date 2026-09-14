@@ -65,7 +65,7 @@ of early.
 ## Consequences
 
 - Positive: T1–T10 have one unambiguous reference to build against,
-  reducing cross-session integration risk. Interview-defensible record of
+  reducing cross-session integration risk. Traceable record of
   *why* the interface lives where it does.
 - Positive: log/metric vocabulary is consistent from the first line of
   request-path code, not retrofitted.
