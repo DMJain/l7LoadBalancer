@@ -4,7 +4,7 @@ Live state of the project. Every agent updates this file per the protocol in `AG
 
 ## Current status
 
-**S1.T2 in progress** by opencode (started 2026-09-17T22:12:47Z). S1.T1 complete. S1.T2: implement `internal/config` Load/Validate + tests + `configs/example.yaml`.
+**No task in progress.** S1.T1 and S1.T2 complete. Next: begin S1.T3 (`internal/backend`).
 
 ## Sprint 1 — Foundation
 
@@ -28,7 +28,7 @@ Live state of the project. Every agent updates this file per the protocol in `AG
     - `go build ./...` and `go vet ./...` still pass.
   - Test approach: none (dependency-only); gated by existing build/vet checks.
 
-- [IN_PROGRESS] S1.T2 — Implement `internal/config` (opencode, started 2026-09-17T22:12:47Z)
+- [DONE] S1.T2 — Implement `internal/config` (opencode, started 2026-09-17T22:12:47Z, completed 2026-09-17T22:14:08Z)
   - Goal: load and strictly validate the YAML config (listen address + backend list + algorithm choice) into a typed struct, as the canonical config source for the registry and proxy.
   - Files: `internal/config/config.go`, `internal/config/config_test.go`, `configs/example.yaml` (updated to a realistic 3-backend example)
   - Depends on: S1.T1
@@ -142,3 +142,4 @@ See `MILESTONES.md`. Tasks added per sprint.
 
 - 2026-08-31 — bootstrap agent — repository scaffold created per BOOTSTRAP PROMPT. All Phase 7 verification checks passed.
 - 2026-09-01 — claude — S1.T0.5 Interface & Schema Freeze (Phase A): froze all Sprint 1 cross-package contracts as compiling Go stubs, wrote `docs/design/sprint-1-contracts.md` and ADR-0002. See `docs/sessions/2026-09-01-claude.md`.
+- 2026-09-18 — opencode — S1.T2 Implement `internal/config`: strict YAML load (`KnownFields(true)`), fail-fast `Validate()` with algorithm default and full field checks, table-driven tests (21 cases), `configs/example.yaml` rewritten to the frozen 3-backend example, `tools.go` deleted now that both deps are imported for real. See `docs/sessions/2026-09-18-opencode.md`.
