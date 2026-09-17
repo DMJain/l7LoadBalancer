@@ -13,9 +13,12 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Algorithm identifiers. These are the exact string values accepted in the
-// YAML `algorithm` field and matched against in balancer.NewFromConfig.
-// See docs/design/sprint-1-contracts.md "Algorithm identifier table".
+// Algorithm identifiers. These are the canonical string vocabulary for the
+// YAML `algorithm` field and the config-string -> selector-type mapping in
+// balancer.NewFromConfig. The constants name every algorithm the project
+// intends to support; the narrower set accepted by the current build is
+// implementedAlgorithms. See ADR-0004 and
+// docs/design/sprint-1-contracts.md "Algorithm identifier table".
 const (
 	AlgorithmRoundRobin     = "round_robin"
 	AlgorithmLeastConn      = "least_conn"

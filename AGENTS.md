@@ -310,6 +310,7 @@ All non-trivial decisions must have an ADR. Current ADRs:
 | [0001](docs/adr/0001-record-adrs.md) | Record architecture decisions | Accepted |
 | [0002](docs/adr/0002-interface-placement-and-schema-freeze.md) | Interface placement and Sprint 1 schema freeze | Accepted |
 | [0003](docs/adr/0003-pin-unused-deps-with-tools-go.md) | Pin not-yet-imported dependencies with a build-tagged tools.go | Accepted |
+| [0004](docs/adr/0004-reject-unimplemented-algorithms-in-validate.md) | Reject unimplemented algorithms in Validate | Accepted |
 | TBD (Sprint 2) | Why bounded-loads consistent hashing over naive CH | — |
 | TBD (Sprint 2) | Why P2C-EWMA over least-connections for latency-skewed workloads | — |
 | TBD (Sprint 3) | Circuit breaker concurrency model | — |
