@@ -309,6 +309,7 @@ All non-trivial decisions must have an ADR. Current ADRs:
 |-----|-------|--------|
 | [0001](docs/adr/0001-record-adrs.md) | Record architecture decisions | Accepted |
 | [0002](docs/adr/0002-interface-placement-and-schema-freeze.md) | Interface placement and Sprint 1 schema freeze | Accepted |
+| [0003](docs/adr/0003-pin-unused-deps-with-tools-go.md) | Pin not-yet-imported dependencies with a build-tagged tools.go | Accepted |
 | TBD (Sprint 2) | Why bounded-loads consistent hashing over naive CH | — |
 | TBD (Sprint 2) | Why P2C-EWMA over least-connections for latency-skewed workloads | — |
 | TBD (Sprint 3) | Circuit breaker concurrency model | — |
@@ -328,6 +329,7 @@ All non-trivial decisions must have an ADR. Current ADRs:
 9. **Atomic counter for RoundRobin, not mutex** — single increment doesn't need mutual exclusion.
 10. **Deterministic tie-breaking in LeastConnections** — first-in-registry-order wins. Enables reproducible tests.
 11. **ActiveConns decremented in body `Close()`, not `ModifyResponse`** — prevents counting streamed-but-incomplete responses as "done".
+12. **Not-yet-imported deps pinned via a build-tagged `tools.go`** — ADR-0003. `go mod tidy` prunes unused modules, so S1.T1's two new deps are blank-imported under `//go:build tools` until S1.T2 imports them for real.
 
 ---
 
