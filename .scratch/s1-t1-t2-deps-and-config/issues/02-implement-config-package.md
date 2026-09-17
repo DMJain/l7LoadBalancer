@@ -10,24 +10,24 @@ The test suite is table-driven and serves as the executable specification of the
 
 ## Acceptance criteria
 
-- [ ] `Load(path)` reads YAML using `yaml.NewDecoder(f).KnownFields(true)` — not `yaml.Unmarshal`
-- [ ] `Load` is pure deserialization — no defaulting, no validation
-- [ ] `Load` errors are wrapped: `fmt.Errorf("config: load %s: %w", path, err)`
-- [ ] `Validate()` sets `Algorithm = "round_robin"` when empty (normalize-then-validate)
-- [ ] `Validate()` is fail-fast — returns the first validation error encountered
-- [ ] Listen: `net.SplitHostPort` must succeed; port must parse as uint16
-- [ ] Backends: at least one required
-- [ ] Backend names: non-empty, match `^[a-zA-Z0-9_-]+$`, no duplicates
-- [ ] Backend URLs: `url.Parse` succeeds, scheme is `http` or `https`, host is non-empty, no query string, no fragment. Paths are allowed.
-- [ ] Algorithm: checked against a package-level `map[string]struct{}` of implemented algorithms (`round_robin`, `least_conn` only in Sprint 1). Case-sensitive. Unimplemented Sprint 2 algorithms (`consistent_hash`, `p2c_ewma`) are rejected.
-- [ ] `configs/example.yaml` updated to 3-backend config from the frozen contract in `docs/design/sprint-1-contracts.md`
-- [ ] Table-driven tests cover all 18 cases: (a) file not found, (b) invalid YAML, (c) unknown field, (d) missing listen, (e) invalid listen no port, (f) zero backends, (g) no-scheme URL, (h) URL with query, (i) URL with fragment, (j) duplicate names, (k) empty name, (l) invalid name chars, (m) unknown algorithm, (n) unimplemented algorithm, (o) case sensitivity, (p) algorithm default omitted, (q) algorithm default empty, (r) happy-path round-trip with full struct assertion
-- [ ] `make test` passes
-- [ ] `make test-race` passes
-- [ ] `go vet ./...` passes
-- [ ] `make fmt` produces no diff
-- [ ] `PROGRESS.md` updated: S1.T2 marked `[DONE]` with completion timestamp
-- [ ] Session log appended to `docs/sessions/`
+- [x] `Load(path)` reads YAML using `yaml.NewDecoder(f).KnownFields(true)` — not `yaml.Unmarshal`
+- [x] `Load` is pure deserialization — no defaulting, no validation
+- [x] `Load` errors are wrapped: `fmt.Errorf("config: load %s: %w", path, err)`
+- [x] `Validate()` sets `Algorithm = "round_robin"` when empty (normalize-then-validate)
+- [x] `Validate()` is fail-fast — returns the first validation error encountered
+- [x] Listen: `net.SplitHostPort` must succeed; port must parse as uint16
+- [x] Backends: at least one required
+- [x] Backend names: non-empty, match `^[a-zA-Z0-9_-]+$`, no duplicates
+- [x] Backend URLs: `url.Parse` succeeds, scheme is `http` or `https`, host is non-empty, no query string, no fragment. Paths are allowed.
+- [x] Algorithm: checked against a package-level `map[string]struct{}` of implemented algorithms (`round_robin`, `least_conn` only in Sprint 1). Case-sensitive. Unimplemented Sprint 2 algorithms (`consistent_hash`, `p2c_ewma`) are rejected.
+- [x] `configs/example.yaml` updated to 3-backend config from the frozen contract in `docs/design/sprint-1-contracts.md`
+- [x] Table-driven tests cover all 18 cases: (a) file not found, (b) invalid YAML, (c) unknown field, (d) missing listen, (e) invalid listen no port, (f) zero backends, (g) no-scheme URL, (h) URL with query, (i) URL with fragment, (j) duplicate names, (k) empty name, (l) invalid name chars, (m) unknown algorithm, (n) unimplemented algorithm, (o) case sensitivity, (p) algorithm default omitted, (q) algorithm default empty, (r) happy-path round-trip with full struct assertion
+- [x] `make test` passes
+- [x] `make test-race` passes
+- [x] `go vet ./...` passes
+- [x] `make fmt` produces no diff
+- [x] `PROGRESS.md` updated: S1.T2 marked `[DONE]` with completion timestamp
+- [x] Session log appended to `docs/sessions/`
 
 ## Implementation notes
 
