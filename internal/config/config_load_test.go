@@ -110,3 +110,13 @@ backends:
 		})
 	}
 }
+
+// TestExampleConfig proves the shipped configs/example.yaml round-trips
+// through the real Load + Validate pipeline, so the example can never drift
+// out of sync with the schema or validation rules. The path is relative to
+// this test file's package directory (internal/config).
+func TestExampleConfig(t *testing.T) {
+	cfg, err := Load(filepath.Join("..", "..", "configs", "example.yaml"))
+	require.NoError(t, err)
+	require.NoError(t, cfg.Validate())
+}
