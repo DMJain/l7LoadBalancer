@@ -31,7 +31,7 @@ const (
 // selectors that back them exist: validation answers "will this work?", not
 // "does this parse?". Adding a selector is a one-line addition here.
 //
-// See spec: "Validation encodes will this work?, not does this parse?"
+// See ADR-0004.
 var implementedAlgorithms = map[string]struct{}{
 	AlgorithmRoundRobin: {},
 	AlgorithmLeastConn:  {},
@@ -112,11 +112,11 @@ func (c *Config) Validate() error {
 	}
 
 	for i := range c.Backends {
-		b := &c.Backends[i]
-		if err := validateBackendName(b.Name); err != nil {
+		backend := &c.Backends[i]
+		if err := validateBackendName(backend.Name); err != nil {
 			return err
 		}
-		if err := validateBackendURL(b.Name, b.URL); err != nil {
+		if err := validateBackendURL(backend.Name, backend.URL); err != nil {
 			return err
 		}
 	}
