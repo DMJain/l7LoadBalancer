@@ -18,58 +18,95 @@ func writeTempConfig(t *testing.T, contents string) string {
 	return path
 }
 
+type loadCase struct {
+	name      string
+	contents  string
+	missing   bool
+	wantErr   bool
+	errSubstr string
+	errIs     error
+	check     func(t *testing.T, cfg *Config)
+}
+
 func TestLoad(t *testing.T) {
-	t.Run("missing file wraps os.ErrNotExist", func(t *testing.T) {
-		_, err := Load(filepath.Join(t.TempDir(), "does-not-exist.yaml"))
-		require.Error(t, err)
-		assert.ErrorIs(t, err, os.ErrNotExist)
-		assert.Contains(t, err.Error(), "config: load")
-	})
-
-	t.Run("invalid YAML syntax returns a decode error", func(t *testing.T) {
-		path := writeTempConfig(t, "listen: \":8080\"\nbackends:\n  - name: \"a\"\n   url: \"http://127.0.0.1:9001\"\n")
-		_, err := Load(path)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "config: load")
-	})
-
-	t.Run("unknown field is rejected", func(t *testing.T) {
-		path := writeTempConfig(t, "listn: \":8080\"\n")
-		_, err := Load(path)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "listn")
-	})
-
-	t.Run("successful load populates fields without defaulting or validating", func(t *testing.T) {
-		path := writeTempConfig(t, `listen: ":9090"
+	cases := []loadCase{
+		{
+			name:      "missing file wraps os.ErrNotExist",
+			missing:   true,
+			wantErr:   true,
+			errSubstr: "config: load",
+			errIs:     os.ErrNotExist,
+		},
+		{
+			name:      "invalid YAML syntax returns a decode error",
+			contents:  "listen: \":8080\"\nbackends:\n  - name: \"a\"\n   url: \"http://127.0.0.1:9001\"\n",
+			wantErr:   true,
+			errSubstr: "config: load",
+		},
+		{
+			name:      "unknown field is rejected",
+			contents:  "listn: \":8080\"\n",
+			wantErr:   true,
+			errSubstr: "listn",
+		},
+		{
+			name: "successful load populates fields without defaulting or validating",
+			contents: `listen: ":9090"
 algorithm: "least_conn"
 backends:
   - name: "a"
     url: "http://127.0.0.1:9001"
   - name: "b"
     url: "http://127.0.0.1:9002"
-`)
-		cfg, err := Load(path)
-		require.NoError(t, err)
-		require.NotNil(t, cfg)
-		assert.Equal(t, ":9090", cfg.Listen)
-		assert.Equal(t, "least_conn", cfg.Algorithm)
-		require.Len(t, cfg.Backends, 2)
-		assert.Equal(t, BackendConfig{Name: "a", URL: "http://127.0.0.1:9001"}, cfg.Backends[0])
-		assert.Equal(t, BackendConfig{Name: "b", URL: "http://127.0.0.1:9002"}, cfg.Backends[1])
-	})
+`,
+			check: func(t *testing.T, cfg *Config) {
+				t.Helper()
+				assert.Equal(t, ":9090", cfg.Listen)
+				assert.Equal(t, "least_conn", cfg.Algorithm)
+				require.Len(t, cfg.Backends, 2)
+				assert.Equal(t, BackendConfig{Name: "a", URL: "http://127.0.0.1:9001"}, cfg.Backends[0])
+				assert.Equal(t, BackendConfig{Name: "b", URL: "http://127.0.0.1:9002"}, cfg.Backends[1])
+			},
+		},
+		{
+			name:     "omitted algorithm is left empty by Load",
+			contents: "listen: \":8080\"\n",
+			check: func(t *testing.T, cfg *Config) {
+				t.Helper()
+				assert.Empty(t, cfg.Algorithm)
+			},
+		},
+		{
+			name:     "empty backends are left empty by Load",
+			contents: "listen: \":8080\"\nbackends: []\n",
+			check: func(t *testing.T, cfg *Config) {
+				t.Helper()
+				assert.Empty(t, cfg.Backends)
+			},
+		},
+	}
 
-	t.Run("omitted algorithm is left empty by Load", func(t *testing.T) {
-		path := writeTempConfig(t, "listen: \":8080\"\n")
-		cfg, err := Load(path)
-		require.NoError(t, err)
-		assert.Empty(t, cfg.Algorithm)
-	})
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "missing.yaml")
+			if !tc.missing {
+				path = writeTempConfig(t, tc.contents)
+			}
 
-	t.Run("empty backends are left empty by Load", func(t *testing.T) {
-		path := writeTempConfig(t, "listen: \":8080\"\nbackends: []\n")
-		cfg, err := Load(path)
-		require.NoError(t, err)
-		assert.Empty(t, cfg.Backends)
-	})
+			cfg, err := Load(path)
+			if tc.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tc.errSubstr)
+				if tc.errIs != nil {
+					assert.ErrorIs(t, err, tc.errIs)
+				}
+				return
+			}
+			require.NoError(t, err)
+			require.NotNil(t, cfg)
+			if tc.check != nil {
+				tc.check(t, cfg)
+			}
+		})
+	}
 }
