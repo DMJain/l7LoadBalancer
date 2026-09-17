@@ -26,3 +26,7 @@ bench/tmp/
 
 # Cross-tool agent skill copies (local convenience for Antigravity/OpenCode; not portfolio content)
 /.agents/
+# OpenCode's project skill path: symlink into .agents/skills so OpenCode loads
+# each skill exactly once (see docs/agents/skills.md).
+/.opencode/skills
+/.opencode/commands
