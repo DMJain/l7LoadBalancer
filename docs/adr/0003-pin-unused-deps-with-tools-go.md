@@ -61,8 +61,9 @@ the modules for real; at that point the imports are redundant.
   build-tag-excluded).
 - Negative: one extra file beyond the "only `go.mod`/`go.sum`" wording in
   `spec.md`. It is short-lived — deleted in S1.T2.
-- Negative: `go.sum` also gains `go.yaml.in/yaml/v3` and
-  `gopkg.in/check.v1` entries pulled in transitively by testify v1.12.1.
+- Negative: testify v1.12.1 pulls in `go.yaml.in/yaml/v3 v3.0.5`, which
+  appears as an `// indirect` require in `go.mod`; `go.sum` also gains
+  `gopkg.in/check.v1` entries from the transitive test graph.
 - Neutral: no behavior change; `main.go` still returns 501.
 
 ## Alternatives considered
