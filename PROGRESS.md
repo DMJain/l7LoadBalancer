@@ -4,7 +4,7 @@ Live state of the project. Every agent updates this file per the protocol in `AG
 
 ## Current status
 
-**No task in progress.** S1.T1 and S1.T2 complete. Next: begin S1.T3 (`internal/backend`).
+**S1.T2-fix in progress** by opencode (started 2026-09-17T22:29:55Z) — address S1.T2 code-review audit findings (uppercase-scheme bug, example.yaml test, ADR-0004, tracking alignment, cleanups). S1.T3 not yet begun.
 
 ## Sprint 1 — Foundation
 
@@ -40,6 +40,13 @@ Live state of the project. Every agent updates this file per the protocol in `AG
     - Errors wrapped `fmt.Errorf("config: ...: %w", err)` per AGENTS.md.
     - `configs/example.yaml` updated to a valid 3-backend config that passes `Validate()`.
   - Test approach: table-driven tests covering valid config, missing listen, empty backends, malformed URL, duplicate names, unknown algorithm, unknown field. testify/require for setup, testify/assert for values.
+
+- [IN_PROGRESS] S1.T2-fix — Address S1.T2 code-review audit findings (opencode, started 2026-09-17T22:29:55Z)
+  - Goal: close out the two-axis audit of S1.T2 — reject uppercase URL schemes (real bug), add an `example.yaml` round-trip test, record ADR-0004 for the frozen-comment/implemented-set deviation, align tracking files, and apply small cleanups.
+  - Files: `internal/config/config.go`, `internal/config/config_validate_test.go`, `internal/config/config_load_test.go`, `docs/adr/0004-reject-unimplemented-algorithms-in-validate.md`, `AGENTS.md`, `PROGRESS.md`, `.scratch/s1-t1-t2-deps-and-config/issues/02-implement-config-package.md`, `docs/sessions/2026-09-18-opencode.md`
+  - Depends on: S1.T2
+  - Acceptance: uppercase `HTTP://`/`HTTPS://` backend URLs rejected by `Validate` with a scheme error; `configs/example.yaml` round-trips through `Load`+`Validate` in a test; ADR-0004 written and indexed in AGENTS.md; S1.T2 Files bullet corrected; issue 02 acceptance boxes ticked; session log commit list completed and audit summary appended; `b` loop var renamed; no `.scratch/`-pointing comments in `config.go`; `make test`, `make test-race`, `go vet`, `make fmt`, `go mod tidy` clean.
+  - Test approach: two new rejection cases in the `TestValidate` table; one new `TestExampleConfig` integration test.
 
 - [TODO] S1.T3 — Implement `internal/backend`
   - Goal: define `Backend` and a concurrency-safe `Registry` tracking identity, health, and active-connection count, since balancer and proxy both read/mutate this under concurrent requests.
