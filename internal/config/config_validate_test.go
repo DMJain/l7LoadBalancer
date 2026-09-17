@@ -77,6 +77,18 @@ func TestValidate(t *testing.T) {
 			errSubstr: "scheme",
 		},
 		{
+			name:      "backend URL with uppercase HTTP scheme",
+			yaml:      singleBackendYAML("HTTP://backend:9001"),
+			wantErr:   true,
+			errSubstr: "scheme",
+		},
+		{
+			name:      "backend URL with uppercase HTTPS scheme",
+			yaml:      singleBackendYAML("HTTPS://backend:9001"),
+			wantErr:   true,
+			errSubstr: "scheme",
+		},
+		{
 			name:      "backend URL without host",
 			yaml:      singleBackendYAML("http://"),
 			wantErr:   true,

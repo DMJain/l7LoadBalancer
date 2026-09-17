@@ -8,6 +8,7 @@ import (
 	"os"
 	"regexp"
 	"strconv"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -158,16 +159,21 @@ func validateBackendName(name string) error {
 	return nil
 }
 
-// validateBackendURL enforces a parseable URL with an http/https scheme, a
-// non-empty host, and no query string or fragment. Paths are allowed —
-// httputil.ReverseProxy joins path prefixes correctly in its default Director.
+// validateBackendURL enforces a parseable URL that starts with a lowercase
+// http:// or https:// scheme, has a non-empty host, and carries no query
+// string or fragment. Paths are allowed — httputil.ReverseProxy joins path
+// prefixes correctly in its default Director.
+//
+// The scheme is checked against the raw string before url.Parse because
+// url.Parse lowercases the scheme it reports, so "HTTP://host" would
+// otherwise pass a post-parse check against "http".
 func validateBackendURL(name, raw string) error {
+	if !strings.HasPrefix(raw, "http://") && !strings.HasPrefix(raw, "https://") {
+		return fmt.Errorf("config: backend %q url %q must use http or https scheme", name, raw)
+	}
 	u, err := url.Parse(raw)
 	if err != nil {
 		return fmt.Errorf("config: backend %q has an invalid url %q: %w", name, raw, err)
-	}
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return fmt.Errorf("config: backend %q url %q must use http or https scheme", name, raw)
 	}
 	if u.Host == "" {
 		return fmt.Errorf("config: backend %q url %q must include a host", name, raw)
