@@ -17,7 +17,7 @@ Live state of the project. Every agent updates this file per the protocol in `AG
   - Acceptance: `go build ./...` and `go vet ./...` pass with every stubbed body either `panic("not implemented: <task-id>")` or trivial (`logger.New`); compile-time `var _ Selector = (*X)(nil)` assertions in every selector file; design doc covers dependency graph, interface placement, YAML schema, algorithm identifier table, error convention, log field vocabulary, metric reservations, concurrency ownership table; ADR-0002 written; no changes to `main.go` behavior (still returns 501).
   - Test approach: none — Phase A is analysis/contract-definition only, no logic, no test files.
 
-- [IN_PROGRESS] S1.T1 — Add Go dependencies (opencode, started 2026-09-17T21:57:24Z)
+- [DONE] S1.T1 — Add Go dependencies (opencode, started 2026-09-17T21:57:24Z, completed 2026-09-17T22:01:39Z)
   - Goal: pull in the third-party deps Sprint 1 needs (YAML parsing, test assertions) so later tasks aren't blocked on dependency wrangling.
   - Files: `go.mod`, `go.sum` (both tool-managed, not hand-edited)
   - Depends on: S1.T0
