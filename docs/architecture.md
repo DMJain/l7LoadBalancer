@@ -229,7 +229,8 @@ Sprint 4 **before** S1.T6 was implemented:
 - The frozen contracts doc never specifies a custom Transport for Sprint 1;
   its proxy contract (`Director` sets only scheme/host) is consistent with
   the stock transport.
-- "RoundTripper" appears nowhere in the project's git history.
+- "RoundTripper" appears nowhere in the project's source or git history prior
+  to this task.
 
 So this is a **pre-implementation scope clarification**, not a
 mid-implementation deviation: `MILESTONES.md`'s original scaffold wording

@@ -4,7 +4,7 @@ Live state of the project. Every agent updates this file per the protocol in `AG
 
 ## Current status
 
-**Sprint 1 complete.** S1.T1–S1.T10 are all [DONE]. Sprint 2 (Advanced Algorithms) is next; its tasks will be scoped when it starts.
+**Sprint 1 complete.** S1.T0 through S1.T10 (including S1.T0.5) are all [DONE]. Sprint 2 (Advanced Algorithms) is next; its tasks will be scoped when it starts.
 
 ## Sprint 1 — Foundation
 
