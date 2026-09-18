@@ -3,26 +3,43 @@ package balancer
 import (
 	"context"
 	"net/http"
+	"sync/atomic"
 
 	"github.com/DMJain/l7LoadBalancer/internal/backend"
 )
 
 // RoundRobin selects backends in rotating order across the healthy set,
-// using an atomic counter (no mutex) for rotation. Implemented in S1.T4.
+// using an atomic counter (no mutex) for rotation.
+//
+// Concurrency: counter is written only by Select — one atomic increment
+// per call — and never read externally. A single increment needs no mutual
+// exclusion: racing increments each get a distinct value, so every call
+// receives a distinct round-robin turn, and selection can never deadlock or
+// block. See docs/design/sprint-1-contracts.md "Concurrency ownership
+// table".
 type RoundRobin struct {
-	reg *backend.Registry
+	reg     *backend.Registry
+	counter atomic.Uint64
 }
 
-// NewRoundRobin constructs a RoundRobin selector over reg. Implemented in
-// S1.T4.
+// NewRoundRobin constructs a RoundRobin selector over reg.
 func NewRoundRobin(reg *backend.Registry) *RoundRobin {
-	panic("not implemented: S1.T4")
+	return &RoundRobin{reg: reg}
 }
 
-// Select implements Selector. Returns ErrNoHealthyBackends when
-// reg.Healthy() is empty. Implemented in S1.T4.
+// Select implements Selector. It snapshots the healthy set, returns
+// ErrNoHealthyBackends when that set is empty, and otherwise indexes into
+// the snapshot with the next counter value. Because Healthy() returns a
+// fresh snapshot per call, indexing modulo the current length is correct
+// even as the healthy set changes size between calls — no cross-call
+// consistency is needed.
 func (s *RoundRobin) Select(ctx context.Context, r *http.Request) (*backend.Backend, error) {
-	panic("not implemented: S1.T4")
+	healthy := s.reg.Healthy()
+	if len(healthy) == 0 {
+		return nil, ErrNoHealthyBackends
+	}
+	next := s.counter.Add(1) - 1
+	return healthy[next%uint64(len(healthy))], nil
 }
 
 var _ Selector = (*RoundRobin)(nil)

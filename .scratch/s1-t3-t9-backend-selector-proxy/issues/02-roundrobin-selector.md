@@ -6,10 +6,10 @@
 
 **Status:** ready-for-agent
 
-- [ ] `Selector` interface defined in `internal/balancer`: `Select(ctx, r *http.Request) (*backend.Backend, error)`
-- [ ] `ErrNoHealthyBackends` is the sentinel returned when the healthy set is empty
-- [ ] `RoundRobin` selects only from `Registry.Healthy()`, rotating via a lock-free `atomic.Uint64` counter (no mutex)
-- [ ] Compile-time assertion: `var _ Selector = (*RoundRobin)(nil)`
-- [ ] Table-driven test: cyclic order over 3 healthy backends
-- [ ] Empty-healthy-set → `ErrNoHealthyBackends`
-- [ ] Concurrent test: 1000 selects against 3 healthy backends land within ±5% of the expected 1/3 share each
+- [x] `Selector` interface defined in `internal/balancer`: `Select(ctx, r *http.Request) (*backend.Backend, error)`
+- [x] `ErrNoHealthyBackends` is the sentinel returned when the healthy set is empty
+- [x] `RoundRobin` selects only from `Registry.Healthy()`, rotating via a lock-free `atomic.Uint64` counter (no mutex)
+- [x] Compile-time assertion: `var _ Selector = (*RoundRobin)(nil)`
+- [x] Table-driven test: cyclic order over 3 healthy backends
+- [x] Empty-healthy-set → `ErrNoHealthyBackends`
+- [x] Concurrent test: 1000 selects against 3 healthy backends land within ±5% of the expected 1/3 share each
