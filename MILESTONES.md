@@ -63,6 +63,7 @@ Strategic plan. Each sprint = one weekend of focused work. Tasks under each spri
 - Backend connection pool tuning via `http.Transport`: `MaxIdleConnsPerHost`, `IdleConnTimeout`, `DialContext` with timeout, `ResponseHeaderTimeout`.
 - ADR: reload architecture (atomic pointer swap vs SO_REUSEPORT — trade-offs).
 - ADR: retry policy (or the deliberate absence of one) and why.
+- ADR: deployment target decision (bare binary vs. Docker vs. Kubernetes), informed by the reload/health-check/connection-lifecycle work above rather than decided ahead of it. Deferred from Sprint 1 — see `docs/adr/0005-scope-of-production-grade.md`.
 
 **Exit criteria**:
 - SIGHUP with 1000 in-flight requests drops zero.

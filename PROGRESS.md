@@ -4,7 +4,7 @@ Live state of the project. Every agent updates this file per the protocol in `AG
 
 ## Current status
 
-**No task in progress.** S1.T2 and its audit follow-up (S1.T2-fix) complete. Next: begin S1.T3 (`internal/backend`).
+**No task in progress.** S1.T2, S1.T2-fix, and S1.T2.6 (ADR-0005) complete. Next: begin S1.T3 (`internal/backend`).
 
 ## Sprint 1 — Foundation
 
@@ -48,15 +48,22 @@ Live state of the project. Every agent updates this file per the protocol in `AG
   - Acceptance: uppercase `HTTP://`/`HTTPS://` backend URLs rejected by `Validate` with a scheme error; `configs/example.yaml` round-trips through `Load`+`Validate` in a test; ADR-0004 written and indexed in AGENTS.md; S1.T2 Files bullet corrected; issue 02 acceptance boxes ticked; session log commit list completed and audit summary appended; `b` loop var renamed; no `.scratch/`-pointing comments in `config.go`; `make test`, `make test-race`, `go vet`, `make fmt`, `go mod tidy` clean.
   - Test approach: two new rejection cases in the `TestValidate` table; one new `TestExampleConfig` integration test.
 
+- [DONE] S1.T2.6 — ADR-0005: Scope of "production-grade" (claude, started 2026-09-18T07:50:00Z, completed 2026-09-18T07:55:00Z)
+  - Goal: write down, in one canonical place, what this project's "production-grade" framing (AGENTS.md) does and does not claim, before Sprint 1 implementation and the eventual README/Sprint 5 design-decisions doc build further on an undefined term.
+  - Files: `docs/adr/0005-scope-of-production-grade.md`
+  - Depends on: none (docs-only, no code dependency)
+  - Acceptance: ADR states what "production-grade" means (demonstrates production L7 LB patterns, every non-trivial decision defensible, honest reproducible Nginx benchmarking) and what it explicitly excludes (adversarial-traffic hardening/WAF, TLS cert rotation, kernel/OS tuning, SLO instrumentation/alerting, formal security review, multi-tenancy, secrets management beyond env-var interpolation, disaster recovery, capacity planning/SLA, multi-region validation, and a settled deployment target — deployment target explicitly deferred to Sprint 4/5). Decided and dated by the project owner; no invented prior provenance.
+  - Test approach: none — docs-only (AGENTS.md TDD exception).
+
 - [TODO] S1.T3 — Implement `internal/backend`
   - Goal: define `Backend` and a concurrency-safe `Registry` tracking identity, health, and active-connection count, since balancer and proxy both read/mutate this under concurrent requests.
   - Files: `internal/backend/backend.go`, `internal/backend/registry.go`, `internal/backend/registry_test.go` (replaces the placeholder `backend_test.go`)
   - Depends on: S1.T2
   - Acceptance:
-    - `Backend`: exported `Name string` and `URL *url.URL`; unexported `healthy` (`atomic.Bool`) and `active` (`atomic.Int64`) fields, reachable only via methods `IsHealthy()`, `IncActive()`, `DecActive()`, `ActiveConns() int64`. This matches the frozen contract in `docs/design/sprint-1-contracts.md` and ADR-0002.
-    - `Backend` exposes an `IsHealthy() bool` method; downstream code (balancer, proxy) accesses health only via this method, never via the `Healthy` field directly. This isolates the field type from callers so Sprint 3 can replace `atomic.Bool` with a state enum without touching balancer or proxy code.
-    - `NewRegistry(cfgs []config.BackendConfig) (*Registry, error)` builds backends from validated config.
-    - `Registry.All()` and `Registry.Healthy()` each return a fresh slice per call — safe to iterate concurrently with registry mutation, no lock held by caller.
+    - `Backend`: exported `Name string` and `URL *url.URL`; unexported `healthy` (`atomic.Bool`) and `active` (`atomic.Int64`) fields, reachable only via methods `IsHealthy()`, `SetHealthy(bool)`, `IncActive()`, `DecActive()`, `ActiveConns() int64`. `SetHealthy` is added per ADR-0006 (amends ADR-0002 decision 5) — needed now so S1.T8 can drive health transitions before Sprint 3's health checker exists; Sprint 3 reuses it unchanged.
+    - `Backend` exposes an `IsHealthy() bool` method; downstream code (balancer, proxy) accesses health only via this method, never via the `healthy` field directly. This isolates the field type from callers so Sprint 3 can replace `atomic.Bool` with a state enum without touching balancer or proxy code.
+    - `NewRegistry(cfgs []config.BackendConfig) (*Registry, error)` builds backends from validated config; every backend starts `healthy = true` (commented as such — there is no health checker yet to set it any other way, and Sprint 1's exit criteria requires all 3 backends reachable from the start).
+    - `Registry` holds an ordered slice only (no name-indexed map — nothing through Sprint 3 needs O(1) lookup by name; add it in Sprint 4 when reload-diffing needs it). `Registry.All()` and `Registry.Healthy()` each return a fresh slice per call, preserving that order (required for `LeastConnections`' deterministic tie-break) — safe to iterate concurrently with registry mutation, no lock held by caller.
     - Concurrent `ActiveConns` increment/decrement and health toggling from multiple goroutines is race-free under `go test -race`.
     - Placeholder `TestScaffold` removed, replaced with real tests.
   - Test approach: table-driven tests for construction/filtering; a concurrent test with N goroutines mutating `ActiveConns`, asserting the final count under `-race`.
@@ -88,10 +95,11 @@ Live state of the project. Every agent updates this file per the protocol in `AG
   - Depends on: S1.T3, S1.T4, S1.T5
   - Acceptance:
     - `New(registry *backend.Registry, selector balancer.Selector) http.Handler` wraps `ReverseProxy`.
-    - Director selects via `selector.Select`, sets `req.URL.Scheme/Host` to the chosen backend, and records which backend was chosen so `ActiveConns` can be decremented after the response completes.
+    - `ServeHTTP` calls `selector.Select` itself — not `Director` — and short-circuits a 503 immediately when it returns `ErrNoHealthyBackends`, bypassing `ReverseProxy` entirely for that path (`Director`'s `func(*http.Request)` signature has no way to write a response). On success, `ServeHTTP` calls `IncActive()` and attaches the chosen `*backend.Backend` to the request context via an unexported context-key type; `Director` reads it back from context and only sets `req.URL.Scheme/Host` — it does not call `Select`. `ModifyResponse` and `ErrorHandler` read the same backend off `resp.Request.Context()` / `req.Context()` to drive `DecActive`.
     - No healthy backend → responds 503, no panic, no hang.
     - `ActiveConns` incremented before dispatch, decremented after response completes (success, error, or timeout) — no leak across many sequential requests.
     - `ActiveConns` decrement uses a response-body wrapper whose `Close()` decrements exactly once. Wrap the body in `ModifyResponse`. Do NOT decrement in `Director`, in `ModifyResponse` directly, or only in `ErrorHandler`. Test with 100 concurrent (not sequential) in-flight requests and assert `ActiveConns` returns to 0 within a small drain window.
+    - Every request emits one "request complete" `slog` line using the canonical fields (`backend`, `method`, `status`, `latency_ms`, `remote_addr`, `path`) per `docs/design/sprint-1-contracts.md` — on the success path, the 503 short-circuit path, and the `ErrorHandler` path alike. No separate "request start" line in Sprint 1.
   - Test approach: httptest.NewServer fake backends returning an identifying body; httptest-wrapped proxy in front of them; assert distribution matches the selector; no-healthy-backend → 503; concurrent-request test asserting ActiveConns returns to 0.
 
 - [TODO] S1.T7 — Wire `cmd/l7LoadBalancer/main.go` end-to-end
@@ -117,14 +125,14 @@ Live state of the project. Every agent updates this file per the protocol in `AG
 
 - [TODO] S1.T9 — docker-compose dummy backends
   - Goal: provide 3 lightweight backend services via docker-compose so the proxy can be exercised end-to-end, per the MILESTONES.md Sprint 1 deliverable.
-  - Files: `deployments/docker/docker-compose.yml`, `deployments/docker/dummy-backend/main.go`, `deployments/docker/dummy-backend/Dockerfile`, `deployments/docker/dummy-backend/README.md`, `configs/example.yaml` (or `configs/docker.yaml`) pointing at them
+  - Files: `deployments/docker/docker-compose.yml`, `deployments/docker/dummy-backend/main.go`, `deployments/docker/dummy-backend/Dockerfile`, `deployments/docker/dummy-backend/README.md`
   - Depends on: S1.T2
   - Acceptance:
-    - `docker-compose.yml` defines 3 services, each on a distinct port, each responding to `GET /` with a body identifying itself (e.g. `{"backend":"backend-a"}`) so distribution is observable via curl.
+    - `docker-compose.yml` defines 3 services only (no LB service — that's run locally via `make run`; Sprint 5 has its own separate "LB + Nginx + 4 backends" bench compose, kept distinct so the two don't drift against each other), each on a distinct port mapped to host `9001`/`9002`/`9003` so the existing `configs/example.yaml` works against them unmodified — no new config file.
+    - Each service responds to `GET /` with a body identifying itself (e.g. `{"backend":"backend-a"}`) so distribution is observable via curl.
     - `docker compose -f deployments/docker/docker-compose.yml up -d` brings up all 3 healthy.
-    - Config file lists all 3 addresses.
-    - Running the proxy against that config and issuing N requests hits all 3 backends (verified by grepping response bodies).
-    - Dummy backends honor two env vars: `SLEEP_MS` (int, artificial latency per request in milliseconds, default 0) and `FAIL_RATE` (float 0.0-1.0, fraction of requests returning HTTP 500, default 0). Documented in `deployments/docker/dummy-backend/README.md`.
+    - Running the proxy against `configs/example.yaml` and issuing N requests hits all 3 backends (verified by grepping response bodies).
+    - Dummy backends honor two env vars: `SLEEP_MS` (int, artificial latency per request in milliseconds, default 0) and `FAIL_RATE` (float 0.0-1.0, fraction of requests returning HTTP 500, default 0). Documented in `deployments/docker/dummy-backend/README.md`. `docker-compose.yml` gives each of the 3 services distinct non-zero defaults (not all zero) so `docker compose up` demonstrates uneven latency/failure — and therefore visible `LeastConnections` vs. `RoundRobin` differences — without a manual override.
   - Test approach: no Go unit tests; a documented manual/scripted smoke test, recorded in the Sprint 1 session log.
 
 - [TODO] S1.T10 — Sprint 1 retro / architecture doc

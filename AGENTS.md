@@ -311,10 +311,13 @@ All non-trivial decisions must have an ADR. Current ADRs:
 | [0002](docs/adr/0002-interface-placement-and-schema-freeze.md) | Interface placement and Sprint 1 schema freeze | Accepted |
 | [0003](docs/adr/0003-pin-unused-deps-with-tools-go.md) | Pin not-yet-imported dependencies with a build-tagged tools.go | Accepted |
 | [0004](docs/adr/0004-reject-unimplemented-algorithms-in-validate.md) | Reject unimplemented algorithms in Validate | Accepted |
+| [0005](docs/adr/0005-scope-of-production-grade.md) | Scope of "production-grade" | Accepted |
+| [0006](docs/adr/0006-backend-sethealthy-amends-adr-0002.md) | Add Backend.SetHealthy, amending ADR-0002 decision 5 | Accepted |
 | TBD (Sprint 2) | Why bounded-loads consistent hashing over naive CH | — |
 | TBD (Sprint 2) | Why P2C-EWMA over least-connections for latency-skewed workloads | — |
 | TBD (Sprint 3) | Circuit breaker concurrency model | — |
 | TBD (Sprint 4) | Reload architecture: atomic pointer swap vs SO_REUSEPORT | — |
+| TBD (Sprint 4) | Deployment target decision (deferred from Sprint 1 per ADR-0005) | — |
 | TBD (Sprint 4) | Retry policy (or deliberate absence) | — |
 
 **Key decisions already made and documented:**
@@ -331,6 +334,8 @@ All non-trivial decisions must have an ADR. Current ADRs:
 10. **Deterministic tie-breaking in LeastConnections** — first-in-registry-order wins. Enables reproducible tests.
 11. **ActiveConns decremented in body `Close()`, not `ModifyResponse`** — prevents counting streamed-but-incomplete responses as "done".
 12. **Not-yet-imported deps pinned via a build-tagged `tools.go`** — ADR-0003. `go mod tidy` prunes unused modules, so S1.T1's two new deps are blank-imported under `//go:build tools` until S1.T2 imports them for real.
+13. **"Production-grade" is explicitly scoped** — ADR-0005. Demonstrates production LB patterns with defensible decisions and honest benchmarking; explicitly excludes security hardening/WAF, cert rotation, kernel/OS tuning, SLO alerting, formal security review, multi-tenancy, secrets management beyond env-var interpolation, disaster recovery, capacity planning/SLA, and a settled deployment target.
+14. **`Backend.SetHealthy(bool)` amends ADR-0002 decision 5** — ADR-0006. Added in S1.T3 so S1.T8 can drive health transitions before Sprint 3's health checker exists; Sprint 3 reuses it unchanged. Symmetric with `IncActive`/`DecActive` living directly on `Backend`.
 
 ---
 
