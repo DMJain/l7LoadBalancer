@@ -97,14 +97,26 @@ func TestNewRegistryInvalidURL(t *testing.T) {
 }
 
 func TestRegistryAllIncludesUnhealthy(t *testing.T) {
-	reg, err := NewRegistry(testConfigs())
-	require.NoError(t, err)
+	tests := []struct {
+		name      string
+		unhealthy []string
+	}{
+		{name: "none unhealthy"},
+		{name: "one unhealthy", unhealthy: []string{"backend-b"}},
+		{name: "all unhealthy", unhealthy: []string{"backend-a", "backend-b", "backend-c"}},
+	}
 
-	backendByName(t, reg, "backend-b").SetHealthy(false)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reg, err := NewRegistry(testConfigs())
+			require.NoError(t, err)
+			for _, name := range tt.unhealthy {
+				backendByName(t, reg, name).SetHealthy(false)
+			}
 
-	all := reg.All()
-	require.Len(t, all, 3)
-	assert.Equal(t, []string{"backend-a", "backend-b", "backend-c"}, names(all))
+			assert.Equal(t, []string{"backend-a", "backend-b", "backend-c"}, names(reg.All()))
+		})
+	}
 }
 
 func TestRegistryHealthyFilters(t *testing.T) {

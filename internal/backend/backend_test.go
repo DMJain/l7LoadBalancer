@@ -51,11 +51,16 @@ func TestBackendConcurrentActiveConns(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			b.IncActive()
+		}()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
 			b.DecActive()
 		}()
 	}
 	wg.Wait()
-	assert.Equal(t, int64(0), b.ActiveConns())
+	assert.Equal(t, int64(goroutines), b.ActiveConns(), "interleaved inc/dec must net out")
 }
 
 func TestBackendConcurrentHealthToggling(t *testing.T) {
