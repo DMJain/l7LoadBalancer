@@ -12,9 +12,10 @@ import (
 // the proxy on the hot path. active is incremented/decremented by the
 // proxy around each round trip (S1.T6) and read by LeastConnections and
 // metrics (Sprint 3). Both fields are unexported atomics; callers MUST use
-// IsHealthy/IncActive/DecActive/ActiveConns and never touch the fields
-// directly — this keeps the field type free to change (e.g. atomic.Bool
-// to a state enum in Sprint 3) without touching balancer or proxy code.
+// IsHealthy/SetHealthy/IncActive/DecActive/ActiveConns and never touch the
+// fields directly — this keeps the field type free to change (e.g.
+// atomic.Bool to a state enum in Sprint 3) without touching balancer or
+// proxy code.
 // See docs/design/sprint-1-contracts.md "Concurrency ownership table".
 type Backend struct {
 	Name string
@@ -27,7 +28,7 @@ type Backend struct {
 // IsHealthy reports whether the backend is currently eligible for
 // selection. Implemented in S1.T3.
 func (b *Backend) IsHealthy() bool {
-	panic("not implemented: S1.T3")
+	return b.healthy.Load()
 }
 
 // SetHealthy sets whether the backend is currently eligible for selection.
@@ -36,24 +37,24 @@ func (b *Backend) IsHealthy() bool {
 // hold. Sprint 1 has no production caller; S1.T8's cross-selector tests use
 // it to drive health transitions. Implemented in S1.T3.
 func (b *Backend) SetHealthy(healthy bool) {
-	panic("not implemented: S1.T3")
+	b.healthy.Store(healthy)
 }
 
 // IncActive increments the active connection count. Called by the proxy
 // before dispatching a request. Implemented in S1.T3.
 func (b *Backend) IncActive() {
-	panic("not implemented: S1.T3")
+	b.active.Add(1)
 }
 
 // DecActive decrements the active connection count. Called by the proxy
 // once the response completes (success, error, or timeout). Implemented
 // in S1.T3.
 func (b *Backend) DecActive() {
-	panic("not implemented: S1.T3")
+	b.active.Add(-1)
 }
 
 // ActiveConns returns the current active connection count. Implemented in
 // S1.T3.
 func (b *Backend) ActiveConns() int64 {
-	panic("not implemented: S1.T3")
+	return b.active.Load()
 }

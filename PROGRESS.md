@@ -4,7 +4,7 @@ Live state of the project. Every agent updates this file per the protocol in `AG
 
 ## Current status
 
-**S1.T3 in progress** (opencode, started 2026-09-18T09:29:18Z). S1.T2, S1.T2-fix, and S1.T2.6 (ADR-0005) complete.
+**No task in progress.** S1.T3 complete. Next: begin S1.T4 (`balancer.Selector` + `RoundRobin`).
 
 ## Sprint 1 — Foundation
 
@@ -55,9 +55,9 @@ Live state of the project. Every agent updates this file per the protocol in `AG
   - Acceptance: ADR states what "production-grade" means (demonstrates production L7 LB patterns, every non-trivial decision defensible, honest reproducible Nginx benchmarking) and what it explicitly excludes (adversarial-traffic hardening/WAF, TLS cert rotation, kernel/OS tuning, SLO instrumentation/alerting, formal security review, multi-tenancy, secrets management beyond env-var interpolation, disaster recovery, capacity planning/SLA, multi-region validation, and a settled deployment target — deployment target explicitly deferred to Sprint 4/5). Decided and dated by the project owner; no invented prior provenance.
   - Test approach: none — docs-only (AGENTS.md TDD exception).
 
-- [IN_PROGRESS] S1.T3 — Implement `internal/backend` (opencode, started 2026-09-18T09:29:18Z)
+- [DONE] S1.T3 — Implement `internal/backend` (opencode, started 2026-09-18T09:29:18Z, completed 2026-09-18T09:30:24Z)
   - Goal: define `Backend` and a concurrency-safe `Registry` tracking identity, health, and active-connection count, since balancer and proxy both read/mutate this under concurrent requests.
-  - Files: `internal/backend/backend.go`, `internal/backend/registry.go`, `internal/backend/registry_test.go` (replaces the placeholder `backend_test.go`)
+  - Files: `internal/backend/backend.go`, `internal/backend/registry.go`, `internal/backend/backend_test.go` (replaces the placeholder `TestScaffold`), `internal/backend/registry_test.go`
   - Depends on: S1.T2
   - Acceptance:
     - `Backend`: exported `Name string` and `URL *url.URL`; unexported `healthy` (`atomic.Bool`) and `active` (`atomic.Int64`) fields, reachable only via methods `IsHealthy()`, `SetHealthy(bool)`, `IncActive()`, `DecActive()`, `ActiveConns() int64`. `SetHealthy` is added per ADR-0006 (amends ADR-0002 decision 5) — needed now so S1.T8 can drive health transitions before Sprint 3's health checker exists; Sprint 3 reuses it unchanged.
