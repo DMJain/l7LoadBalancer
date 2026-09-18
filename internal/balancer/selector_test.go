@@ -62,6 +62,8 @@ func TestSelectorsRespectHealthTransitions(t *testing.T) {
 			seedActive(t, reg, "backend-c", 1)
 			sel := sf.new(reg)
 
+			// Each phase sets up the health state it needs, so any one of
+			// them can be run in isolation (e.g. `go test -run .../unhealthy`).
 			t.Run("healthy baseline chooses target", func(t *testing.T) {
 				chosen := selectNames(t, sel, 6)
 				assert.Contains(t, chosen, target,
@@ -71,6 +73,8 @@ func TestSelectorsRespectHealthTransitions(t *testing.T) {
 			t.Run("unhealthy mid-run stops choosing target", func(t *testing.T) {
 				setHealthy(t, reg, target, false)
 				chosen := selectNames(t, sel, 6)
+				assert.NotEqual(t, target, chosen[0],
+					"target must not be chosen on the very next Select after going unhealthy")
 				assert.NotContains(t, chosen, target,
 					"target must not be chosen while unhealthy")
 			})
