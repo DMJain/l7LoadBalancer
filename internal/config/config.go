@@ -164,8 +164,9 @@ func validateBackendName(name string) error {
 
 // validateBackendURL enforces a parseable URL that starts with a lowercase
 // http:// or https:// scheme, has a non-empty host, and carries no query
-// string or fragment. Paths are allowed — httputil.ReverseProxy joins path
-// prefixes correctly in its default Director.
+// string or fragment. Paths are allowed by the schema; note that Sprint 1's
+// proxy Director sets only scheme/host, so a configured path prefix is a
+// known limitation, not joined onto the request path (see ADR-0007).
 //
 // The scheme is checked against the raw string before url.Parse because
 // url.Parse lowercases the scheme it reports, so "HTTP://host" would

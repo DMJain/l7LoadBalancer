@@ -4,7 +4,7 @@ Live state of the project. Every agent updates this file per the protocol in `AG
 
 ## Current status
 
-**S1.T6 in progress.** S1.T3, S1.T4, S1.T5 and S1.T9 complete. Next: S1.T7 (`main.go` wiring).
+**S1.T6 complete.** S1.T3–S1.T5 and S1.T9 complete. Next: S1.T7 (`main.go` wiring) and S1.T8 (cross-selector regression tests).
 
 ## Sprint 1 — Foundation
 
@@ -89,9 +89,9 @@ Live state of the project. Every agent updates this file per the protocol in `AG
     - Reads `ActiveConns` atomically; does not itself mutate it (mutation is the proxy's job, wired in S1.T6).
   - Test approach: table-driven test with pre-seeded `ActiveConns` values asserting the minimum is chosen; tie-break case; empty-registry case.
 
-- [IN_PROGRESS] S1.T6 — Implement `internal/proxy` (opencode, started 2026-09-18T16:55:16Z)
+- [DONE] S1.T6 — Implement `internal/proxy` (opencode, started 2026-09-18T16:55:16Z, completed 2026-09-18T16:58:11Z)
   - Goal: wrap httputil.ReverseProxy so each request's Director consults the configured Selector, rewrites the target, and tracks ActiveConns around the round trip.
-  - Files: `internal/proxy/proxy.go`, `internal/proxy/proxy_test.go`
+  - Files: `internal/proxy/proxy.go`, `internal/proxy/proxy_test.go`, `docs/adr/0007-proxy-request-lifecycle-and-exactly-once-decrement.md`, `internal/config/config.go` (stale path-prefix comment corrected), `AGENTS.md` (ADR-0007 indexed)
   - Depends on: S1.T3, S1.T4, S1.T5
   - Acceptance:
     - `New(registry *backend.Registry, selector balancer.Selector) http.Handler` wraps `ReverseProxy`.
