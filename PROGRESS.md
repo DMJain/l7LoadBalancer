@@ -102,7 +102,7 @@ Live state of the project. Every agent updates this file per the protocol in `AG
     - Every request emits one "request complete" `slog` line using the canonical fields (`backend`, `method`, `status`, `latency_ms`, `remote_addr`, `path`) per `docs/design/sprint-1-contracts.md` — on the success path, the 503 short-circuit path, and the `ErrorHandler` path alike. No separate "request start" line in Sprint 1.
   - Test approach: httptest.NewServer fake backends returning an identifying body; httptest-wrapped proxy in front of them; assert distribution matches the selector; no-healthy-backend → 503; concurrent-request test asserting ActiveConns returns to 0.
 
-- [TODO] S1.T7 — Wire `cmd/l7LoadBalancer/main.go` end-to-end
+- [IN_PROGRESS] S1.T7 — Wire `cmd/l7LoadBalancer/main.go` end-to-end (opencode, started 2026-09-18T18:13:48Z)
   - Goal: replace the placeholder 501 handler with the real path: load config → build registry → build selector (from cfg.Algorithm) → build proxy → serve.
   - Files: `cmd/l7LoadBalancer/main.go`, `configs/example.yaml` (finalized)
   - Depends on: S1.T2, S1.T3, S1.T4, S1.T5, S1.T6
