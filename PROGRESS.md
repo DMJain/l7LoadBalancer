@@ -4,7 +4,7 @@ Live state of the project. Every agent updates this file per the protocol in `AG
 
 ## Current status
 
-**No task in progress.** S1.T3 complete. Next: begin S1.T4 (`balancer.Selector` + `RoundRobin`).
+**S1.T4 in progress** (opencode, started 2026-09-18T09:38:54Z). S1.T3 complete.
 
 ## Sprint 1 — Foundation
 
@@ -68,7 +68,7 @@ Live state of the project. Every agent updates this file per the protocol in `AG
     - Placeholder `TestScaffold` removed, replaced with real tests.
   - Test approach: table-driven tests for construction/filtering; a concurrent test with N goroutines mutating `ActiveConns`, asserting the final count under `-race`.
 
-- [TODO] S1.T4 — Implement RoundRobin selector
+- [IN_PROGRESS] S1.T4 — Implement RoundRobin selector (opencode, started 2026-09-18T09:38:54Z)
   - Goal: implement round-robin backend selection behind a Selector interface.
   - Files: `internal/balancer/selector.go` (Selector interface + `ErrNoHealthyBackends`), `internal/balancer/roundrobin.go`, `internal/balancer/roundrobin_test.go`
   - Depends on: S1.T3
