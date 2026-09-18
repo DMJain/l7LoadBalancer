@@ -21,7 +21,8 @@ import (
 // main is a thin wiring layer: load and validate config, build the registry,
 // pick a selector from the configured algorithm, wrap it in the proxy, and
 // serve. All selection, routing, and connection accounting lives in the
-// internal packages; see docs/architecture.md and ADR-0002.
+// internal packages; see ADR-0002 for the interface placement this wiring
+// relies on.
 //
 // The listen address comes from the config file (cfg.Listen), not a flag:
 // `listen` is part of the frozen YAML schema and config.Validate checks it is
@@ -59,7 +60,7 @@ func main() {
 		"config", *configPath,
 		"listen", cfg.Listen,
 		"algorithm", cfg.Algorithm,
-		"backends", len(cfg.Backends),
+		"backend_count", len(cfg.Backends),
 	)
 
 	srv := &http.Server{
