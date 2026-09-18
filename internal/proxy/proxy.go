@@ -140,15 +140,13 @@ func (p *Proxy) modifyResponse(resp *http.Response) error {
 // vocabulary has no error field, so the cause is a separate WARN line), and
 // responds 502.
 func (p *Proxy) errorHandler(w http.ResponseWriter, r *http.Request, err error) {
-	state := stateFrom(r.Context())
-	if state != nil {
+	attrs := []any{"err", err, "path", r.URL.Path}
+	if state := stateFrom(r.Context()); state != nil {
 		state.status = http.StatusBadGateway
 		state.release()
-		p.logger.Warn("backend round-trip failed",
-			"err", err, "backend", state.backend.Name, "path", r.URL.Path)
-	} else {
-		p.logger.Warn("backend round-trip failed", "err", err, "path", r.URL.Path)
+		attrs = append(attrs, "backend", state.backend.Name)
 	}
+	p.logger.Warn("backend round-trip failed", attrs...)
 	http.Error(w, http.StatusText(http.StatusBadGateway), http.StatusBadGateway)
 }
 
