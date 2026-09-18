@@ -111,14 +111,39 @@ func TestLeastConnectionsDoesNotMutateActiveConns(t *testing.T) {
 }
 
 func TestLeastConnectionsNoHealthyBackends(t *testing.T) {
-	reg := newTestRegistry(t)
-	for _, b := range reg.All() {
-		b.SetHealthy(false)
+	tests := []struct {
+		name string
+		reg  func(t *testing.T) *backend.Registry
+	}{
+		{
+			name: "registry with no backends",
+			reg: func(t *testing.T) *backend.Registry {
+				t.Helper()
+				reg, err := backend.NewRegistry(nil)
+				require.NoError(t, err)
+				return reg
+			},
+		},
+		{
+			name: "all backends unhealthy",
+			reg: func(t *testing.T) *backend.Registry {
+				t.Helper()
+				reg := newTestRegistry(t)
+				for _, b := range reg.All() {
+					b.SetHealthy(false)
+				}
+				return reg
+			},
+		},
 	}
 
-	s := NewLeastConnections(reg)
-	b, err := s.Select(context.Background(), httptest.NewRequest(http.MethodGet, "/", nil))
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := NewLeastConnections(tt.reg(t))
+			b, err := s.Select(context.Background(), httptest.NewRequest(http.MethodGet, "/", nil))
 
-	assert.Nil(t, b)
-	assert.ErrorIs(t, err, ErrNoHealthyBackends)
+			assert.Nil(t, b)
+			assert.ErrorIs(t, err, ErrNoHealthyBackends)
+		})
+	}
 }

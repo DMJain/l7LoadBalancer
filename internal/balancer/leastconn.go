@@ -11,7 +11,6 @@ import (
 // ActiveConns, reading it atomically. It does not itself mutate
 // ActiveConns — mutation is the proxy's job (S1.T6). Ties are broken
 // deterministically: the first tied backend in registry order.
-// Implemented in S1.T5.
 type LeastConnections struct {
 	reg *backend.Registry
 }
