@@ -3,6 +3,7 @@ package balancer
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 
 	"github.com/DMJain/l7LoadBalancer/internal/backend"
@@ -28,7 +29,23 @@ var ErrNoHealthyBackends = errors.New("balancer: no healthy backends")
 // NewFromConfig builds the Selector named by cfg.Algorithm. This is the
 // selector factory; it lives here (not in main.go) so main stays a thin
 // wiring layer and the balancer package owns the config-string-to-type
-// mapping it also documents. Implemented in S1.T7.
+// mapping it also documents (docs/design/sprint-1-contracts.md "Algorithm
+// identifier table").
+//
+// It accepts exactly the identifiers config.Validate accepts
+// (config's implementedAlgorithms set). An unrecognized value — including
+// the Sprint 2 identifiers whose constructors still panic, and the empty
+// string — returns a wrapped error rather than falling back to a default:
+// config.Validate already normalizes an omitted algorithm to round_robin,
+// so an unrecognized value here means validation was skipped, and defaulting
+// would mask that. Sprint 2 adds a case per new selector.
 func NewFromConfig(cfg *config.Config, reg *backend.Registry) (Selector, error) {
-	panic("not implemented: S1.T7")
+	switch cfg.Algorithm {
+	case config.AlgorithmRoundRobin:
+		return NewRoundRobin(reg), nil
+	case config.AlgorithmLeastConn:
+		return NewLeastConnections(reg), nil
+	default:
+		return nil, fmt.Errorf("balancer: unsupported algorithm %q", cfg.Algorithm)
+	}
 }

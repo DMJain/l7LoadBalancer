@@ -4,7 +4,7 @@ Live state of the project. Every agent updates this file per the protocol in `AG
 
 ## Current status
 
-**S1.T8 complete.** S1.T3–S1.T6, S1.T8 and S1.T9 complete. Next: S1.T7 (`main.go` wiring) and S1.T10 (Sprint 1 retro / architecture doc).
+**S1.T3–S1.T9 complete.** All Sprint 1 implementation tasks are done; only S1.T10 (retro / architecture doc) remains.
 
 ## Sprint 1 — Foundation
 
@@ -102,16 +102,17 @@ Live state of the project. Every agent updates this file per the protocol in `AG
     - Every request emits one "request complete" `slog` line using the canonical fields (`backend`, `method`, `status`, `latency_ms`, `remote_addr`, `path`) per `docs/design/sprint-1-contracts.md` — on the success path, the 503 short-circuit path, and the `ErrorHandler` path alike. No separate "request start" line in Sprint 1.
   - Test approach: httptest.NewServer fake backends returning an identifying body; httptest-wrapped proxy in front of them; assert distribution matches the selector; no-healthy-backend → 503; concurrent-request test asserting ActiveConns returns to 0.
 
-- [IN_PROGRESS] S1.T7 — Wire `cmd/l7LoadBalancer/main.go` end-to-end (opencode, started 2026-09-18T18:13:48Z)
+- [DONE] S1.T7 — Wire `cmd/l7LoadBalancer/main.go` end-to-end (opencode, started 2026-09-18T18:13:48Z, completed 2026-09-18T18:17:45Z)
   - Goal: replace the placeholder 501 handler with the real path: load config → build registry → build selector (from cfg.Algorithm) → build proxy → serve.
-  - Files: `cmd/l7LoadBalancer/main.go`, `configs/example.yaml` (finalized)
+  - Files: `cmd/l7LoadBalancer/main.go`, `internal/balancer/selector.go` (`NewFromConfig` implemented), `internal/balancer/factory_test.go` (new), `configs/example.yaml` (unchanged — already valid)
   - Depends on: S1.T2, S1.T3, S1.T4, S1.T5, S1.T6
   - Acceptance:
     - `main.go` calls `config.Load(*configPath)`; logs a fatal error and exits non-zero on load/validate failure (no silent fallback).
     - Selector chosen by `cfg.Algorithm` via a small factory/switch.
     - `make run` against `configs/example.yaml` starts a proxy that distributes requests across backends per the selected algorithm.
     - Existing SIGINT/SIGTERM graceful-shutdown behavior preserved.
-  - Test approach: manual smoke test, documented in the Sprint 1 session log; automated coverage lives in S1.T6/S1.T4/S1.T5 tests.
+  - Test approach: manual smoke test, documented in the Sprint 1 session log; automated coverage lives in S1.T6/S1.T4/S1.T5 tests plus the new `NewFromConfig` factory tests.
+  - Deviation (documented in session log, no ADR needed): the scaffold's `-addr` flag was removed — `listen` is part of the frozen YAML schema and `config.Validate` checks it, so `cfg.Listen` is the single source of truth. The factory is implemented in `balancer` per ADR-0002, and it rejects unknown algorithms (including the empty string) rather than defaulting.
 
 - [DONE] S1.T8 — Cross-selector regression + health-transition tests (opencode, started 2026-09-18T17:55:14Z, completed 2026-09-18T17:56:20Z)
   - Goal: cover selector behavior not already exercised by S1.T4/T5's per-selector tests — specifically dynamic health transitions and interface conformance — so both selectors are proven interchangeable.
@@ -162,3 +163,4 @@ See `MILESTONES.md`. Tasks added per sprint.
 - 2026-09-18 — opencode — S1.T5 LeastConnections: linear scan of `Registry.Healthy()` for the lowest `ActiveConns()` (read-only), first-in-registry-order tie-break; table-driven min/tie/unhealthy/empty tests plus determinism and no-mutation tests. See `docs/sessions/2026-09-18-opencode.md`.
 - 2026-09-18 — opencode — S1.T9 docker-compose dummy backends: stdlib-only Go service with `SLEEP_MS`/`FAIL_RATE` chaos knobs and a `-name` identity flag, three compose services on host ports `9001`/`9002`/`9003` with distinct non-zero defaults; `docker compose up -d --build` smoke-tested (all 3 healthy, identity + latency + failure rate verified). See `docs/sessions/2026-09-18-opencode.md`.
 - 2026-09-18 — opencode — S1.T8 cross-selector health-transition tests: new `internal/balancer/selector_test.go` proving both `RoundRobin` and `LeastConnections` stop choosing a backend on `SetHealthy(false)` and resume on `SetHealthy(true)`, with a mutation check confirming the test has teeth; `go test -cover ./internal/balancer/...` baseline recorded at 77.3% (100% on every implemented function; the rest is Sprint 2 / S1.T7 stubs). See `docs/sessions/2026-09-18-opencode.md`.
+- 2026-09-18 — opencode — S1.T7 main.go wiring: implemented `balancer.NewFromConfig` (config-string → selector switch, unknown/empty rejected) with Red-first tests, and rewired `cmd/l7LoadBalancer/main.go` to `config.Load`/`Validate` → `backend.NewRegistry` → `balancer.NewFromConfig` → `proxy.New` → `http.Server` (fatal + exit 1 on any failure, `logger.New` dedup, SIGINT/SIGTERM preserved, scaffold `-addr` flag removed in favour of `cfg.Listen`). Manual smoke: docker backends + `round_robin` curl cycle `a,b,c,a,b,c,a,b,c`, `least_conn` concurrent spread 3/3/3, backend 500 logged at WARN, bad config exits 1. `go test -cover ./internal/balancer/...` → 84.0%. See `docs/sessions/2026-09-18-opencode.md`.

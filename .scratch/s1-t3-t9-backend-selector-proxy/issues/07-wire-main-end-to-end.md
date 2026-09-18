@@ -6,8 +6,8 @@
 
 **Status:** ready-for-agent
 
-- [ ] Wiring order: `config.Load(*configPath)` → fatal + non-zero exit on error (no silent fallback) → `backend.NewRegistry` → `balancer.NewFromConfig(cfg, reg)` → `proxy.New(reg, sel)` → `http.Server`
-- [ ] `NewFromConfig` (the config-string → selector-type switch) lives in `balancer`, not `main.go` — `main.go` stays a thin wiring layer
-- [ ] Existing SIGINT/SIGTERM graceful-shutdown behavior preserved unchanged
-- [ ] `main.go` logging goes through the existing `internal/logger` setup (dedup, no new flag)
-- [ ] Manual smoke test: `make run` against `configs/example.yaml` distributes requests across backends per the configured algorithm — documented in the Sprint 1 session log (no new automated test; covered by tickets 02/03/05's suites)
+- [x] Wiring order: `config.Load(*configPath)` → fatal + non-zero exit on error (no silent fallback) → `backend.NewRegistry` → `balancer.NewFromConfig(cfg, reg)` → `proxy.New(reg, sel)` → `http.Server`
+- [x] `NewFromConfig` (the config-string → selector-type switch) lives in `balancer`, not `main.go` — `main.go` stays a thin wiring layer
+- [x] Existing SIGINT/SIGTERM graceful-shutdown behavior preserved unchanged
+- [x] `main.go` logging goes through the existing `internal/logger` setup (dedup, no new flag)
+- [x] Manual smoke test: `make run` against `configs/example.yaml` distributes requests across backends per the configured algorithm — documented in the Sprint 1 session log (no new automated test; covered by tickets 02/03/05's suites)
