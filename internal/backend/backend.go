@@ -30,6 +30,15 @@ func (b *Backend) IsHealthy() bool {
 	panic("not implemented: S1.T3")
 }
 
+// SetHealthy sets whether the backend is currently eligible for selection.
+// Owned by the health-check subsystem by convention (ADR-0006): Sprint 3's
+// per-backend health-check goroutines call it directly on the *Backend they
+// hold. Sprint 1 has no production caller; S1.T8's cross-selector tests use
+// it to drive health transitions. Implemented in S1.T3.
+func (b *Backend) SetHealthy(healthy bool) {
+	panic("not implemented: S1.T3")
+}
+
 // IncActive increments the active connection count. Called by the proxy
 // before dispatching a request. Implemented in S1.T3.
 func (b *Backend) IncActive() {
