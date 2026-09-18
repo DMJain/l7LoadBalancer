@@ -4,7 +4,7 @@ Live state of the project. Every agent updates this file per the protocol in `AG
 
 ## Current status
 
-**No task in progress.** S1.T4 complete. Next: S1.T5 (`balancer.LeastConnections`).
+**S1.T5 in progress** (opencode, started 2026-09-18T09:47:42Z). Next after that: S1.T6 (`internal/proxy`).
 
 ## Sprint 1 — Foundation
 
@@ -78,7 +78,7 @@ Live state of the project. Every agent updates this file per the protocol in `AG
     - Returns `ErrNoHealthyBackends` when the healthy set is empty.
   - Test approach: table-driven cyclic-order test over 3 backends; empty-registry error case; concurrent test firing 1000 selects, each backend chosen within ±5% of the expected 1/3 share.
 
-- [TODO] S1.T5 — Implement LeastConnections selector
+- [IN_PROGRESS] S1.T5 — Implement LeastConnections selector (opencode, started 2026-09-18T09:47:42Z)
   - Goal: pick the healthy backend with the lowest current ActiveConns.
   - Files: `internal/balancer/leastconn.go`, `internal/balancer/leastconn_test.go`
   - Depends on: S1.T4
