@@ -1,0 +1,18 @@
+# 01: Sprint 1 retro / architecture doc
+
+**What to build:** A future agent picking up Sprint 2 can read `docs/architecture.md` and get an accurate, cited architecture reference — component map, request-path diagram, deviations audit, and ADR cross-links — with Sprint 1 formally closed out in `PROGRESS.md` and a retro entry in the session log.
+
+**Blocked by:** None (can start immediately — S1.T1 through S1.T9 are all `[DONE]`, and the spec is already fully fact-checked against the current repo state)
+
+**Status:** ready-for-agent
+
+- [x] `docs/architecture.md` rewritten: Overview, request-path diagram (ASCII text by default, matching `AGENTS.md`'s existing ASCII diagrams; switch to Mermaid only if the ASCII version reads cramped at first draft, noting the convention change in the Deviations section if it happens), component map, decision index (all 7 ADRs plus the already-tracked Sprint 2–4 TBD rows)
+- [x] `docs/architecture.md` includes a "Deviations from plan" section with exactly two entries:
+  - S1.T7 `-addr` flag removal — recorded as owner-signed-off during the S1.T10 retro, rationale being config-first purity (`cfg.Listen` from the frozen YAML schema as the single validated source of truth), no ADR (evaluated against the project's three-part bar and fails on reversibility), pointer to `docs/sessions/2026-09-18-opencode.md` for the original reasoning
+  - `MILESTONES.md`'s "custom Transport pattern" wording — documented as a pre-implementation scope clarification (not a mid-implementation deviation), citing `.scratch/s1-t3-t9-backend-selector-proxy/spec.md:115` (and `:171`), plus `AGENTS.md:291` and `MILESTONES.md:63`, all of which deferred `http.Transport` tuning to Sprint 4 before S1.T6 was coded. **Citation corrected during implementation:** the issue originally also cited `docs/design/sprint-1-contracts.md:115`, but that line is the error-sentinel paragraph and the frozen contracts doc never mentions Transport (see `docs/sessions/2026-09-19-claude.md` → Decisions)
+- [x] `docs/architecture.md` includes a "Later amendments to Sprint 1 contracts" forward-pointer section: ADR-0006 (amends the concurrency table's `Backend.healthy` row) and ADR-0007 (amends the `Backend.active` row / proxy lifecycle); `docs/design/sprint-1-contracts.md` itself is left unedited, preserving its freeze guarantee
+- [x] `docs/architecture.md` includes a "Deliberately not here yet" section: subsystem name + owning sprint, one line each (health checking / circuit breaking / metrics — Sprint 3; hot-reload, connection-lifecycle hardening, connection-pool tuning, retry policy — Sprint 4; HTTP/2, benchmarks — Sprint 5; deployment-target decision — Sprint 4 per ADR-0005; consistent-hash-bounded-loads and P2C-EWMA selectors — Sprint 2)
+- [x] New `docs/sessions/2026-09-19-claude.md` session log entry (`## Goal` / `## Done` / `## Decisions` / `## Open items`, matching the format of `docs/sessions/2026-09-18-opencode.md`), serving as the Sprint 1 retro in full — no separate standalone retro document. Includes a note that the deployment-target decision was checked and confirmed not lost (tracked in ADR-0005, `MILESTONES.md:66`, `AGENTS.md:321`) — logged here only, no footnote added to `architecture.md`
+- [x] `PROGRESS.md`: S1.T10 line flipped from `[TODO]` to `[DONE]`
+- [x] `docs/architecture.md`, the new session log, and the `PROGRESS.md` update land together in one atomic commit, per `AGENTS.md`'s task protocol Step 6
+- [x] No new ADR files are created — three candidates (`LeastConnections` tie-break rule, docker-compose `SLEEP_MS`/`FAIL_RATE` defaults, S1.T7 `-addr` removal) were evaluated against the project's three-part bar during design review and none qualified; this is the correct outcome, not something to re-litigate

@@ -4,7 +4,7 @@ Live state of the project. Every agent updates this file per the protocol in `AG
 
 ## Current status
 
-**S1.T3–S1.T9 complete.** All Sprint 1 implementation tasks are done; only S1.T10 (retro / architecture doc) remains.
+**Sprint 1 complete.** S1.T1–S1.T10 are all [DONE]. Sprint 2 (Advanced Algorithms) is next; its tasks will be scoped when it starts.
 
 ## Sprint 1 — Foundation
 
@@ -136,7 +136,7 @@ Live state of the project. Every agent updates this file per the protocol in `AG
     - Dummy backends honor two env vars: `SLEEP_MS` (int, artificial latency per request in milliseconds, default 0) and `FAIL_RATE` (float 0.0-1.0, fraction of requests returning HTTP 500, default 0). Documented in `deployments/docker/dummy-backend/README.md`. `docker-compose.yml` gives each of the 3 services distinct non-zero defaults (not all zero) so `docker compose up` demonstrates uneven latency/failure — and therefore visible `LeastConnections` vs. `RoundRobin` differences — without a manual override.
   - Test approach: no Go unit tests; a documented manual/scripted smoke test, recorded in the Sprint 1 session log.
 
-- [IN_PROGRESS] S1.T10 — Sprint 1 retro / architecture doc (claude, started 2026-09-18T19:53:55Z)
+- [DONE] S1.T10 — Sprint 1 retro / architecture doc (claude, started 2026-09-18T19:53:55Z, completed 2026-09-18T19:54:39Z)
   - Goal: document the as-built architecture so future sprints and future agents have a reference, and close out Sprint 1.
   - Files: `docs/architecture.md` (replace the placeholder Component map section); a new ADR if any deviation from plan occurred.
   - Depends on: S1.T1 through S1.T9 all [DONE]
@@ -164,3 +164,4 @@ See `MILESTONES.md`. Tasks added per sprint.
 - 2026-09-18 — opencode — S1.T9 docker-compose dummy backends: stdlib-only Go service with `SLEEP_MS`/`FAIL_RATE` chaos knobs and a `-name` identity flag, three compose services on host ports `9001`/`9002`/`9003` with distinct non-zero defaults; `docker compose up -d --build` smoke-tested (all 3 healthy, identity + latency + failure rate verified). See `docs/sessions/2026-09-18-opencode.md`.
 - 2026-09-18 — opencode — S1.T8 cross-selector health-transition tests: new `internal/balancer/selector_test.go` proving both `RoundRobin` and `LeastConnections` stop choosing a backend on `SetHealthy(false)` and resume on `SetHealthy(true)`, with a mutation check confirming the test has teeth; `go test -cover ./internal/balancer/...` baseline recorded at 77.3% (100% on every implemented function; the rest is Sprint 2 / S1.T7 stubs). See `docs/sessions/2026-09-18-opencode.md`.
 - 2026-09-18 — opencode — S1.T7 main.go wiring: implemented `balancer.NewFromConfig` (config-string → selector switch, unknown/empty rejected) with Red-first tests, and rewired `cmd/l7LoadBalancer/main.go` to `config.Load`/`Validate` → `backend.NewRegistry` → `balancer.NewFromConfig` → `proxy.New` → `http.Server` (fatal + exit 1 on any failure, `logger.New` dedup, SIGINT/SIGTERM preserved, scaffold `-addr` flag removed in favour of `cfg.Listen`). Manual smoke: docker backends + `round_robin` curl cycle `a,b,c,a,b,c,a,b,c`, `least_conn` concurrent spread 3/3/3, backend 500 logged at WARN, bad config exits 1. `go test -cover ./internal/balancer/...` → 84.0%. See `docs/sessions/2026-09-18-opencode.md`.
+- 2026-09-19 — claude — S1.T10 Sprint 1 retro / architecture doc: rewrote `docs/architecture.md` (overview, ASCII request path, component map, 7-ADR decision index, two-entry deviations audit, ADR-0006/0007 forward-pointers, "deliberately not here yet" list), added `docs/sessions/2026-09-19-claude.md` as the retro, and closed out Sprint 1. Zero new ADRs — three candidates were evaluated against the three-part bar and none qualified. Corrected a factually wrong citation the issue carried (`sprint-1-contracts.md:115` does not mention Transport). See `docs/sessions/2026-09-19-claude.md`.
