@@ -136,7 +136,7 @@ Live state of the project. Every agent updates this file per the protocol in `AG
     - Dummy backends honor two env vars: `SLEEP_MS` (int, artificial latency per request in milliseconds, default 0) and `FAIL_RATE` (float 0.0-1.0, fraction of requests returning HTTP 500, default 0). Documented in `deployments/docker/dummy-backend/README.md`. `docker-compose.yml` gives each of the 3 services distinct non-zero defaults (not all zero) so `docker compose up` demonstrates uneven latency/failure — and therefore visible `LeastConnections` vs. `RoundRobin` differences — without a manual override.
   - Test approach: no Go unit tests; a documented manual/scripted smoke test, recorded in the Sprint 1 session log.
 
-- [TODO] S1.T10 — Sprint 1 retro / architecture doc
+- [IN_PROGRESS] S1.T10 — Sprint 1 retro / architecture doc (claude, started 2026-09-18T19:53:55Z)
   - Goal: document the as-built architecture so future sprints and future agents have a reference, and close out Sprint 1.
   - Files: `docs/architecture.md` (replace the placeholder Component map section); a new ADR if any deviation from plan occurred.
   - Depends on: S1.T1 through S1.T9 all [DONE]
