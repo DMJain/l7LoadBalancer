@@ -11,8 +11,10 @@
 # The per-service SLEEP_MS / FAIL_RATE defaults below are distinct and
 # non-zero, so `docker compose up` immediately demonstrates uneven latency
 # and failure (and therefore visible RoundRobin vs. LeastConnections
-# behavior) without any manual override. Override them per service to run
-# your own chaos experiments.
+# behavior) without any manual override. Each value is supplied through a
+# per-service host variable (e.g. BACKEND_A_SLEEP_MS), so you can override
+# one backend's chaos knobs without editing this file — see
+# dummy-backend/README.md.
 
 name: l7loadbalancer-backends
 
@@ -24,8 +26,8 @@ services:
     ports:
       - "9001:8080"
     environment:
-      SLEEP_MS: "50"
-      FAIL_RATE: "0.05"
+      SLEEP_MS: "${BACKEND_A_SLEEP_MS:-50}"
+      FAIL_RATE: "${BACKEND_A_FAIL_RATE:-0.05}"
 
   backend-b:
     build:
@@ -34,8 +36,8 @@ services:
     ports:
       - "9002:8080"
     environment:
-      SLEEP_MS: "150"
-      FAIL_RATE: "0.15"
+      SLEEP_MS: "${BACKEND_B_SLEEP_MS:-150}"
+      FAIL_RATE: "${BACKEND_B_FAIL_RATE:-0.15}"
 
   backend-c:
     build:
@@ -44,5 +46,5 @@ services:
     ports:
       - "9003:8080"
     environment:
-      SLEEP_MS: "300"
-      FAIL_RATE: "0.30"
+      SLEEP_MS: "${BACKEND_C_SLEEP_MS:-300}"
+      FAIL_RATE: "${BACKEND_C_FAIL_RATE:-0.30}"

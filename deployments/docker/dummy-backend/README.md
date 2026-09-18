@@ -60,10 +60,12 @@ Smoke test (each backend answers, some responses fail by design):
 for p in 9001 9002 9003; do curl -s "http://127.0.0.1:$p/"; echo; done
 ```
 
-Override the defaults per service for a different chaos profile:
+Override the defaults per service, without editing the compose file, using
+the per-service host variables (their built-in defaults are the table
+above):
 
 ```sh
-SLEEP_MS=0 FAIL_RATE=0 docker compose up -d
+BACKEND_A_SLEEP_MS=0 BACKEND_C_FAIL_RATE=0 docker compose up -d
 ```
 
 Tear down:

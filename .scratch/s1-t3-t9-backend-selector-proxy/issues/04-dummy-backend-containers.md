@@ -4,7 +4,7 @@
 
 **Blocked by:** None (only needs S1.T2, already done — runs fully in parallel with tickets 01–03, 05–07)
 
-**Status:** done
+**Status:** ready-for-agent
 
 - [x] `docker-compose.yml` defines exactly 3 services (no LB service — that runs locally via `make run`)
 - [x] Ports mapped to host `9001`/`9002`/`9003` so the existing `configs/example.yaml` works unmodified
