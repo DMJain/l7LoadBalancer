@@ -4,7 +4,7 @@ Live state of the project. Every agent updates this file per the protocol in `AG
 
 ## Current status
 
-**No task in progress.** S1.T5 complete. Next: S1.T6 (`internal/proxy`).
+**S1.T9 in progress** (opencode, started 2026-09-18T09:53:23Z). S1.T6 (`internal/proxy`) remains next in the critical path; S1.T9 is the parallel infra task (issue 04).
 
 ## Sprint 1 — Foundation
 
@@ -123,7 +123,7 @@ Live state of the project. Every agent updates this file per the protocol in `AG
     - `go test -cover ./internal/balancer/...` recorded in the Sprint 1 session log (no enforced threshold yet — that's deferred).
   - Test approach: table-driven + a scripted health-toggle sequence per selector.
 
-- [TODO] S1.T9 — docker-compose dummy backends
+- [IN_PROGRESS] S1.T9 — docker-compose dummy backends (opencode, started 2026-09-18T09:53:23Z)
   - Goal: provide 3 lightweight backend services via docker-compose so the proxy can be exercised end-to-end, per the MILESTONES.md Sprint 1 deliverable.
   - Files: `deployments/docker/docker-compose.yml`, `deployments/docker/dummy-backend/main.go`, `deployments/docker/dummy-backend/Dockerfile`, `deployments/docker/dummy-backend/README.md`
   - Depends on: S1.T2
