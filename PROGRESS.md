@@ -4,7 +4,7 @@ Live state of the project. Every agent updates this file per the protocol in `AG
 
 ## Current status
 
-**S1.T6 complete.** S1.T3–S1.T5 and S1.T9 complete. Next: S1.T7 (`main.go` wiring) and S1.T8 (cross-selector regression tests).
+**S1.T8 in progress.** S1.T3–S1.T6 and S1.T9 complete. Next: S1.T7 (`main.go` wiring) and S1.T8 (cross-selector regression tests).
 
 ## Sprint 1 — Foundation
 
@@ -113,7 +113,7 @@ Live state of the project. Every agent updates this file per the protocol in `AG
     - Existing SIGINT/SIGTERM graceful-shutdown behavior preserved.
   - Test approach: manual smoke test, documented in the Sprint 1 session log; automated coverage lives in S1.T6/S1.T4/S1.T5 tests.
 
-- [TODO] S1.T8 — Cross-selector regression + health-transition tests
+- [IN_PROGRESS] S1.T8 — Cross-selector regression + health-transition tests (opencode, started 2026-09-18T17:55:14Z, add cross-selector health-transition tests and record the balancer coverage baseline)
   - Goal: cover selector behavior not already exercised by S1.T4/T5's per-selector tests — specifically dynamic health transitions and interface conformance — so both selectors are proven interchangeable.
   - Files: `internal/balancer/selector_test.go` (new, cross-cutting file)
   - Depends on: S1.T4, S1.T5
