@@ -273,6 +273,7 @@ owning sprint:
 - **Connection-pool tuning** (`http.Transport` settings) — Sprint 4.
 - **Retry policy** (or its deliberate absence) — Sprint 4.
 - **Deployment-target decision** (bare binary vs. Docker vs. Kubernetes) —
-  Sprint 4, per [ADR-0005](adr/0005-scope-of-production-grade.md).
+  Sprint 4 (`MILESTONES.md:66`; [ADR-0005](adr/0005-scope-of-production-grade.md)
+  frames the window as Sprint 4/5).
 - **HTTP/2 (client-facing and to backends)** — Sprint 5.
 - **The benchmark rig and published numbers** — Sprint 5.
