@@ -4,7 +4,7 @@ Live state of the project. Every agent updates this file per the protocol in `AG
 
 ## Current status
 
-**No task in progress.** S1.T5 and S1.T9 complete. Next: S1.T6 (`internal/proxy`).
+**S1.T6 in progress.** S1.T3, S1.T4, S1.T5 and S1.T9 complete. Next: S1.T7 (`main.go` wiring).
 
 ## Sprint 1 — Foundation
 
@@ -89,7 +89,7 @@ Live state of the project. Every agent updates this file per the protocol in `AG
     - Reads `ActiveConns` atomically; does not itself mutate it (mutation is the proxy's job, wired in S1.T6).
   - Test approach: table-driven test with pre-seeded `ActiveConns` values asserting the minimum is chosen; tie-break case; empty-registry case.
 
-- [TODO] S1.T6 — Implement `internal/proxy`
+- [IN_PROGRESS] S1.T6 — Implement `internal/proxy` (opencode, started 2026-09-18T16:55:16Z)
   - Goal: wrap httputil.ReverseProxy so each request's Director consults the configured Selector, rewrites the target, and tracks ActiveConns around the round trip.
   - Files: `internal/proxy/proxy.go`, `internal/proxy/proxy_test.go`
   - Depends on: S1.T3, S1.T4, S1.T5
