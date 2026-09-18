@@ -1,0 +1,48 @@
+# Dummy backends for exercising the load balancer (S1.T9).
+#
+# Three stdlib-only Go services, each mapped to a host port that
+# configs/example.yaml already points at (9001/9002/9003), so
+# `docker compose up -d` plus `make run` needs no extra configuration.
+#
+# The load balancer itself is NOT a service here on purpose: it runs locally
+# via `make run`. Sprint 5 owns the separate, more elaborate "LB + Nginx + 4
+# backends" bench compose, kept distinct so the two don't drift apart.
+#
+# The per-service SLEEP_MS / FAIL_RATE defaults below are distinct and
+# non-zero, so `docker compose up` immediately demonstrates uneven latency
+# and failure (and therefore visible RoundRobin vs. LeastConnections
+# behavior) without any manual override. Override them per service to run
+# your own chaos experiments.
+
+name: l7loadbalancer-backends
+
+services:
+  backend-a:
+    build:
+      context: ./dummy-backend
+    command: ["-name", "backend-a"]
+    ports:
+      - "9001:8080"
+    environment:
+      SLEEP_MS: "50"
+      FAIL_RATE: "0.05"
+
+  backend-b:
+    build:
+      context: ./dummy-backend
+    command: ["-name", "backend-b"]
+    ports:
+      - "9002:8080"
+    environment:
+      SLEEP_MS: "150"
+      FAIL_RATE: "0.15"
+
+  backend-c:
+    build:
+      context: ./dummy-backend
+    command: ["-name", "backend-c"]
+    ports:
+      - "9003:8080"
+    environment:
+      SLEEP_MS: "300"
+      FAIL_RATE: "0.30"

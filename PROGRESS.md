@@ -4,7 +4,7 @@ Live state of the project. Every agent updates this file per the protocol in `AG
 
 ## Current status
 
-**S1.T9 in progress** (opencode, started 2026-09-18T09:53:23Z). S1.T6 (`internal/proxy`) remains next in the critical path; S1.T9 is the parallel infra task (issue 04).
+**No task in progress.** S1.T5 and S1.T9 complete. Next: S1.T6 (`internal/proxy`).
 
 ## Sprint 1 — Foundation
 
@@ -123,7 +123,7 @@ Live state of the project. Every agent updates this file per the protocol in `AG
     - `go test -cover ./internal/balancer/...` recorded in the Sprint 1 session log (no enforced threshold yet — that's deferred).
   - Test approach: table-driven + a scripted health-toggle sequence per selector.
 
-- [IN_PROGRESS] S1.T9 — docker-compose dummy backends (opencode, started 2026-09-18T09:53:23Z)
+- [DONE] S1.T9 — docker-compose dummy backends (opencode, started 2026-09-18T09:53:23Z, completed 2026-09-18T09:55:57Z)
   - Goal: provide 3 lightweight backend services via docker-compose so the proxy can be exercised end-to-end, per the MILESTONES.md Sprint 1 deliverable.
   - Files: `deployments/docker/docker-compose.yml`, `deployments/docker/dummy-backend/main.go`, `deployments/docker/dummy-backend/Dockerfile`, `deployments/docker/dummy-backend/README.md`
   - Depends on: S1.T2
@@ -160,3 +160,4 @@ See `MILESTONES.md`. Tasks added per sprint.
 - 2026-09-18 — opencode — S1.T2 Implement `internal/config`: strict YAML load (`KnownFields(true)`), fail-fast `Validate()` with algorithm default and full field checks, table-driven tests (21 cases), `configs/example.yaml` rewritten to the frozen 3-backend example, `tools.go` deleted now that both deps are imported for real. See `docs/sessions/2026-09-18-opencode.md`.
 - 2026-09-18 — opencode — S1.T2-fix: addressed the S1.T2 code-review audit — reject uppercase URL schemes, add `TestExampleConfig` round-trip test, record ADR-0004, align tracking files, rename loop var. See `docs/sessions/2026-09-18-opencode.md`.
 - 2026-09-18 — opencode — S1.T5 LeastConnections: linear scan of `Registry.Healthy()` for the lowest `ActiveConns()` (read-only), first-in-registry-order tie-break; table-driven min/tie/unhealthy/empty tests plus determinism and no-mutation tests. See `docs/sessions/2026-09-18-opencode.md`.
+- 2026-09-18 — opencode — S1.T9 docker-compose dummy backends: stdlib-only Go service with `SLEEP_MS`/`FAIL_RATE` chaos knobs and a `-name` identity flag, three compose services on host ports `9001`/`9002`/`9003` with distinct non-zero defaults; `docker compose up -d --build` smoke-tested (all 3 healthy, identity + latency + failure rate verified). See `docs/sessions/2026-09-18-opencode.md`.
