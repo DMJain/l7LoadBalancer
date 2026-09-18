@@ -6,11 +6,11 @@
 
 **Status:** ready-for-agent
 
-- [ ] `LeastConnections` implements `Selector`, scanning `Registry.Healthy()` and picking the lowest `ActiveConns()`
-- [ ] Ties broken deterministically: first tied backend in registry order wins (reproducible tests)
-- [ ] Reads `ActiveConns()` only — never mutates it (mutation is the proxy's job, ticket 05)
-- [ ] Empty-healthy-set → `ErrNoHealthyBackends`
-- [ ] Compile-time assertion: `var _ Selector = (*LeastConnections)(nil)`
-- [ ] Table-driven test: pre-seeded `ActiveConns` values → minimum is chosen; explicit tie-break case; empty-registry case
+- [x] `LeastConnections` implements `Selector`, scanning `Registry.Healthy()` and picking the lowest `ActiveConns()`
+- [x] Ties broken deterministically: first tied backend in registry order wins (reproducible tests)
+- [x] Reads `ActiveConns()` only — never mutates it (mutation is the proxy's job, ticket 05)
+- [x] Empty-healthy-set → `ErrNoHealthyBackends`
+- [x] Compile-time assertion: `var _ Selector = (*LeastConnections)(nil)`
+- [x] Table-driven test: pre-seeded `ActiveConns` values → minimum is chosen; explicit tie-break case; empty-registry case
 
 **Note:** If the `Selector` interface / `ErrNoHealthyBackends` (ticket 02) hasn't landed yet when this starts, define them here instead — whichever of 02/03 lands first owns `selector.go`.

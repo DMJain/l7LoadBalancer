@@ -17,15 +17,31 @@ type LeastConnections struct {
 }
 
 // NewLeastConnections constructs a LeastConnections selector over reg.
-// Implemented in S1.T5.
 func NewLeastConnections(reg *backend.Registry) *LeastConnections {
-	panic("not implemented: S1.T5")
+	return &LeastConnections{reg: reg}
 }
 
-// Select implements Selector. Returns ErrNoHealthyBackends when
-// reg.Healthy() is empty. Implemented in S1.T5.
+// Select implements Selector. It linear-scans a snapshot of the healthy set,
+// returning the backend with the lowest ActiveConns, and ErrNoHealthyBackends
+// when that set is empty. Replacement happens only on a strictly lower count,
+// so the first backend in registry order wins ties — deterministic and
+// reproducible. ActiveConns is read, never mutated: connection bookkeeping is
+// the proxy's job (S1.T6).
 func (s *LeastConnections) Select(ctx context.Context, r *http.Request) (*backend.Backend, error) {
-	panic("not implemented: S1.T5")
+	healthy := s.reg.Healthy()
+	if len(healthy) == 0 {
+		return nil, ErrNoHealthyBackends
+	}
+
+	best := healthy[0]
+	bestActive := best.ActiveConns()
+	for _, b := range healthy[1:] {
+		if active := b.ActiveConns(); active < bestActive {
+			best = b
+			bestActive = active
+		}
+	}
+	return best, nil
 }
 
 var _ Selector = (*LeastConnections)(nil)

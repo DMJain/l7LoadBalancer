@@ -4,7 +4,7 @@ Live state of the project. Every agent updates this file per the protocol in `AG
 
 ## Current status
 
-**S1.T5 in progress** (opencode, started 2026-09-18T09:47:42Z). Next after that: S1.T6 (`internal/proxy`).
+**No task in progress.** S1.T5 complete. Next: S1.T6 (`internal/proxy`).
 
 ## Sprint 1 — Foundation
 
@@ -78,7 +78,7 @@ Live state of the project. Every agent updates this file per the protocol in `AG
     - Returns `ErrNoHealthyBackends` when the healthy set is empty.
   - Test approach: table-driven cyclic-order test over 3 backends; empty-registry error case; concurrent test firing 1000 selects, each backend chosen within ±5% of the expected 1/3 share.
 
-- [IN_PROGRESS] S1.T5 — Implement LeastConnections selector (opencode, started 2026-09-18T09:47:42Z)
+- [DONE] S1.T5 — Implement LeastConnections selector (opencode, started 2026-09-18T09:47:42Z, completed 2026-09-18T09:48:15Z)
   - Goal: pick the healthy backend with the lowest current ActiveConns.
   - Files: `internal/balancer/leastconn.go`, `internal/balancer/leastconn_test.go`
   - Depends on: S1.T4
@@ -159,3 +159,4 @@ See `MILESTONES.md`. Tasks added per sprint.
 - 2026-09-01 — claude — S1.T0.5 Interface & Schema Freeze (Phase A): froze all Sprint 1 cross-package contracts as compiling Go stubs, wrote `docs/design/sprint-1-contracts.md` and ADR-0002. See `docs/sessions/2026-09-01-claude.md`.
 - 2026-09-18 — opencode — S1.T2 Implement `internal/config`: strict YAML load (`KnownFields(true)`), fail-fast `Validate()` with algorithm default and full field checks, table-driven tests (21 cases), `configs/example.yaml` rewritten to the frozen 3-backend example, `tools.go` deleted now that both deps are imported for real. See `docs/sessions/2026-09-18-opencode.md`.
 - 2026-09-18 — opencode — S1.T2-fix: addressed the S1.T2 code-review audit — reject uppercase URL schemes, add `TestExampleConfig` round-trip test, record ADR-0004, align tracking files, rename loop var. See `docs/sessions/2026-09-18-opencode.md`.
+- 2026-09-18 — opencode — S1.T5 LeastConnections: linear scan of `Registry.Healthy()` for the lowest `ActiveConns()` (read-only), first-in-registry-order tie-break; table-driven min/tie/unhealthy/empty tests plus determinism and no-mutation tests. See `docs/sessions/2026-09-18-opencode.md`.
