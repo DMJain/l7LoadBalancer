@@ -4,7 +4,7 @@ Live state of the project. Every agent updates this file per the protocol in `AG
 
 ## Current status
 
-**S1.T8 in progress.** S1.T3–S1.T6 and S1.T9 complete. Next: S1.T7 (`main.go` wiring) and S1.T8 (cross-selector regression tests).
+**S1.T8 complete.** S1.T3–S1.T6, S1.T8 and S1.T9 complete. Next: S1.T7 (`main.go` wiring) and S1.T10 (Sprint 1 retro / architecture doc).
 
 ## Sprint 1 — Foundation
 
@@ -113,7 +113,7 @@ Live state of the project. Every agent updates this file per the protocol in `AG
     - Existing SIGINT/SIGTERM graceful-shutdown behavior preserved.
   - Test approach: manual smoke test, documented in the Sprint 1 session log; automated coverage lives in S1.T6/S1.T4/S1.T5 tests.
 
-- [IN_PROGRESS] S1.T8 — Cross-selector regression + health-transition tests (opencode, started 2026-09-18T17:55:14Z, add cross-selector health-transition tests and record the balancer coverage baseline)
+- [DONE] S1.T8 — Cross-selector regression + health-transition tests (opencode, started 2026-09-18T17:55:14Z, completed 2026-09-18T17:56:20Z)
   - Goal: cover selector behavior not already exercised by S1.T4/T5's per-selector tests — specifically dynamic health transitions and interface conformance — so both selectors are proven interchangeable.
   - Files: `internal/balancer/selector_test.go` (new, cross-cutting file)
   - Depends on: S1.T4, S1.T5
@@ -161,3 +161,4 @@ See `MILESTONES.md`. Tasks added per sprint.
 - 2026-09-18 — opencode — S1.T2-fix: addressed the S1.T2 code-review audit — reject uppercase URL schemes, add `TestExampleConfig` round-trip test, record ADR-0004, align tracking files, rename loop var. See `docs/sessions/2026-09-18-opencode.md`.
 - 2026-09-18 — opencode — S1.T5 LeastConnections: linear scan of `Registry.Healthy()` for the lowest `ActiveConns()` (read-only), first-in-registry-order tie-break; table-driven min/tie/unhealthy/empty tests plus determinism and no-mutation tests. See `docs/sessions/2026-09-18-opencode.md`.
 - 2026-09-18 — opencode — S1.T9 docker-compose dummy backends: stdlib-only Go service with `SLEEP_MS`/`FAIL_RATE` chaos knobs and a `-name` identity flag, three compose services on host ports `9001`/`9002`/`9003` with distinct non-zero defaults; `docker compose up -d --build` smoke-tested (all 3 healthy, identity + latency + failure rate verified). See `docs/sessions/2026-09-18-opencode.md`.
+- 2026-09-18 — opencode — S1.T8 cross-selector health-transition tests: new `internal/balancer/selector_test.go` proving both `RoundRobin` and `LeastConnections` stop choosing a backend on `SetHealthy(false)` and resume on `SetHealthy(true)`, with a mutation check confirming the test has teeth; `go test -cover ./internal/balancer/...` baseline recorded at 77.3% (100% on every implemented function; the rest is Sprint 2 / S1.T7 stubs). See `docs/sessions/2026-09-18-opencode.md`.

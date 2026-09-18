@@ -6,7 +6,7 @@
 
 **Status:** ready-for-agent
 
-- [ ] Compile-time assertions for both: `var _ Selector = (*RoundRobin)(nil)`, `var _ Selector = (*LeastConnections)(nil)`
-- [ ] Scripted test (run against both selectors): backend goes unhealthy mid-run via `SetHealthy(false)` → immediately stops being chosen
-- [ ] Same scripted test: backend recovers via `SetHealthy(true)` → resumes being chosen
-- [ ] `go test -cover ./internal/balancer/...` output recorded in the Sprint 1 session log (no enforced threshold yet)
+- [x] Compile-time assertions for both: `var _ Selector = (*RoundRobin)(nil)`, `var _ Selector = (*LeastConnections)(nil)`
+- [x] Scripted test (run against both selectors): backend goes unhealthy mid-run via `SetHealthy(false)` → immediately stops being chosen
+- [x] Same scripted test: backend recovers via `SetHealthy(true)` → resumes being chosen
+- [x] `go test -cover ./internal/balancer/...` output recorded in the Sprint 1 session log (no enforced threshold yet)
