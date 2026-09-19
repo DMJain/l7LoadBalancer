@@ -18,9 +18,10 @@ import (
 // "it ships nothing" claim a checked invariant rather than a remembered fact.
 //
 // This asserts a negative about gc/linker DCE behavior, not a language
-// guarantee. If it fails after a Go toolchain upgrade, first check whether the
-// linker changed emission rules for blank-identifier interface assertions
-// before assuming a code regression. See ADR-0008.
+// guarantee, so it is a test-level guard rather than an ADR-level decision. If
+// it fails after a Go toolchain upgrade, first check whether the linker changed
+// emission rules for blank-identifier interface assertions before assuming a
+// code regression.
 func TestNaiveConsistentHashNotLinked(t *testing.T) {
 	bin := filepath.Join(t.TempDir(), "l7LoadBalancer")
 
