@@ -309,94 +309,83 @@ func (s *spyObserver) snapshot() []observerCall {
 	return append([]observerCall(nil), s.calls...)
 }
 
-// TestProxyObserverFanOutInvokesEachObserverOnceOnSuccess proves a successful
-// round trip notifies every registered observer exactly once, with
-// success=true and a real, non-zero round-trip duration — asserting call
-// count, not merely call content, so an accidental double registration cannot
-// pass silently.
-func TestProxyObserverFanOutInvokesEachObserverOnceOnSuccess(t *testing.T) {
-	serving := startBackend(t, "backend-a")
-	reg := registryFrom(t, backendEntry{"backend-a", serving.URL})
-	p := New(reg, balancer.NewRoundRobin(reg))
+// TestProxyObserverFanOutInvokesEachObserverExactlyOnce proves the fan-out
+// notifies every registered observer exactly once per request on every
+// terminal hook — a successful 2xx response and a 5xx response (both via
+// modifyResponse, differing in the success flag) and a connection-refused
+// backend (via errorHandler). It asserts invocation count, not merely content,
+// so an accidental double registration cannot pass silently. The latency
+// adapter is nested in a recording spy so its own invocation count (which its
+// EWMA-write side effect cannot reveal) is assertable too.
+func TestProxyObserverFanOutInvokesEachObserverExactlyOnce(t *testing.T) {
+	tests := []struct {
+		name        string
+		backendURL  func(t *testing.T) string
+		wantStatus  int
+		wantSuccess bool
+		// wantPenalty picks the duration expectation: the fixed failure penalty
+		// exactly (errorHandler), or any real positive round-trip duration.
+		wantPenalty bool
+	}{
+		{
+			name:        "successful 2xx response",
+			backendURL:  func(t *testing.T) string { return startBackend(t, "backend-a").URL },
+			wantStatus:  http.StatusOK,
+			wantSuccess: true,
+		},
+		{
+			name: "5xx response",
+			backendURL: func(t *testing.T) string {
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					w.WriteHeader(http.StatusInternalServerError)
+				}))
+				t.Cleanup(srv.Close)
+				return srv.URL
+			},
+			wantStatus:  http.StatusInternalServerError,
+			wantSuccess: false,
+		},
+		{
+			name:        "connection refused",
+			backendURL:  deadBackendURL,
+			wantStatus:  http.StatusBadGateway,
+			wantSuccess: false,
+			wantPenalty: true,
+		},
+	}
 
-	latency := &spyObserver{inner: NewLatencyObserver()}
-	spy := &spyObserver{}
-	p.RegisterObserver(latency)
-	p.RegisterObserver(spy)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reg := registryFrom(t, backendEntry{"backend-a", tt.backendURL(t)})
+			p := New(reg, balancer.NewRoundRobin(reg))
 
-	rec := httptest.NewRecorder()
-	p.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
-	require.Equal(t, http.StatusOK, rec.Code)
+			latency := &spyObserver{inner: NewLatencyObserver()}
+			spy := &spyObserver{}
+			p.RegisterObserver(latency)
+			p.RegisterObserver(spy)
 
-	calls := spy.snapshot()
-	require.Len(t, calls, 1, "each observer must be invoked exactly once per request")
-	assert.Equal(t, reg.All()[0], calls[0].backend)
-	assert.True(t, calls[0].success)
-	assert.Positive(t, calls[0].d)
+			rec := httptest.NewRecorder()
+			p.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+			require.Equal(t, tt.wantStatus, rec.Code)
 
-	assert.Len(t, latency.snapshot(), 1, "the latency adapter must be invoked exactly once")
-	assert.Positive(t, reg.All()[0].EWMALatency(),
-		"the latency adapter must record the round-trip duration")
-}
+			calls := spy.snapshot()
+			require.Len(t, calls, 1, "each observer must be invoked exactly once per request")
+			assert.Equal(t, reg.All()[0], calls[0].backend)
+			assert.Equal(t, tt.wantSuccess, calls[0].success)
 
-// TestProxyObserverFanOutInvokesEachObserverOnceOn5xx proves the fan-out's
-// modifyResponse hook fires for a 5xx response — a failure signal that still
-// produced a response — exactly once per observer, with success=false.
-func TestProxyObserverFanOutInvokesEachObserverOnceOn5xx(t *testing.T) {
-	backendSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-	}))
-	t.Cleanup(backendSrv.Close)
+			assert.Len(t, latency.snapshot(), 1, "the latency adapter must be invoked exactly once")
 
-	reg := registryFrom(t, backendEntry{"backend-a", backendSrv.URL})
-	p := New(reg, balancer.NewRoundRobin(reg))
-
-	latency := &spyObserver{inner: NewLatencyObserver()}
-	spy := &spyObserver{}
-	p.RegisterObserver(latency)
-	p.RegisterObserver(spy)
-
-	rec := httptest.NewRecorder()
-	p.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
-	require.Equal(t, http.StatusInternalServerError, rec.Code)
-
-	calls := spy.snapshot()
-	require.Len(t, calls, 1, "each observer must be invoked exactly once per request")
-	assert.Equal(t, reg.All()[0], calls[0].backend)
-	assert.False(t, calls[0].success)
-	assert.Positive(t, calls[0].d)
-
-	assert.Len(t, latency.snapshot(), 1, "the latency adapter must be invoked exactly once")
-	assert.Positive(t, reg.All()[0].EWMALatency(),
-		"the latency adapter must record the round-trip duration")
-}
-
-// TestProxyObserverFanOutInvokesEachObserverOnceOnConnectionRefused proves the
-// fan-out's errorHandler hook fires for a transport failure — the signal
-// passive detection and the circuit breaker both watch — exactly once per
-// observer, with success=false and the fixed failure penalty as the duration.
-func TestProxyObserverFanOutInvokesEachObserverOnceOnConnectionRefused(t *testing.T) {
-	reg := registryFrom(t, backendEntry{"backend-a", deadBackendURL(t)})
-	p := New(reg, balancer.NewRoundRobin(reg))
-
-	latency := &spyObserver{inner: NewLatencyObserver()}
-	spy := &spyObserver{}
-	p.RegisterObserver(latency)
-	p.RegisterObserver(spy)
-
-	rec := httptest.NewRecorder()
-	p.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
-	require.Equal(t, http.StatusBadGateway, rec.Code)
-
-	calls := spy.snapshot()
-	require.Len(t, calls, 1, "each observer must be invoked exactly once per request")
-	assert.Equal(t, reg.All()[0], calls[0].backend)
-	assert.False(t, calls[0].success)
-	assert.Equal(t, p2cFailurePenalty, calls[0].d)
-
-	assert.Len(t, latency.snapshot(), 1, "the latency adapter must be invoked exactly once")
-	assert.Equal(t, p2cFailurePenalty, reg.All()[0].EWMALatency(),
-		"the latency adapter must record the fixed failure penalty")
+			if tt.wantPenalty {
+				assert.Equal(t, p2cFailurePenalty, calls[0].d)
+				assert.Equal(t, p2cFailurePenalty, reg.All()[0].EWMALatency(),
+					"the latency adapter must record the fixed failure penalty")
+			} else {
+				assert.Positive(t, calls[0].d)
+				assert.Positive(t, reg.All()[0].EWMALatency(),
+					"the latency adapter must record the round-trip duration")
+			}
+		})
+	}
 }
 
 // logRecord is one parsed JSON slog line.

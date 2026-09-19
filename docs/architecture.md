@@ -109,8 +109,10 @@ Lifecycle notes (full rationale in
    `err` field).
 6. Both terminal hooks (`ModifyResponse`, `ErrorHandler`) fan every round
    trip's outcome out to every registered `RoundTripObserver`, unconditionally
-   — including failures and, once the circuit breaker exists, requests to an
-   open-circuit backend. Recording is unconditional; gating is conditional.
+   with respect to observer and circuit state — success and failure alike,
+   including a half-open circuit trial's result. Recording is unconditional;
+   gating is conditional: a request denied by the breaker's `Allow()` gate is
+   answered before dispatch, so it never produces a round trip to record.
    Registration is additive (`Proxy.RegisterObserver`), so `New(reg, sel)`'s
    signature stays frozen; latency recording is the first observer
    (`NewLatencyObserver`), with passive outlier detection and the circuit
