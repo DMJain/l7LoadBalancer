@@ -148,7 +148,28 @@ Live state of the project. Every agent updates this file per the protocol in `AG
 
 ## Sprint 2 — Advanced Algorithms
 
-Tasks will be added when Sprint 1 completes and Sprint 2 is scoped in detail. See `MILESTONES.md` for the sprint goal.
+Scoped in `.scratch/s2-t1-t2-consistent-hash-bounded-loads/` as one spec plus three implementation tickets. The spec groups the work as S2.T1 (ring primitive + unexported naive comparator) and S2.T2 (bounded-loads selector + config wiring), but PROGRESS tracks the finer-grained tickets so each closes independently: issue 01 = ring primitive, issue 02 = `naiveConsistentHash`, issue 03 = `ConsistentHashBoundedLoads`.
+
+- [IN_PROGRESS] S2.T1.1 — Consistent-hash ring primitive (issue 01) (opencode, started 2026-09-19T06:18:15Z, ring with fnv→fmix64 hashing, 150 vnodes/backend, index-first vnode keys, iter.Seq candidate walk; ADR-0008)
+  - Goal: an unexported, deterministic hash ring in `internal/balancer` that maps a hash key to a backend via virtual nodes, exposing an ordered candidate walk as a Go 1.23 `iter.Seq[*backend.Backend]` — the shared foundation both consistent-hash selectors (issues 02 and 03) build on. Placement only: no `Select`, no health or capacity awareness.
+  - Files: `internal/balancer/ring.go`, `internal/balancer/ring_test.go`, `docs/adr/0008-consistent-hash-ring-pipeline-and-vnode-layout.md`
+  - Depends on: none
+  - Acceptance:
+    - Unexported `ring` type, built once at construction from `Registry.All()` (every backend, regardless of health) — no rebuild API; membership changes are Sprint 4's problem.
+    - Hash pipeline: stdlib `hash/fnv` `New64a()` → `Sum64()` → fixed Murmur3-style `fmix64` finalizer; same pipeline used for vnode placement and (later tickets) request-key hashing.
+    - Virtual-node keys built `<replica-index>:<backend-name>` (index first); 150 vnodes per backend.
+    - Candidate walk from a key's ring position wraps around and yields each distinct backend once, as `iter.Seq[*backend.Backend]` (not a predicate callback).
+    - Table-driven tests: same key maps to the same backend repeatedly; adding/removing a backend remaps only ~`1/n` of keys; vnode placement reasonably uniform under a large random-key sample.
+    - ADR-0008 records the hash pipeline, vnode key order, and vnode count, each citing measured evidence.
+  - Test approach: direct ring-level tests (no selector, no HTTP), `testify/require` for setup and `assert` for values, deterministic fixtures so assertions cannot flake.
+
+- [ ] S2.T1.2 — `naiveConsistentHash` selector (issue 02)
+  - Goal: unexported, health-aware but load-blind `Selector` over the ring, walk skipping unhealthy candidates; deliberately never reachable via `NewFromConfig`/`implementedAlgorithms`; exists as the empirical comparator for bounded-loads.
+  - Depends on: S2.T1.1
+
+- [ ] S2.T2 — `ConsistentHashBoundedLoads` + config wiring (issue 03)
+  - Goal: exported `Selector` wired to the `consistent_hash` identifier, reusing the ring with a `(1 + ε)` per-candidate capacity check (ε = 0.25), least-loaded fallback, and a fixed-seed hot-key comparative test plus a build-tagged offline reproducer; ADR-0009 records the bounded-loads decisions and evidence.
+  - Depends on: S2.T1.1, S2.T1.2
 
 ## Sprint 3, 4, 5
 
