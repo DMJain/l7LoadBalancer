@@ -175,7 +175,7 @@ Scoped in `.scratch/s2-t1-t2-consistent-hash-bounded-loads/` as one spec plus th
     - Tests: stable affinity per client IP (incl. port-stripped), key-matters teeth check (400 octet-diverse IPs, 4 backends, each ≥10%), health transition (skip → resume), empty healthy set → `ErrNoHealthyBackends`, concurrent `-race` selects.
   - Test approach: direct instantiation against a real `*backend.Registry`, deterministic fixed seeds, table-driven where enumerable, no mocks. `go test -cover ./internal/balancer/...` → 93.9%.
 
-- [ ] S2.T2 — `ConsistentHashBoundedLoads` + config wiring (issue 03)
+- [IN_PROGRESS] S2.T2 — `ConsistentHashBoundedLoads` + config wiring (issue 03) (opencode, started 2026-09-19T07:53:59Z)
   - Goal: exported `Selector` wired to the `consistent_hash` identifier, reusing the ring with a `(1 + ε)` per-candidate capacity check (ε = 0.25), least-loaded fallback, and a fixed-seed hot-key comparative test plus a build-tagged offline reproducer; ADR-0009 records the bounded-loads decisions and evidence.
   - Depends on: S2.T1.1, S2.T1.2
 
