@@ -56,9 +56,9 @@ const (
 	// health.probe_interval is omitted.
 	DefaultProbeInterval = 5 * time.Second
 	// DefaultProbeTimeout bounds a single probe when health.probe_timeout is
-	// omitted. Deliberately below DefaultProbeInterval so probes do not
+	// omitted. It is shorter than DefaultProbeInterval so the defaults cannot
 	// overlap; Validate does not enforce the relationship, since an operator
-	// may still choose a timeout longer than the interval.
+	// may deliberately choose a timeout longer than the interval.
 	DefaultProbeTimeout = 2 * time.Second
 	// DefaultCircuitCooldown is how long a tripped circuit stays Open before a
 	// read may promote it to Half-Open, when circuit.cooldown is omitted.
@@ -66,6 +66,10 @@ const (
 )
 
 // Config is the top-level load balancer configuration, loaded from YAML.
+//
+// Sprint 3's health and circuit knobs are nested `health:`/`circuit:` sections
+// rather than flat top-level keys, so each subsystem's settings stay grouped
+// and the schema remains legible as it grows. See ADR-0011 decision 10.
 type Config struct {
 	Listen    string          `yaml:"listen"`
 	Algorithm string          `yaml:"algorithm"`
@@ -91,9 +95,10 @@ type HealthConfig struct {
 	ProbeTimeout *time.Duration `yaml:"probe_timeout"`
 }
 
-// CircuitConfig holds the per-backend circuit-breaker tunables. Global for the
-// same reason as HealthConfig (ADR-0011 decision 10). Its fields follow the
-// same nil-means-omitted convention.
+// CircuitConfig holds the circuit-breaker tunables applied to every backend.
+// Global for the same reason as HealthConfig (ADR-0011 decision 10): circuit
+// state is per-backend, but these knobs are not. Its fields follow the same
+// nil-means-omitted convention.
 type CircuitConfig struct {
 	// Cooldown is how long a tripped circuit stays Open before a read may
 	// promote it to Half-Open. Omitted → DefaultCircuitCooldown.
@@ -190,29 +195,28 @@ func (c *Config) Validate() error {
 }
 
 // normalizeAndValidateDurations applies the Sprint 3 defaults to every omitted
-// duration and rejects an explicitly-set non-positive one. A nil pointer means
-// the key was absent (default it); a non-nil pointer means the operator set it
-// (it must be positive). Called last so the pre-Sprint-3 checks keep their
-// fail-fast order.
+// duration and rejects an explicitly-set non-positive one. Called last so the
+// pre-Sprint-3 checks keep their fail-fast order.
 func (c *Config) normalizeAndValidateDurations() error {
-	checks := []struct {
-		field string
-		value **time.Duration
-		def   time.Duration
-	}{
-		{"health probe_interval", &c.Health.ProbeInterval, DefaultProbeInterval},
-		{"health probe_timeout", &c.Health.ProbeTimeout, DefaultProbeTimeout},
-		{"circuit cooldown", &c.Circuit.Cooldown, DefaultCircuitCooldown},
+	if err := normalizeDuration("health probe_interval", &c.Health.ProbeInterval, DefaultProbeInterval); err != nil {
+		return err
 	}
-	for _, ch := range checks {
-		if *ch.value == nil {
-			d := ch.def
-			*ch.value = &d
-			continue
-		}
-		if **ch.value <= 0 {
-			return fmt.Errorf("config: %s must be positive, got %s", ch.field, **ch.value)
-		}
+	if err := normalizeDuration("health probe_timeout", &c.Health.ProbeTimeout, DefaultProbeTimeout); err != nil {
+		return err
+	}
+	return normalizeDuration("circuit cooldown", &c.Circuit.Cooldown, DefaultCircuitCooldown)
+}
+
+// normalizeDuration replaces an omitted duration (nil) with def and rejects an
+// explicitly-set non-positive one. The pointer's nil-ness is what distinguishes
+// "key absent" from "key set to zero"; the result is written back through value.
+func normalizeDuration(field string, value **time.Duration, def time.Duration) error {
+	if *value == nil {
+		*value = &def
+		return nil
+	}
+	if **value <= 0 {
+		return fmt.Errorf("config: %s must be positive, got %s", field, **value)
 	}
 	return nil
 }

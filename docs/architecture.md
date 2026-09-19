@@ -151,7 +151,7 @@ As-built package status:
 | `internal/proxy` | Sprint 1 | Wraps `httputil.ReverseProxy`; owns the request lifecycle, 503/502 short-circuits, active-connection accounting, and the per-request log line. |
 | `internal/balancer` | Sprint 1–2 | `Selector` interface + `ErrNoHealthyBackends` (the only exported sentinel), `RoundRobin`, `LeastConnections`, `ConsistentHashBoundedLoads` over an unexported ring, and `PowerOfTwoChoicesEWMA` over per-backend EWMA latency, plus the `NewFromConfig` factory. |
 | `internal/backend` | Sprint 1–2 | `Backend` (identity + unexported `atomic` health/active/EWMA-latency state, methods-only access) and `Registry` (ordered, immutable until Sprint 4's hot-reload). |
-| `internal/config` | Sprint 1 | Strict YAML loading (`KnownFields(true)`) and fail-fast validation; algorithm identifier constants. Immutable after init in Sprint 1. |
+| `internal/config` | Sprint 1, extended Sprint 3 | Strict YAML loading (`KnownFields(true)`) and fail-fast validation; algorithm identifier constants. Sprint 3 adds optional global `health:` (probe interval/timeout) and `circuit:` (cooldown) duration sections, defaulted in `Validate` and rejected when explicitly non-positive (ADR-0011 decision 10). Immutable after init in Sprint 1. |
 | `internal/logger` | Sprint 1 | `log/slog` JSON setup and the frozen canonical field vocabulary. Leaf. |
 | `internal/metrics` | Sprint 3 (stub) | Prometheus instruments. Names/labels reserved in `internal/metrics/doc.go`. |
 | `internal/health` | Sprint 3 (stub) | Active probes + passive outlier detection. |
