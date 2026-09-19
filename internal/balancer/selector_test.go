@@ -1,23 +1,49 @@
 package balancer
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/DMJain/l7LoadBalancer/internal/backend"
 )
 
-// This file is the cross-cutting counterpart to roundrobin_test.go and
-// leastconn_test.go. Rather than re-testing each algorithm's distribution,
-// it proves the two Sprint 1 selectors are interchangeable with respect to
-// health transitions: health-awareness must be a property of the Selector
-// contract, not something one implementation happens to get right.
+// This file is the cross-cutting counterpart to the per-selector test files.
+// Rather than re-testing each algorithm's distribution, it proves the Sprint 1
+// selectors are interchangeable with respect to health transitions:
+// health-awareness must be a property of the Selector contract, not something
+// one implementation happens to get right. It also hosts the address-aware
+// selection helpers shared by every selector test, so a request is always
+// built through one path rather than each file re-rolling httptest setup.
 //
 // The per-implementation compile-time assertions
 // (`var _ Selector = (*RoundRobin)(nil)` / `(*LeastConnections)(nil)`) live
 // next to each type in roundrobin.go and leastconn.go and are re-checked on
 // every build, so they are deliberately not duplicated here.
+
+// selectForAddr selects through s for a request whose client address is
+// remoteAddr, returning the backend and error unmodified so error-path tests
+// can assert both.
+func selectForAddr(t *testing.T, s Selector, remoteAddr string) (*backend.Backend, error) {
+	t.Helper()
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.RemoteAddr = remoteAddr
+	return s.Select(context.Background(), r)
+}
+
+// selectNameForAddr is selectForAddr for the happy path: it fails the test
+// immediately if selection errors or returns no backend.
+func selectNameForAddr(t *testing.T, s Selector, remoteAddr string) string {
+	t.Helper()
+	b, err := selectForAddr(t, s, remoteAddr)
+	require.NoError(t, err)
+	require.NotNil(t, b)
+	return b.Name
+}
 
 // selectorFactory builds a fresh selector over reg, so each table case
 // starts from identical state — notably RoundRobin's rotation counter.

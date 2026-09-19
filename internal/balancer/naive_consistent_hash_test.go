@@ -1,10 +1,7 @@
 package balancer
 
 import (
-	"context"
 	"math/rand"
-	"net/http"
-	"net/http/httptest"
 	"sync"
 	"testing"
 
@@ -16,27 +13,10 @@ import (
 
 // naiveConsistentHash routes by client IP, so unlike selectName (which uses
 // httptest's fixed default RemoteAddr) these tests must control RemoteAddr to
-// exercise different clients and different ephemeral ports.
-
-// selectForAddr selects through s for a request whose client address is
-// remoteAddr, returning the backend and error unmodified so error-path tests
-// can assert both.
-func selectForAddr(t *testing.T, s Selector, remoteAddr string) (*backend.Backend, error) {
-	t.Helper()
-	r := httptest.NewRequest(http.MethodGet, "/", nil)
-	r.RemoteAddr = remoteAddr
-	return s.Select(context.Background(), r)
-}
-
-// selectNameForAddr is selectForAddr for the happy path: it fails the test
-// immediately if selection errors or returns no backend.
-func selectNameForAddr(t *testing.T, s Selector, remoteAddr string) string {
-	t.Helper()
-	b, err := selectForAddr(t, s, remoteAddr)
-	require.NoError(t, err)
-	require.NotNil(t, b)
-	return b.Name
-}
+// exercise different clients and different ephemeral ports. The address-aware
+// helpers selectForAddr / selectNameForAddr live in selector_test.go, the
+// cross-cutting test file, so every selector test builds requests through one
+// path.
 
 // TestNaiveConsistentHashStableAffinity is the core session-affinity property:
 // a given client address always maps to the same backend, across repeated

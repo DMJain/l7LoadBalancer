@@ -40,12 +40,12 @@ func setHealthy(t *testing.T, reg *backend.Registry, name string, healthy bool) 
 	require.Failf(t, "backend not found", "no backend named %q in registry", name)
 }
 
+// selectName selects through s using httptest's fixed default client address
+// (192.0.2.1:1234); it is the address-agnostic shorthand for
+// selectNameForAddr, which lives in selector_test.go.
 func selectName(t *testing.T, s Selector) string {
 	t.Helper()
-	b, err := s.Select(context.Background(), httptest.NewRequest(http.MethodGet, "/", nil))
-	require.NoError(t, err)
-	require.NotNil(t, b)
-	return b.Name
+	return selectNameForAddr(t, s, "192.0.2.1:1234")
 }
 
 func TestRoundRobinCyclicOrder(t *testing.T) {
