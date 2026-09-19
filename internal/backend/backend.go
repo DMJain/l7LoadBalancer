@@ -43,8 +43,9 @@ func (b *Backend) IsHealthy() bool {
 	return b.healthy.Load()
 }
 
-// MarkHealthy makes the backend eligible for selection again. By convention
-// (ADR-0011 decision 2) only the active health-check subsystem calls this: a
+// MarkHealthy makes the backend eligible for selection again. NewRegistry
+// seeds every freshly-built backend with it; at runtime, by convention
+// (ADR-0011 decision 2) only the active health-check subsystem calls it: a
 // backend ejected by passive outlier detection recovers via the next
 // successful active probe, never on a passive timer. Go cannot enforce caller
 // identity — the same limitation ADR-0006 accepted for the single SetHealthy
@@ -57,9 +58,9 @@ func (b *Backend) MarkHealthy() {
 // MarkUnhealthy makes the backend ineligible for selection. Both active
 // health checks and passive outlier detection call this (ADR-0011 decisions
 // 2 and 3). Owned by the health-check subsystem by convention: its
-// per-backend goroutines call it directly on the *Backend they hold. Sprint 1
-// has no production caller; S1.T8's cross-selector tests use it to drive
-// health transitions.
+// per-backend goroutines call it directly on the *Backend they hold. No
+// production caller exists yet; S1.T8's cross-selector tests drive health
+// transitions with it until Sprint 3 wires the checkers.
 func (b *Backend) MarkUnhealthy() {
 	b.healthy.Store(false)
 }

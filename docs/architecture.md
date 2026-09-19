@@ -345,7 +345,7 @@ concurrency-ownership table:
   circuit-not-open) when circuit state first exists, in Sprint 3's
   circuit-breaker task.
 
-Read those two ADRs alongside the contracts doc's
+Read those three ADRs alongside the contracts doc's
 [concurrency-ownership table](design/sprint-1-contracts.md#concurrency-ownership-table).
 
 ## Deliberately not here yet
