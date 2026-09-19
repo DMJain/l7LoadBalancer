@@ -162,6 +162,14 @@ which sync primitive) lives in
 - Every selector carries a compile-time assertion
   `var _ Selector = (*X)(nil)`.
 
+The consistent-hash selectors (Sprint 2) share an unexported `ring`
+primitive in `internal/balancer`: a placement-only, immutable mapping from a
+hash key to a backend via 150 virtual nodes per backend, exposed as an
+ordered `iter.Seq[*backend.Backend]` candidate walk that each selector
+filters with its own inline condition. Its hash pipeline, vnode key format,
+and vnode count are recorded in
+[ADR-0008](adr/0008-consistent-hash-ring-pipeline-and-vnode-layout.md).
+
 ## Decision index
 
 All non-trivial decisions are recorded in `docs/adr/`. Accepted:
@@ -175,6 +183,7 @@ All non-trivial decisions are recorded in `docs/adr/`. Accepted:
 | [0005](adr/0005-scope-of-production-grade.md) | Scope of "production-grade" | Accepted |
 | [0006](adr/0006-backend-sethealthy-amends-adr-0002.md) | Add Backend.SetHealthy, amending ADR-0002 decision 5 | Accepted |
 | [0007](adr/0007-proxy-request-lifecycle-and-exactly-once-decrement.md) | Proxy request lifecycle and exactly-once active-connection decrement | Accepted |
+| [0008](adr/0008-consistent-hash-ring-pipeline-and-vnode-layout.md) | Consistent-hash ring hash pipeline, vnode key order, and vnode count | Accepted |
 
 Tracked but not yet written (each decides in the sprint that delivers the
 feature):

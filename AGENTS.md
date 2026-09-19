@@ -314,6 +314,7 @@ All non-trivial decisions must have an ADR. Current ADRs:
 | [0005](docs/adr/0005-scope-of-production-grade.md) | Scope of "production-grade" | Accepted |
 | [0006](docs/adr/0006-backend-sethealthy-amends-adr-0002.md) | Add Backend.SetHealthy, amending ADR-0002 decision 5 | Accepted |
 | [0007](docs/adr/0007-proxy-request-lifecycle-and-exactly-once-decrement.md) | Proxy request lifecycle and exactly-once active-connection decrement | Accepted |
+| [0008](docs/adr/0008-consistent-hash-ring-pipeline-and-vnode-layout.md) | Consistent-hash ring hash pipeline, vnode key order, and vnode count | Accepted |
 | TBD (Sprint 2) | Why bounded-loads consistent hashing over naive CH | — |
 | TBD (Sprint 2) | Why P2C-EWMA over least-connections for latency-skewed workloads | — |
 | TBD (Sprint 3) | Circuit breaker concurrency model | — |
@@ -338,6 +339,7 @@ All non-trivial decisions must have an ADR. Current ADRs:
 13. **"Production-grade" is explicitly scoped** — ADR-0005. Demonstrates production LB patterns with defensible decisions and honest benchmarking; explicitly excludes security hardening/WAF, cert rotation, kernel/OS tuning, SLO alerting, formal security review, multi-tenancy, secrets management beyond env-var interpolation, disaster recovery, capacity planning/SLA, and a settled deployment target.
 14. **`Backend.SetHealthy(bool)` amends ADR-0002 decision 5** — ADR-0006. Added in S1.T3 so S1.T8 can drive health transitions before Sprint 3's health checker exists; Sprint 3 reuses it unchanged. Symmetric with `IncActive`/`DecActive` living directly on `Backend`.
 15. **Proxy per-request state + `sync.Once` release** — ADR-0007. `ServeHTTP` selects, `IncActive`s, and attaches a `reqState` (backend, status, once) to the request context; both the `ModifyResponse` body-wrapper `Close()` and `ErrorHandler` call `reqState.release()`, so `DecActive` runs exactly once. Status is read from `resp.StatusCode` (no `ResponseWriter` wrapper, preserving flush/hijack), and one "request complete" line is logged per request via a deferred call in `ServeHTTP`.
+16. **Consistent-hash ring: FNV-1a-64 → `fmix64`, `index:name` vnode keys, 150 vnodes, `iter.Seq` walk** — ADR-0008. The `fmix64` finalizer prevents a /24 subnet collapsing onto a minority of backends; index-first vnode keys avoid correlated vnode hashes; the ring is immutable and placement-only, and its ordered candidate walk is an `iter.Seq[*backend.Backend]` so each selector's skip logic stays inline.
 
 ---
 
