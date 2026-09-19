@@ -22,12 +22,12 @@ const ewmaAlpha = 0.1
 // metrics (Sprint 3). latencyEWMA is written by the proxy on every round
 // trip (S2.T3) and read by PowerOfTwoChoicesEWMA. All three fields are
 // unexported atomics; callers MUST use
-// IsHealthy/SetHealthy/IncActive/DecActive/ActiveConns/RecordLatency/
-// EWMALatency and never touch the fields directly — this keeps the field
-// type free to change (e.g. atomic.Bool to a state enum in Sprint 3)
+// IsHealthy/MarkHealthy/MarkUnhealthy/IncActive/DecActive/ActiveConns/
+// RecordLatency/EWMALatency and never touch the fields directly — this keeps
+// the field type free to change (e.g. atomic.Bool to a state enum in Sprint 3)
 // without touching balancer or proxy code.
-// See docs/design/sprint-1-contracts.md "Concurrency ownership table" and
-// ADR-0010.
+// See docs/design/sprint-1-contracts.md "Concurrency ownership table",
+// ADR-0010, and ADR-0011.
 type Backend struct {
 	Name string
 	URL  *url.URL
@@ -43,13 +43,25 @@ func (b *Backend) IsHealthy() bool {
 	return b.healthy.Load()
 }
 
-// SetHealthy sets whether the backend is currently eligible for selection.
-// Owned by the health-check subsystem by convention (ADR-0006): Sprint 3's
-// per-backend health-check goroutines call it directly on the *Backend they
-// hold. Sprint 1 has no production caller; S1.T8's cross-selector tests use
-// it to drive health transitions. Implemented in S1.T3.
-func (b *Backend) SetHealthy(healthy bool) {
-	b.healthy.Store(healthy)
+// MarkHealthy makes the backend eligible for selection again. By convention
+// (ADR-0011 decision 2) only the active health-check subsystem calls this: a
+// backend ejected by passive outlier detection recovers via the next
+// successful active probe, never on a passive timer. Go cannot enforce caller
+// identity — the same limitation ADR-0006 accepted for the single SetHealthy
+// this method splits from. Symmetric with MarkUnhealthy/IncActive/DecActive
+// living directly on Backend.
+func (b *Backend) MarkHealthy() {
+	b.healthy.Store(true)
+}
+
+// MarkUnhealthy makes the backend ineligible for selection. Both active
+// health checks and passive outlier detection call this (ADR-0011 decisions
+// 2 and 3). Owned by the health-check subsystem by convention: its
+// per-backend goroutines call it directly on the *Backend they hold. Sprint 1
+// has no production caller; S1.T8's cross-selector tests use it to drive
+// health transitions.
+func (b *Backend) MarkUnhealthy() {
+	b.healthy.Store(false)
 }
 
 // IncActive increments the active connection count. Called by the proxy

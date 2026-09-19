@@ -67,7 +67,7 @@ func TestLeastConnectionsPicksMinimum(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			reg := newTestRegistry(t)
 			for _, name := range tt.unhealthy {
-				setHealthy(t, reg, name, false)
+				markUnhealthy(t, reg, name)
 			}
 			for name, n := range tt.active {
 				seedActive(t, reg, name, n)
@@ -130,7 +130,7 @@ func TestLeastConnectionsNoHealthyBackends(t *testing.T) {
 				t.Helper()
 				reg := newTestRegistry(t)
 				for _, b := range reg.All() {
-					b.SetHealthy(false)
+					b.MarkUnhealthy()
 				}
 				return reg
 			},

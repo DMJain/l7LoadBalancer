@@ -14,11 +14,14 @@ func TestBackendHealthyState(t *testing.T) {
 
 	assert.False(t, b.IsHealthy(), "zero value is not healthy; only NewRegistry/health checks set it")
 
-	b.SetHealthy(true)
+	b.MarkHealthy()
 	assert.True(t, b.IsHealthy())
 
-	b.SetHealthy(false)
+	b.MarkUnhealthy()
 	assert.False(t, b.IsHealthy())
+
+	b.MarkHealthy()
+	assert.True(t, b.IsHealthy(), "MarkHealthy must be able to recover a backend marked unhealthy")
 }
 
 func TestBackendActiveConns(t *testing.T) {
@@ -104,14 +107,18 @@ func TestBackendConcurrentRecordLatency(t *testing.T) {
 func TestBackendConcurrentHealthToggling(t *testing.T) {
 	const goroutines = 100
 	b := &Backend{Name: "backend-a"}
-	b.SetHealthy(true)
+	b.MarkHealthy()
 
 	var wg sync.WaitGroup
 	for i := 0; i < goroutines; i++ {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			b.SetHealthy(i%2 == 0)
+			if i%2 == 0 {
+				b.MarkHealthy()
+			} else {
+				b.MarkUnhealthy()
+			}
 			_ = b.IsHealthy()
 		}(i)
 	}

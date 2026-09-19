@@ -36,7 +36,7 @@ func NewRegistry(cfgs []config.BackendConfig) (*Registry, error) {
 			return nil, fmt.Errorf("backend: parse url %q for %q: %w", cfg.URL, cfg.Name, err)
 		}
 		b := &Backend{Name: cfg.Name, URL: u}
-		b.SetHealthy(true)
+		b.MarkHealthy()
 		backends = append(backends, b)
 	}
 	return &Registry{backends: backends}, nil

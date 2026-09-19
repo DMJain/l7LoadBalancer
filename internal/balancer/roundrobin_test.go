@@ -29,15 +29,28 @@ func newTestRegistry(t *testing.T) *backend.Registry {
 	return reg
 }
 
-func setHealthy(t *testing.T, reg *backend.Registry, name string, healthy bool) {
+// markHealthy and markUnhealthy flip a named backend's state by intent, so a
+// health-transition test reads the same way a production caller does after the
+// SetHealthy split (ADR-0011 decision 2) rather than hiding it behind a bool.
+func markHealthy(t *testing.T, reg *backend.Registry, name string) {
+	t.Helper()
+	backendNamed(t, reg, name).MarkHealthy()
+}
+
+func markUnhealthy(t *testing.T, reg *backend.Registry, name string) {
+	t.Helper()
+	backendNamed(t, reg, name).MarkUnhealthy()
+}
+
+func backendNamed(t *testing.T, reg *backend.Registry, name string) *backend.Backend {
 	t.Helper()
 	for _, b := range reg.All() {
 		if b.Name == name {
-			b.SetHealthy(healthy)
-			return
+			return b
 		}
 	}
 	require.Failf(t, "backend not found", "no backend named %q in registry", name)
+	return nil
 }
 
 // selectName selects through s using httptest's fixed default client address
@@ -78,7 +91,7 @@ func TestRoundRobinCyclicOrder(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			reg := newTestRegistry(t)
 			for _, name := range tt.unhealthy {
-				setHealthy(t, reg, name, false)
+				markUnhealthy(t, reg, name)
 			}
 
 			s := NewRoundRobin(reg)
@@ -94,7 +107,7 @@ func TestRoundRobinCyclicOrder(t *testing.T) {
 func TestRoundRobinNoHealthyBackends(t *testing.T) {
 	reg := newTestRegistry(t)
 	for _, b := range reg.All() {
-		b.SetHealthy(false)
+		b.MarkUnhealthy()
 	}
 
 	s := NewRoundRobin(reg)

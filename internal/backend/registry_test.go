@@ -111,7 +111,7 @@ func TestRegistryAllIncludesUnhealthy(t *testing.T) {
 			reg, err := NewRegistry(testConfigs())
 			require.NoError(t, err)
 			for _, name := range tt.unhealthy {
-				backendByName(t, reg, name).SetHealthy(false)
+				backendByName(t, reg, name).MarkUnhealthy()
 			}
 
 			assert.Equal(t, []string{"backend-a", "backend-b", "backend-c"}, names(reg.All()))
@@ -146,7 +146,7 @@ func TestRegistryHealthyFilters(t *testing.T) {
 			reg, err := NewRegistry(testConfigs())
 			require.NoError(t, err)
 			for _, name := range tt.unhealthy {
-				backendByName(t, reg, name).SetHealthy(false)
+				backendByName(t, reg, name).MarkUnhealthy()
 			}
 
 			assert.Equal(t, tt.wantNames, names(reg.Healthy()))
@@ -183,8 +183,8 @@ func TestRegistryConcurrentMutation(t *testing.T) {
 				defer wg.Done()
 				b.IncActive()
 				_ = b.IsHealthy()
-				b.SetHealthy(false)
-				b.SetHealthy(true)
+				b.MarkUnhealthy()
+				b.MarkHealthy()
 				b.DecActive()
 			}(b)
 		}

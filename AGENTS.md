@@ -166,7 +166,7 @@ internal/circuit  — depends on backend (Sprint 3)
 - **`Backend` struct**:
   - Exported: `Name string`, `URL *url.URL`.
   - Unexported (ADR-0002 decision 5): `healthy atomic.Bool`, `active atomic.Int64`.
-  - Methods: `IsHealthy() bool`, `IncActive()`, `DecActive()`, `ActiveConns() int64`.
+  - Methods: `IsHealthy() bool`, `MarkHealthy()`, `MarkUnhealthy()` (ADR-0011 decision 2), `IncActive()`, `DecActive()`, `ActiveConns() int64`.
   - **Why unexported fields?** Callers in `balancer` and `proxy` access state through methods. Sprint 3 can replace `atomic.Bool` with a richer health-state enum without touching any caller. Compile-time enforcement: you literally can't access the field from outside the package.
 
 - **`Registry` struct**:
@@ -310,7 +310,7 @@ All non-trivial decisions must have an ADR. Current ADRs:
 | [0008](docs/adr/0008-consistent-hash-ring-pipeline-and-vnode-layout.md) | Consistent-hash ring hash pipeline, vnode key order, and vnode count | Accepted |
 | [0009](docs/adr/0009-consistent-hash-bounded-loads-capacity-and-evidence.md) | Consistent-hash bounded loads: epsilon, load metric, capacity formula, and hot-key evidence | Accepted |
 | [0010](docs/adr/0010-p2c-ewma-backend-latency-state-cold-start-and-failure-penalty.md) | P2C-EWMA: Backend-owned latency state, cold-start semantics, and the failure penalty | Accepted |
-| TBD (Sprint 3) | Circuit breaker concurrency model | — |
+| [0011](docs/adr/0011-health-passive-outlier-and-circuit-breaker-composition.md) | Health, passive-outlier, and circuit-breaker composition | Accepted |
 | TBD (Sprint 4) | Reload architecture: atomic pointer swap vs SO_REUSEPORT | — |
 | TBD (Sprint 4) | Deployment target decision (deferred from Sprint 1 per ADR-0005) | — |
 | TBD (Sprint 4) | Retry policy (or deliberate absence) | — |
@@ -330,7 +330,7 @@ All non-trivial decisions must have an ADR. Current ADRs:
 11. **ActiveConns decremented in body `Close()`, not `ModifyResponse`** — prevents counting streamed-but-incomplete responses as "done".
 12. **Not-yet-imported deps pinned via a build-tagged `tools.go`** — ADR-0003. `go mod tidy` prunes unused modules, so S1.T1's two new deps are blank-imported under `//go:build tools` until S1.T2 imports them for real.
 13. **"Production-grade" is explicitly scoped** — ADR-0005. Demonstrates production LB patterns with defensible decisions and honest benchmarking; explicitly excludes security hardening/WAF, cert rotation, kernel/OS tuning, SLO alerting, formal security review, multi-tenancy, secrets management beyond env-var interpolation, disaster recovery, capacity planning/SLA, and a settled deployment target.
-14. **`Backend.SetHealthy(bool)` amends ADR-0002 decision 5** — ADR-0006. Added in S1.T3 so S1.T8 can drive health transitions before Sprint 3's health checker exists; Sprint 3 reuses it unchanged. Symmetric with `IncActive`/`DecActive` living directly on `Backend`.
+14. **`Backend.healthy` is reached only through intent-named methods** — ADR-0006 (amending ADR-0002 decision 5) added `SetHealthy(bool)` in S1.T3 so S1.T8 could drive health transitions before Sprint 3's health checker existed; ADR-0011 decision 2 splits it into `MarkHealthy()`/`MarkUnhealthy()` over the same `atomic.Bool`, making the recovery asymmetry (only active checks may prove a backend healthy again; active or passive detection may mark it unhealthy) legible at the call site. Symmetric with `IncActive`/`DecActive` living directly on `Backend`.
 15. **Proxy per-request state + `sync.Once` release** — ADR-0007. `ServeHTTP` selects, `IncActive`s, and attaches a `reqState` (backend, status, once) to the request context; both the `ModifyResponse` body-wrapper `Close()` and `ErrorHandler` call `reqState.release()`, so `DecActive` runs exactly once. Status is read from `resp.StatusCode` (no `ResponseWriter` wrapper, preserving flush/hijack), and one "request complete" line is logged per request via a deferred call in `ServeHTTP`.
 16. **Consistent-hash ring: FNV-1a-64 → `fmix64`, `index:name` vnode keys, 150 vnodes, `iter.Seq` walk** — ADR-0008. The `fmix64` finalizer prevents a /24 subnet collapsing onto a minority of backends (raw FNV maps 256 same-subnet addresses onto 3 of 4 backends); index-first vnode keys avoid correlated vnode hashes in the pre-finalizer pipeline, and are retained post-finalizer as the design-record choice and defense in depth, not because the ordering is load-bearing then. The ring is immutable and placement-only, and its ordered candidate walk is an `iter.Seq[*backend.Backend]` so each selector's skip logic stays inline.
 17. **Bounded loads: ε = 0.25, load = `ActiveConns()` averaged over healthy, capacity = `max(1, ceil(avg × 1.25))`, `<=` admission** — ADR-0009. `consistent_hash` walks the ADR-0008 ring, admitting the first candidate that is healthy and within capacity; the exhaustion fallback (least-loaded candidate seen) is unreachable given the floor and is defensive only. `ErrNoHealthyBackends` remains the sole error condition. The checked-in fixed-seed hot-key test (naive 4,005 vs bounded 3,126 of 10,000) and the `offline`-tagged 60-seed reproducer give same-repo evidence, with the fallback never firing across all seeds.

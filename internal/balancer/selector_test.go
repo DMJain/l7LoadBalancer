@@ -111,7 +111,7 @@ func TestSelectorsRespectHealthTransitions(t *testing.T) {
 			})
 
 			t.Run("unhealthy mid-run stops choosing target", func(t *testing.T) {
-				setHealthy(t, reg, target, false)
+				markUnhealthy(t, reg, target)
 				chosen := selectNames(t, sel, 6)
 				assert.NotEqual(t, target, chosen[0],
 					"target must not be chosen on the very next Select after going unhealthy")
@@ -120,7 +120,7 @@ func TestSelectorsRespectHealthTransitions(t *testing.T) {
 			})
 
 			t.Run("recovered resumes choosing target", func(t *testing.T) {
-				setHealthy(t, reg, target, true)
+				markHealthy(t, reg, target)
 				chosen := selectNames(t, sel, 6)
 				assert.Contains(t, chosen, target,
 					"target must be chosen again after recovery")

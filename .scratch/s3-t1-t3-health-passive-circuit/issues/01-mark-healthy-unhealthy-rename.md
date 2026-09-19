@@ -12,16 +12,16 @@ other's substance, only this rename.
 
 **Status:** ready-for-agent
 
-- [ ] `Backend.SetHealthy(bool)` removed; `Backend.MarkHealthy()` and
+- [x] `Backend.SetHealthy(bool)` removed; `Backend.MarkHealthy()` and
       `Backend.MarkUnhealthy()` added in its place, same underlying
       `atomic.Bool` field
-- [ ] Every existing caller updated to the new names (S1.T8's cross-selector
+- [x] Every existing caller updated to the new names (S1.T8's cross-selector
       health-transition tests currently call `SetHealthy` directly)
-- [ ] No behavior change: a backend's health-transition semantics are
+- [x] No behavior change: a backend's health-transition semantics are
       identical to today, only the method names and call-site conventions
       differ — decision already recorded in ADR-0011 (amends ADR-0006, which
       itself amends ADR-0002 decision 5); no new ADR needed for this ticket
-- [ ] `make test` and `make test-race` pass unchanged
-- [ ] `PROGRESS.md`: this ticket added and flipped to `[DONE]` on completion
+- [x] `make test` and `make test-race` pass unchanged
+- [x] `PROGRESS.md`: this ticket added and flipped to `[DONE]` on completion
 
 ## Comments

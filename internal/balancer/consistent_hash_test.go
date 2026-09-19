@@ -145,7 +145,7 @@ func TestConsistentHashBoundedLoadsRespectsHealthTransitions(t *testing.T) {
 	})
 
 	t.Run("unhealthy mid-run stops choosing target", func(t *testing.T) {
-		setHealthy(t, reg, target, false)
+		markUnhealthy(t, reg, target)
 		for i := 0; i < 5; i++ {
 			next, err := selectForAddr(t, sel, client)
 			require.NoError(t, err)
@@ -155,7 +155,7 @@ func TestConsistentHashBoundedLoadsRespectsHealthTransitions(t *testing.T) {
 	})
 
 	t.Run("recovered resumes choosing target", func(t *testing.T) {
-		setHealthy(t, reg, target, true)
+		markHealthy(t, reg, target)
 		assert.Equal(t, target, selectNameForAddr(t, sel, client),
 			"target not chosen again after recovery")
 	})
@@ -185,7 +185,7 @@ func TestConsistentHashBoundedLoadsNoHealthyBackends(t *testing.T) {
 				t.Helper()
 				reg := newTestRegistry(t)
 				for _, b := range reg.All() {
-					b.SetHealthy(false)
+					b.MarkUnhealthy()
 				}
 				return reg
 			},

@@ -138,7 +138,7 @@ func TestProxyNoHealthyBackendReturns503(t *testing.T) {
 			name: "all backends unhealthy",
 			reg: func(t *testing.T) *backend.Registry {
 				reg := registryFrom(t, backendEntry{"backend-a", "http://127.0.0.1:1"})
-				reg.All()[0].SetHealthy(false)
+				reg.All()[0].MarkUnhealthy()
 				return reg
 			},
 		},
@@ -246,7 +246,7 @@ func TestProxyRecordsRoundTripLatencyOnSuccess(t *testing.T) {
 		backendEntry{"backend-a", serving.URL},
 		backendEntry{"backend-b", "http://127.0.0.1:1"},
 	)
-	reg.All()[1].SetHealthy(false)
+	reg.All()[1].MarkUnhealthy()
 
 	p := New(reg, balancer.NewRoundRobin(reg))
 
@@ -349,7 +349,7 @@ func TestProxyLogsRequestCompleteOn503(t *testing.T) {
 	useLogger(t, logger)
 
 	reg := registryFrom(t, backendEntry{"backend-a", "http://127.0.0.1:1"})
-	reg.All()[0].SetHealthy(false)
+	reg.All()[0].MarkUnhealthy()
 	p := New(reg, balancer.NewRoundRobin(reg))
 
 	rec := httptest.NewRecorder()

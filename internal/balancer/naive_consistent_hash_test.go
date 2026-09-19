@@ -83,7 +83,7 @@ func TestNaiveConsistentHashRespectsHealthTransitions(t *testing.T) {
 	})
 
 	t.Run("unhealthy mid-run stops choosing target", func(t *testing.T) {
-		target.SetHealthy(false)
+		target.MarkUnhealthy()
 		for i := 0; i < 5; i++ {
 			next, err := selectForAddr(t, sel, client)
 			require.NoError(t, err)
@@ -94,7 +94,7 @@ func TestNaiveConsistentHashRespectsHealthTransitions(t *testing.T) {
 	})
 
 	t.Run("recovered resumes choosing target", func(t *testing.T) {
-		target.SetHealthy(true)
+		target.MarkHealthy()
 		assert.Equal(t, target.Name, selectNameForAddr(t, sel, client),
 			"target not chosen again after recovery")
 	})
@@ -124,7 +124,7 @@ func TestNaiveConsistentHashNoHealthyBackends(t *testing.T) {
 				t.Helper()
 				reg := newTestRegistry(t)
 				for _, b := range reg.All() {
-					b.SetHealthy(false)
+					b.MarkUnhealthy()
 				}
 				return reg
 			},

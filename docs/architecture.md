@@ -211,13 +211,13 @@ All non-trivial decisions are recorded in `docs/adr/`. Accepted:
 | [0008](adr/0008-consistent-hash-ring-pipeline-and-vnode-layout.md) | Consistent-hash ring hash pipeline, vnode key order, and vnode count | Accepted |
 | [0009](adr/0009-consistent-hash-bounded-loads-capacity-and-evidence.md) | Consistent-hash bounded loads: epsilon, load metric, capacity formula, and hot-key evidence | Accepted |
 | [0010](adr/0010-p2c-ewma-backend-latency-state-cold-start-and-failure-penalty.md) | P2C-EWMA: Backend-owned latency state, cold-start semantics, and the failure penalty | Accepted |
+| [0011](adr/0011-health-passive-outlier-and-circuit-breaker-composition.md) | Health, passive-outlier, and circuit-breaker composition | Accepted |
 
 Tracked but not yet written (each decides in the sprint that delivers the
 feature):
 
 | Sprint | Decision |
 |--------|----------|
-| 3 | Circuit breaker concurrency model |
 | 4 | Reload architecture: atomic pointer swap vs SO_REUSEPORT |
 | 4 | Deployment target decision (deferred from Sprint 1 per ADR-0005) |
 | 4 | Retry policy (or deliberate absence) |
@@ -326,17 +326,24 @@ by design. No ADR: process, not design.
 ## Later amendments to Sprint 1 contracts
 
 `docs/design/sprint-1-contracts.md` is **frozen** and is intentionally not
-edited. Two ADRs accepted after the freeze amend rows of its
+edited. Three ADRs accepted after the freeze amend rows of its
 concurrency-ownership table:
 
-- [ADR-0006](adr/0006-backend-sethealthy-amends-adr-0002.md) amends the
-  `Backend.healthy` row: `Backend` now exposes `SetHealthy(bool)` in
-  addition to `IsHealthy()`. `SetHealthy` is the permanent contract the
-  Sprint 3 health checker will call.
+- [ADR-0006](adr/0006-backend-sethealthy-amends-adr-0002.md) amended the
+  `Backend.healthy` row by adding `SetHealthy(bool)` alongside `IsHealthy()`,
+  the permanent contract the Sprint 3 health checker would call. The Sprint 3
+  health checker is the caller.
 - [ADR-0007](adr/0007-proxy-request-lifecycle-and-exactly-once-decrement.md)
   amends the `Backend.active` row / proxy lifecycle: `DecActive` is driven
   through a `sync.Once`-guarded `reqState.release()` so it runs exactly once
   across the body-wrapper and `ErrorHandler` paths.
+- [ADR-0011](adr/0011-health-passive-outlier-and-circuit-breaker-composition.md)
+  amends two rows. Decision 2 splits `SetHealthy(bool)` into
+  `MarkHealthy()`/`MarkUnhealthy()` over the same `atomic.Bool`, making the
+  active-only-recovery asymmetry legible at the call site. Decision 1 renames
+  `Registry.Healthy()` to `Registry.Selectable()` (eligible = healthy AND
+  circuit-not-open) when circuit state first exists, in Sprint 3's
+  circuit-breaker task.
 
 Read those two ADRs alongside the contracts doc's
 [concurrency-ownership table](design/sprint-1-contracts.md#concurrency-ownership-table).

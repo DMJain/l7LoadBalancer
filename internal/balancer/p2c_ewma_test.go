@@ -47,7 +47,7 @@ func TestPowerOfTwoChoicesEWMANoHealthyBackends(t *testing.T) {
 				t.Helper()
 				reg := newTestRegistry(t)
 				for _, b := range reg.All() {
-					b.SetHealthy(false)
+					b.MarkUnhealthy()
 				}
 				return reg
 			},
@@ -67,8 +67,8 @@ func TestPowerOfTwoChoicesEWMANoHealthyBackends(t *testing.T) {
 
 func TestPowerOfTwoChoicesEWMASoleHealthyBackendReturned(t *testing.T) {
 	reg := newTestRegistry(t)
-	setHealthy(t, reg, "backend-b", false)
-	setHealthy(t, reg, "backend-c", false)
+	markUnhealthy(t, reg, "backend-b")
+	markUnhealthy(t, reg, "backend-c")
 
 	s := NewPowerOfTwoChoicesEWMA(reg)
 	for i := 0; i < 100; i++ {
@@ -151,13 +151,13 @@ func TestPowerOfTwoChoicesEWMARespectsHealthTransitions(t *testing.T) {
 	})
 
 	t.Run("unhealthy mid-run stops choosing target", func(t *testing.T) {
-		setHealthy(t, reg, target, false)
+		markUnhealthy(t, reg, target)
 		chosen := selectNames(t, s, 100)
 		assert.NotContains(t, chosen, target, "target must not be chosen while unhealthy")
 	})
 
 	t.Run("recovered resumes choosing target", func(t *testing.T) {
-		setHealthy(t, reg, target, true)
+		markHealthy(t, reg, target)
 		chosen := selectNames(t, s, 100)
 		assert.Contains(t, chosen, target, "target must be chosen again after recovery")
 	})
