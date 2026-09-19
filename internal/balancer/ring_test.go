@@ -44,14 +44,19 @@ func ringFirst(t *testing.T, r *ring, key string) *backend.Backend {
 	return nil
 }
 
-func randomClientIP(rng *rand.Rand) string {
+// randomIP returns an octet-diverse synthetic client IP: all four octets are
+// drawn independently from the passed-in source, so successive keys never
+// differ only in a trailing byte (which would re-trigger the FNV collapse the
+// fmix64 finalizer exists to fix). Takes an explicit *rand.Rand so callers
+// control the seed. Named to match the Sprint 2 hot-key fixture's helper.
+func randomIP(rng *rand.Rand) string {
 	return fmt.Sprintf("%d.%d.%d.%d", rng.Intn(254)+1, rng.Intn(254)+1, rng.Intn(254)+1, rng.Intn(254)+1)
 }
 
 func sampleKeys(rng *rand.Rand, n int) []string {
 	keys := make([]string, n)
 	for i := range keys {
-		keys[i] = randomClientIP(rng)
+		keys[i] = randomIP(rng)
 	}
 	return keys
 }

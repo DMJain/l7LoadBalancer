@@ -6,12 +6,12 @@
 
 **Status:** ready-for-agent
 
-- [ ] Unexported `naiveConsistentHash` type implements `balancer.Selector`, with a compile-time `var _ Selector = (*naiveConsistentHash)(nil)` assertion
-- [ ] Hash key: the request's `RemoteAddr`, with the port stripped
-- [ ] Walks the ring's candidate iterator, skipping any backend for which `IsHealthy()` is false, selecting the first healthy candidate found
-- [ ] Returns `ErrNoHealthyBackends` if the walk exhausts every backend without finding a healthy one
-- [ ] Never appears in `balancer.NewFromConfig`'s switch or in `config.implementedAlgorithms` — not reachable via any config value
-- [ ] Doc comment on the type states why it's deliberately unwired, references ticket 01's ADR, and explains why it isn't named `ConsistentHash` — that name is reserved, in a reader's expectation, for whatever `consistent_hash` in config actually maps to (ticket 03's `ConsistentHashBoundedLoads`)
-- [ ] Test: the same client IP repeatedly selects the same backend
-- [ ] Test: a backend going unhealthy mid-run is skipped, and resumes being chosen once healthy again
-- [ ] Test: empty healthy set → `ErrNoHealthyBackends`
+- [x] Unexported `naiveConsistentHash` type implements `balancer.Selector`, with a compile-time `var _ Selector = (*naiveConsistentHash)(nil)` assertion
+- [x] Hash key: the request's `RemoteAddr`, with the port stripped
+- [x] Walks the ring's candidate iterator, skipping any backend for which `IsHealthy()` is false, selecting the first healthy candidate found
+- [x] Returns `ErrNoHealthyBackends` if the walk exhausts every backend without finding a healthy one
+- [x] Never appears in `balancer.NewFromConfig`'s switch or in `config.implementedAlgorithms` — not reachable via any config value
+- [x] Doc comment on the type states why it's deliberately unwired, references ticket 01's ADR, and explains why it isn't named `ConsistentHash` — that name is reserved, in a reader's expectation, for whatever `consistent_hash` in config actually maps to (ticket 03's `ConsistentHashBoundedLoads`)
+- [x] Test: the same client IP repeatedly selects the same backend
+- [x] Test: a backend going unhealthy mid-run is skipped, and resumes being chosen once healthy again
+- [x] Test: empty healthy set → `ErrNoHealthyBackends`

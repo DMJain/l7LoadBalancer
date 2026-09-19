@@ -163,9 +163,17 @@ Scoped in `.scratch/s2-t1-t2-consistent-hash-bounded-loads/` as one spec plus th
     - ADR-0008 records the hash pipeline, vnode key order, and vnode count, each citing measured evidence.
   - Test approach: direct ring-level tests (no selector, no HTTP), `testify/require` for setup and `assert` for values, deterministic fixtures so assertions cannot flake.
 
-- [IN_PROGRESS] S2.T1.2 — `naiveConsistentHash` selector (issue 02) (opencode, started 2026-09-19T06:58:41Z, unexported health-aware/load-blind Selector over the ring)
+- [DONE] S2.T1.2 — `naiveConsistentHash` selector (issue 02) (opencode, started 2026-09-19T06:58:41Z, completed 2026-09-19T07:45:36Z, unexported health-aware/load-blind Selector + shared requestHashKey + binary DCE guard)
   - Goal: unexported, health-aware but load-blind `Selector` over the ring, walk skipping unhealthy candidates; deliberately never reachable via `NewFromConfig`/`implementedAlgorithms`; exists as the empirical comparator for bounded-loads.
+  - Files: `internal/balancer/naive_consistent_hash.go`, `internal/balancer/naive_consistent_hash_test.go`, `internal/balancer/hashkey.go`, `internal/balancer/hashkey_test.go`, `internal/balancer/ring_test.go` (`randomClientIP`→`randomIP` rename, no behavior change), `cmd/l7LoadBalancer/dce_test.go` (new), `PROGRESS.md`, `.scratch/s2-t1-t2-consistent-hash-bounded-loads/issues/02-naive-consistent-hash-selector.md`, `docs/sessions/2026-09-19-opencode.md`
   - Depends on: S2.T1.1
+  - Acceptance:
+    - Unexported `naiveConsistentHash` satisfies `Selector` (compile-time assertion) and holds only the immutable ring; `Select` returns the first healthy candidate from the client-IP ring walk, or `ErrNoHealthyBackends` when the walk is exhausted (including a zero-backend registry).
+    - `requestHashKey(*http.Request)` derives the hash key from `RemoteAddr` with the port stripped — shared with S2.T2 — returning unparseable/empty addresses unchanged, documented as intentionally concentrating upstream bugs on one backend.
+    - The type is in neither `NewFromConfig`'s switch nor `config`'s implemented set; its doc comment states why it is unwired, why it is not named `ConsistentHash`, and points at ADR-0008. No new ADR: ticket 02's decisions are recorded there and in the doc comment, with the bounded-loads evidence reserved for ADR-0009 (S2.T2).
+    - `cmd/l7LoadBalancer/dce_test.go` builds the production binary for a pinned linux/amd64 target and asserts the type name is absent, with a `RoundRobin` positive control so the negative assertion cannot be vacuous — turning "the linker drops it" into a checked invariant.
+    - Tests: stable affinity per client IP (incl. port-stripped), key-matters teeth check (400 octet-diverse IPs, 4 backends, each ≥10%), health transition (skip → resume), empty healthy set → `ErrNoHealthyBackends`, concurrent `-race` selects.
+  - Test approach: direct instantiation against a real `*backend.Registry`, deterministic fixed seeds, table-driven where enumerable, no mocks. `go test -cover ./internal/balancer/...` → 93.9%.
 
 - [ ] S2.T2 — `ConsistentHashBoundedLoads` + config wiring (issue 03)
   - Goal: exported `Selector` wired to the `consistent_hash` identifier, reusing the ring with a `(1 + ε)` per-candidate capacity check (ε = 0.25), least-loaded fallback, and a fixed-seed hot-key comparative test plus a build-tagged offline reproducer; ADR-0009 records the bounded-loads decisions and evidence.
