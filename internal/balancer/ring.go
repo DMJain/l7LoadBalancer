@@ -75,9 +75,11 @@ func (r *ring) candidates(key string) iter.Seq[*backend.Backend] {
 			return
 		}
 		h := hashKey(key)
-		// First position with hash >= h; n means h is past the end and the
-		// modulo below wraps the walk to the start. (An exact-hit index is
-		// also >= h, which is correct: the walk starts there.)
+		// A position with hash >= h: BinarySearchFunc returns the insertion
+		// point, or any matching index on an exact hash collision. n means h
+		// is past the end and the modulo below wraps the walk to the start.
+		// Starting at any equal position is correct — equal positions share
+		// one arc.
 		start, _ := slices.BinarySearchFunc(r.vnodes, h, func(v vnode, target uint64) int {
 			return cmp.Compare(v.position, target)
 		})

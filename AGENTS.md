@@ -549,3 +549,7 @@ Single-context (`CONTEXT.md` + `docs/adr/` at repo root). See `docs/agents/domai
 ### Cross-tool skill availability
 
 Skills are copied into a gitignored, project-level `.agents/skills/` (in addition to the home-level `~/.agents/skills/`) so Antigravity IDE and OpenCode CLI can use them too. If a skill isn't registered by the tool you're using, its slash form won't actually run it. See `docs/agents/skills.md`.
+
+### LSP (OpenCode)
+
+LSP is off by default in OpenCode. A tracked `opencode.jsonc` at the repo root sets `"lsp": true`, giving OpenCode agents real gopls diagnostics for `.go` files instead of grep-only navigation. See `docs/agents/lsp.md`.
