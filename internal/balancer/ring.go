@@ -1,10 +1,10 @@
 package balancer
 
 import (
+	"cmp"
 	"hash/fnv"
 	"iter"
 	"slices"
-	"sort"
 	"strconv"
 
 	"github.com/DMJain/l7LoadBalancer/internal/backend"
@@ -20,8 +20,8 @@ const virtualNodesPerBackend = 150
 // vnode is one position on the ring: a hash position and the backend that
 // owns it. Each backend owns virtualNodesPerBackend of them.
 type vnode struct {
-	hash    uint64
-	backend *backend.Backend
+	position uint64
+	backend  *backend.Backend
 }
 
 // ring is the unexported consistent-hash ring: a deterministic mapping from
@@ -51,18 +51,11 @@ func newRing(all []*backend.Backend) *ring {
 			// every vnode of a backend a near-constant prefix, correlating
 			// their hashes. Measured in ADR-0008.
 			key := strconv.Itoa(i) + ":" + b.Name
-			r.vnodes = append(r.vnodes, vnode{hash: hashKey(key), backend: b})
+			r.vnodes = append(r.vnodes, vnode{position: hashKey(key), backend: b})
 		}
 	}
 	slices.SortStableFunc(r.vnodes, func(a, b vnode) int {
-		switch {
-		case a.hash < b.hash:
-			return -1
-		case a.hash > b.hash:
-			return 1
-		default:
-			return 0
-		}
+		return cmp.Compare(a.position, b.position)
 	})
 	return r
 }
@@ -83,8 +76,11 @@ func (r *ring) candidates(key string) iter.Seq[*backend.Backend] {
 		}
 		h := hashKey(key)
 		// First position with hash >= h; n means h is past the end and the
-		// modulo below wraps the walk to the start.
-		start := sort.Search(n, func(i int) bool { return r.vnodes[i].hash >= h })
+		// modulo below wraps the walk to the start. (An exact-hit index is
+		// also >= h, which is correct: the walk starts there.)
+		start, _ := slices.BinarySearchFunc(r.vnodes, h, func(v vnode, target uint64) int {
+			return cmp.Compare(v.position, target)
+		})
 		seen := make(map[*backend.Backend]struct{}, n/virtualNodesPerBackend)
 		for i := 0; i < n; i++ {
 			b := r.vnodes[(start+i)%n].backend

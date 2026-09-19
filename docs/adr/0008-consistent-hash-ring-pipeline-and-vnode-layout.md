@@ -89,7 +89,7 @@ Measured with 256 keys `203.0.113.0` … `203.0.113.255`:
 
 | Pipeline | Backends hit (of 4) | Per-backend count |
 |---|---|---|
-| raw FNV-1a-64 | **3 of 4** | 90 / 100 / 0 / 66 |
+| raw FNV-1a-64 | **3 of 4** | 90 / 0 / 100 / 66 |
 | FNV-1a-64 + `fmix64` | **4 of 4** | 82 / 59 / 54 / 61 |
 
 The design session reported the same finding ("1–3 of 4 backends"); the
@@ -171,11 +171,7 @@ smoothness/cost trade-off, not a correctness boundary.
 - **A single ring position per backend (no virtual nodes):** rejected —
   one position gives each backend an arc length drawn from a single hash,
   whose variance is far too high for a 3–5 backend cluster.
-- **An `iter`-style callback helper (`walkFrom(key, func(b) bool)`) or a
-  predicate-based `selectWith(key, keep)`:** rejected — a closure hides
-  each selector's skip logic at the call site, and a predicate adds an
-  allocation per request. The `iter.Seq` iterator keeps each selector's
-  condition inline while sharing the ring traversal.
+- **A predicate-based `selectWith(key, keep func(*backend.Backend) bool)`:** rejected — it hides each selector's eligibility rule (health-only, or health-plus-capacity) behind a closure at the call site instead of stating it inline in that selector's own `Select` method, and two overlapping rules read worse as predicates than as a short `if`. The `iter.Seq` iterator keeps each selector's condition inline while sharing one traversal implementation.
 - **A configurable vnode count / epsilon / key source as YAML fields:**
   deferred — no operator has asked to tune them; adding config surface is
   a one-line change later if one does.

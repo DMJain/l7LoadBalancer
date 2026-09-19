@@ -3,6 +3,7 @@ package balancer
 import (
 	"fmt"
 	"math/rand"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -59,17 +60,41 @@ func sampleKeys(rng *rand.Rand, n int) []string {
 // across repeated calls, and that two rings built from the same backend set
 // agree — placement depends on nothing but the key and the backend names.
 func TestRingStableMapping(t *testing.T) {
-	names := []string{"backend-a", "backend-b", "backend-c", "backend-d"}
-	r := newRing(ringRegistry(t, names...).All())
-	again := newRing(ringRegistry(t, names...).All())
+	tests := []struct {
+		name  string
+		names []string
+		keys  []string
+	}{
+		{
+			name:  "four backends",
+			names: []string{"backend-a", "backend-b", "backend-c", "backend-d"},
+			keys:  []string{"203.0.113.7", "198.51.100.23", "10.0.0.1", "172.16.254.9", "8.8.8.8"},
+		},
+		{
+			name:  "single backend",
+			names: []string{"only-backend"},
+			keys:  []string{"203.0.113.7", "10.0.0.1", "8.8.8.8"},
+		},
+		{
+			name:  "five backends",
+			names: []string{"backend-a", "backend-b", "backend-c", "backend-d", "backend-e"},
+			keys:  []string{"203.0.113.7", "198.51.100.23", "10.0.0.1", "172.16.254.9", "8.8.8.8"},
+		},
+	}
 
-	rng := rand.New(rand.NewSource(1))
-	for i, key := range sampleKeys(rng, 500) {
-		first := ringFirst(t, r, key)
-		assert.Same(t, first, ringFirst(t, r, key),
-			"key %q (%d) remapped on a repeated call", key, i)
-		assert.Equal(t, first.Name, ringFirst(t, again, key).Name,
-			"key %q (%d) differs between two identically-built rings", key, i)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := newRing(ringRegistry(t, tt.names...).All())
+			again := newRing(ringRegistry(t, tt.names...).All())
+
+			for _, key := range tt.keys {
+				first := ringFirst(t, r, key)
+				assert.Same(t, first, ringFirst(t, r, key),
+					"key %q remapped on a repeated call", key)
+				assert.Equal(t, first.Name, ringFirst(t, again, key).Name,
+					"key %q differs between two identically-built rings", key)
+			}
+		})
 	}
 }
 
@@ -87,24 +112,24 @@ func TestRingMinimalDisruption(t *testing.T) {
 	before := newRing(ringRegistry(t, base...).All())
 
 	tests := []struct {
-		name     string
-		names    []string
-		lo, hi   float64
-		whatIsIt string
+		name             string
+		names            []string
+		lo, hi           float64
+		expectedFraction string
 	}{
 		{
-			name:     "adding a fifth backend remaps about 1/5",
-			names:    append(append([]string{}, base...), "backend-e"),
-			lo:       0.15,
-			hi:       0.25,
-			whatIsIt: "1/(n+1)",
+			name:             "adding a fifth backend remaps about 1/5",
+			names:            append(append([]string{}, base...), "backend-e"),
+			lo:               0.15,
+			hi:               0.25,
+			expectedFraction: "1/(n+1)",
 		},
 		{
-			name:     "removing the fourth backend remaps about 1/4",
-			names:    base[:3],
-			lo:       0.22,
-			hi:       0.32,
-			whatIsIt: "1/n",
+			name:             "removing the fourth backend remaps about 1/4",
+			names:            base[:3],
+			lo:               0.22,
+			hi:               0.32,
+			expectedFraction: "1/n",
 		},
 	}
 
@@ -120,9 +145,9 @@ func TestRingMinimalDisruption(t *testing.T) {
 			}
 			fraction := float64(changed) / numKeys
 			assert.GreaterOrEqual(t, fraction, tt.lo,
-				"only %.1f%% of keys remapped; expected roughly %s", fraction*100, tt.whatIsIt)
+				"only %.1f%% of keys remapped; expected roughly %s", fraction*100, tt.expectedFraction)
 			assert.LessOrEqual(t, fraction, tt.hi,
-				"%.1f%% of keys remapped; expected roughly %s", fraction*100, tt.whatIsIt)
+				"%.1f%% of keys remapped; expected roughly %s", fraction*100, tt.expectedFraction)
 		})
 	}
 }
@@ -180,4 +205,30 @@ func TestRingCandidatesEmptyRegistry(t *testing.T) {
 	for b := range r.candidates("203.0.113.7") {
 		require.Failf(t, "empty ring yielded a backend", "got %q", b.Name)
 	}
+}
+
+// TestRingConcurrentCandidates exercises one shared ring from many
+// goroutines. The ring is immutable after construction, so this must be
+// clean under -race: it substantiates the "safe to share" claim rather
+// than only asserting it in a comment.
+func TestRingConcurrentCandidates(t *testing.T) {
+	names := []string{"backend-a", "backend-b", "backend-c", "backend-d"}
+	r := newRing(ringRegistry(t, names...).All())
+
+	const numGoroutines = 100
+	keys := sampleKeys(rand.New(rand.NewSource(42)), numGoroutines)
+
+	var wg sync.WaitGroup
+	for _, key := range keys {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			yielded := 0
+			for range r.candidates(key) {
+				yielded++
+			}
+			assert.Equal(t, len(names), yielded)
+		}()
+	}
+	wg.Wait()
 }
