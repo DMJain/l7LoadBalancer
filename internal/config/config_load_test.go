@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -83,6 +84,50 @@ backends:
 				t.Helper()
 				assert.Empty(t, cfg.Backends)
 			},
+		},
+		{
+			name: "Sprint 3 duration fields decode from YAML strings without defaulting",
+			contents: `listen: ":8080"
+health:
+  probe_interval: "1500ms"
+  probe_timeout: "250ms"
+circuit:
+  cooldown: "10s"
+backends:
+  - name: "a"
+    url: "http://127.0.0.1:9001"
+`,
+			check: func(t *testing.T, cfg *Config) {
+				t.Helper()
+				require.NotNil(t, cfg.Health.ProbeInterval)
+				require.NotNil(t, cfg.Health.ProbeTimeout)
+				require.NotNil(t, cfg.Circuit.Cooldown)
+				assert.Equal(t, 1500*time.Millisecond, *cfg.Health.ProbeInterval)
+				assert.Equal(t, 250*time.Millisecond, *cfg.Health.ProbeTimeout)
+				assert.Equal(t, 10*time.Second, *cfg.Circuit.Cooldown)
+			},
+		},
+		{
+			name:     "omitted Sprint 3 durations are left nil by Load",
+			contents: "listen: \":8080\"\n",
+			check: func(t *testing.T, cfg *Config) {
+				t.Helper()
+				assert.Nil(t, cfg.Health.ProbeInterval)
+				assert.Nil(t, cfg.Health.ProbeTimeout)
+				assert.Nil(t, cfg.Circuit.Cooldown)
+			},
+		},
+		{
+			name:      "unknown field inside health section is rejected",
+			contents:  "listen: \":8080\"\nhealth:\n  probe_intervall: \"1s\"\n",
+			wantErr:   true,
+			errSubstr: "probe_intervall",
+		},
+		{
+			name:      "unknown field inside circuit section is rejected",
+			contents:  "listen: \":8080\"\ncircuit:\n  cooldwn: \"1s\"\n",
+			wantErr:   true,
+			errSubstr: "cooldwn",
 		},
 	}
 

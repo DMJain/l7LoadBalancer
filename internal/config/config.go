@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -41,11 +42,62 @@ var implementedAlgorithms = map[string]struct{}{
 // field values, grep targets, and future admin UIs. No escaping needed.
 var backendNamePattern = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 
+// Sprint 3 duration defaults, applied by Validate when the corresponding YAML
+// field is omitted. Exported so tests, docs, and the packages that consume
+// them (health, circuit) reference one value instead of restating it.
+//
+// ADR-0011 decision 10 is why these three are config while the
+// consecutive-failure/-success thresholds, the passive-outlier window size and
+// failure threshold, and the circuit's failure-to-open threshold stay Go
+// constants: cadence and cooldown plausibly differ per deployment, algorithm-
+// shaped tuning values do not.
+const (
+	// DefaultProbeInterval is how often each backend is probed when
+	// health.probe_interval is omitted.
+	DefaultProbeInterval = 5 * time.Second
+	// DefaultProbeTimeout bounds a single probe when health.probe_timeout is
+	// omitted. Deliberately below DefaultProbeInterval so probes do not
+	// overlap; Validate does not enforce the relationship, since an operator
+	// may still choose a timeout longer than the interval.
+	DefaultProbeTimeout = 2 * time.Second
+	// DefaultCircuitCooldown is how long a tripped circuit stays Open before a
+	// read may promote it to Half-Open, when circuit.cooldown is omitted.
+	DefaultCircuitCooldown = 30 * time.Second
+)
+
 // Config is the top-level load balancer configuration, loaded from YAML.
 type Config struct {
 	Listen    string          `yaml:"listen"`
 	Algorithm string          `yaml:"algorithm"`
+	Health    HealthConfig    `yaml:"health"`
+	Circuit   CircuitConfig   `yaml:"circuit"`
 	Backends  []BackendConfig `yaml:"backends"`
+}
+
+// HealthConfig holds the active-health-check tunables shared by every backend.
+// Global rather than per-backend per ADR-0011 decision 10: today's backends are
+// homogeneous, and per-backend overrides can be added later without changing
+// this shape.
+//
+// Each field is a *time.Duration rather than a time.Duration so Validate can
+// distinguish "key omitted" (nil) from "key present but zero" (non-nil and
+// non-positive). A plain value collapses both to 0, forcing Validate to either
+// silently default an explicitly invalid value or reject an omitted one.
+// Validate guarantees every pointer here is non-nil once it returns nil.
+type HealthConfig struct {
+	// ProbeInterval is how often each backend is probed. Omitted → DefaultProbeInterval.
+	ProbeInterval *time.Duration `yaml:"probe_interval"`
+	// ProbeTimeout bounds a single probe request. Omitted → DefaultProbeTimeout.
+	ProbeTimeout *time.Duration `yaml:"probe_timeout"`
+}
+
+// CircuitConfig holds the per-backend circuit-breaker tunables. Global for the
+// same reason as HealthConfig (ADR-0011 decision 10). Its fields follow the
+// same nil-means-omitted convention.
+type CircuitConfig struct {
+	// Cooldown is how long a tripped circuit stays Open before a read may
+	// promote it to Half-Open. Omitted → DefaultCircuitCooldown.
+	Cooldown *time.Duration `yaml:"cooldown"`
 }
 
 // BackendConfig describes one backend entry in the YAML config.
@@ -83,17 +135,18 @@ func Load(path string) (*Config, error) {
 
 // Validate checks the config for correctness: non-empty Listen, at least
 // one backend, each backend URL parseable with a host, unique backend
-// names, and a recognized Algorithm value.
+// names, a recognized Algorithm value, and positive Sprint 3 durations.
 //
 // Validate normalizes before it validates: an empty Algorithm is set to
-// AlgorithmRoundRobin. After Validate returns nil, every field is populated
+// AlgorithmRoundRobin, and each omitted Sprint 3 duration is set to its
+// exported default. After Validate returns nil, every field is populated
 // and valid, so downstream consumers never re-check or re-default. This is
-// why Validate mutates; splitting Normalize() out isn't justified by a single
-// mutation (revisit if defaults grow in Sprint 3+).
+// why Validate mutates; splitting Normalize() out isn't justified by these
+// mutations (revisit if defaults grow further).
 //
 // Validation is fail-fast: the first problem is returned. The order is
 // Listen → backends count → per-backend name/URL → name uniqueness →
-// algorithm.
+// algorithm → health/circuit durations.
 func (c *Config) Validate() error {
 	if c.Algorithm == "" {
 		c.Algorithm = AlgorithmRoundRobin
@@ -131,6 +184,35 @@ func (c *Config) Validate() error {
 
 	if _, ok := implementedAlgorithms[c.Algorithm]; !ok {
 		return fmt.Errorf("config: unsupported algorithm %q", c.Algorithm)
+	}
+
+	return c.normalizeAndValidateDurations()
+}
+
+// normalizeAndValidateDurations applies the Sprint 3 defaults to every omitted
+// duration and rejects an explicitly-set non-positive one. A nil pointer means
+// the key was absent (default it); a non-nil pointer means the operator set it
+// (it must be positive). Called last so the pre-Sprint-3 checks keep their
+// fail-fast order.
+func (c *Config) normalizeAndValidateDurations() error {
+	checks := []struct {
+		field string
+		value **time.Duration
+		def   time.Duration
+	}{
+		{"health probe_interval", &c.Health.ProbeInterval, DefaultProbeInterval},
+		{"health probe_timeout", &c.Health.ProbeTimeout, DefaultProbeTimeout},
+		{"circuit cooldown", &c.Circuit.Cooldown, DefaultCircuitCooldown},
+	}
+	for _, ch := range checks {
+		if *ch.value == nil {
+			d := ch.def
+			*ch.value = &d
+			continue
+		}
+		if **ch.value <= 0 {
+			return fmt.Errorf("config: %s must be positive, got %s", ch.field, **ch.value)
+		}
 	}
 	return nil
 }

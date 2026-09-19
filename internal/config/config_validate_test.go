@@ -2,6 +2,7 @@ package config
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -20,6 +21,14 @@ func threeBackendYAML() string {
 		backendYAML("backend-a", "http://127.0.0.1:9001") +
 		backendYAML("backend-b", "http://127.0.0.1:9002") +
 		backendYAML("backend-c", "http://127.0.0.1:9003")
+}
+
+// configWithSprint3YAML builds a minimal otherwise-valid config with the
+// supplied health and circuit YAML blocks (each may be empty) spliced in
+// before the backends section.
+func configWithSprint3YAML(health, circuit string) string {
+	return "listen: \":8080\"\n" + health + circuit +
+		"backends:\n" + backendYAML("backend-a", "http://127.0.0.1:9001")
 }
 
 // loadAndValidate is the end-to-end seam under test: YAML -> Load -> Validate.
@@ -199,6 +208,71 @@ func TestValidate(t *testing.T) {
 					{Name: "backend-c", URL: "http://127.0.0.1:9003"},
 				}, cfg.Backends)
 			},
+		},
+		{
+			name: "Sprint 3 durations omitted fall back to documented defaults",
+			yaml: threeBackendYAML(),
+			check: func(t *testing.T, cfg *Config) {
+				t.Helper()
+				require.NotNil(t, cfg.Health.ProbeInterval)
+				require.NotNil(t, cfg.Health.ProbeTimeout)
+				require.NotNil(t, cfg.Circuit.Cooldown)
+				assert.Equal(t, DefaultProbeInterval, *cfg.Health.ProbeInterval)
+				assert.Equal(t, DefaultProbeTimeout, *cfg.Health.ProbeTimeout)
+				assert.Equal(t, DefaultCircuitCooldown, *cfg.Circuit.Cooldown)
+			},
+		},
+		{
+			name: "Sprint 3 durations set explicitly are kept",
+			yaml: configWithSprint3YAML(
+				"health:\n  probe_interval: \"1500ms\"\n  probe_timeout: \"250ms\"\n",
+				"circuit:\n  cooldown: \"10s\"\n",
+			),
+			check: func(t *testing.T, cfg *Config) {
+				t.Helper()
+				require.NotNil(t, cfg.Health.ProbeInterval)
+				require.NotNil(t, cfg.Health.ProbeTimeout)
+				require.NotNil(t, cfg.Circuit.Cooldown)
+				assert.Equal(t, 1500*time.Millisecond, *cfg.Health.ProbeInterval)
+				assert.Equal(t, 250*time.Millisecond, *cfg.Health.ProbeTimeout)
+				assert.Equal(t, 10*time.Second, *cfg.Circuit.Cooldown)
+			},
+		},
+		{
+			name:      "Sprint 3 health probe interval of zero is rejected",
+			yaml:      configWithSprint3YAML("health:\n  probe_interval: \"0s\"\n", ""),
+			wantErr:   true,
+			errSubstr: "probe_interval",
+		},
+		{
+			name:      "Sprint 3 health probe interval negative is rejected",
+			yaml:      configWithSprint3YAML("health:\n  probe_interval: \"-1s\"\n", ""),
+			wantErr:   true,
+			errSubstr: "probe_interval",
+		},
+		{
+			name:      "Sprint 3 health probe timeout of zero is rejected",
+			yaml:      configWithSprint3YAML("health:\n  probe_timeout: \"0s\"\n", ""),
+			wantErr:   true,
+			errSubstr: "probe_timeout",
+		},
+		{
+			name:      "Sprint 3 health probe timeout negative is rejected",
+			yaml:      configWithSprint3YAML("health:\n  probe_timeout: \"-500ms\"\n", ""),
+			wantErr:   true,
+			errSubstr: "probe_timeout",
+		},
+		{
+			name:      "Sprint 3 circuit cooldown of zero is rejected",
+			yaml:      configWithSprint3YAML("", "circuit:\n  cooldown: \"0s\"\n"),
+			wantErr:   true,
+			errSubstr: "cooldown",
+		},
+		{
+			name:      "Sprint 3 circuit cooldown negative is rejected",
+			yaml:      configWithSprint3YAML("", "circuit:\n  cooldown: \"-30s\"\n"),
+			wantErr:   true,
+			errSubstr: "cooldown",
 		},
 	}
 
