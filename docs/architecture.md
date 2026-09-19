@@ -3,7 +3,8 @@
 _This document describes the as-built architecture, sprint by sprint. See
 `MILESTONES.md` for the plan, `PROGRESS.md` for live task state, and
 `docs/design/sprint-1-contracts.md` for the frozen Sprint 1 contracts.
-Sprint 1 is complete: this document is the Sprint 1 reference._
+Sprints 1 and 2 are complete: this document is the Sprint 1–2
+reference._
 
 ## Overview
 
@@ -32,8 +33,8 @@ for adversarial traffic. See [ADR-0005](adr/0005-scope-of-production-grade.md).
 
 ## Request path
 
-The following is the Sprint 1 request lifecycle as built. It is the same
-path for every algorithm; only the `selector.Select` call differs.
+The following is the request lifecycle as built through Sprint 2. It is the
+same path for every algorithm; only the `selector.Select` call differs.
 
 ```
 Client
@@ -55,22 +56,28 @@ proxy.Proxy.ServeHTTP                              internal/proxy/proxy.go
   ├─ other select error ───────────────────► 502
   │
   ├─ backend.IncActive()
-  ├─ attach reqState{backend, status, once} to request context
+  ├─ attach reqState{backend, status, once, dispatchStart} to request context
   ▼
 httputil.ReverseProxy.ServeHTTP
   │
   ├─ Director            reads state from context; sets req.URL.Scheme/Host
-  │                      (scheme/host only — see ADR-0007)
+  │                      (scheme/host only — see ADR-0007); stamps
+  │                      state.dispatchStart — the backend round-trip
+  │                      window, distinct from latency_ms (ADR-0010)
   ├─ Transport           stdlib default; dispatches to the backend
   │
   ├─ ModifyResponse      records resp.StatusCode;
+  │                      records backend.RecordLatency(since dispatchStart)
+  │                      (unconditional, any selector — ADR-0010);
   │                      wraps resp.Body in releaseBody
   │                        └─ releaseBody.Close()
   │                             └─ reqState.release()   (sync.Once)
   │                                  └─ backend.DecActive()
   │
-  ├─ ErrorHandler        records 502, calls reqState.release(),
-  │                      logs the transport error at WARN, writes 502
+  ├─ ErrorHandler        records 502, records backend.RecordLatency(2s
+  │                      failure penalty — ADR-0010), calls
+  │                      reqState.release(), logs the transport error
+  │                      at WARN, writes 502
   │
   └─ deferred logRequest emits one "request complete" slog line
                          (canonical fields) on every path
@@ -217,8 +224,10 @@ feature):
 
 ## Deviations from plan
 
-Two items differ between the frozen plan and the as-built state. Neither
-required a new ADR, and the reasoning for that is recorded with each.
+Six items differ between the plan and the as-built state — two from
+Sprint 1, four from Sprint 2 (recorded by S2.T8, the sprint's ad-hoc
+closing task). None required a new ADR, and the reasoning for that is
+recorded with each.
 
 ### 1. S1.T7 removed the scaffold's `-addr` CLI flag — owner signed off
 
@@ -264,6 +273,55 @@ mid-implementation deviation: `MILESTONES.md`'s original scaffold wording
 (unchanged since the initial commit) simply was never edited to match the
 scope the frozen contract had already settled. No ADR — it is a wording
 mismatch in a planning document, not a design decision.
+
+### 3. Two planned Sprint 2 ADR topics became three per-task ADRs — scoped ahead of implementation
+
+`MILESTONES.md`'s Sprint 2 deliverables name two ADR topics
+(bounded-loads-over-naive; P2C-over-least-connections under skew). As built
+there are three ADRs: the bounded-loads topic split into
+[ADR-0008](adr/0008-consistent-hash-ring-pipeline-and-vnode-layout.md)
+(ring pipeline, vnode key order, vnode count — closing with S2.T1.1) and
+[ADR-0009](adr/0009-consistent-hash-bounded-loads-capacity-and-evidence.md)
+(ε, load metric, capacity formula, hot-key evidence — closing with S2.T2),
+and [ADR-0010](adr/0010-p2c-ewma-backend-latency-state-cold-start-and-failure-penalty.md)
+closes S2.T3. The split was decided before any Sprint 2 code, in the
+S2.T1/T2 spec (`.scratch/s2-t1-t2-consistent-hash-bounded-loads/spec.md`,
+"Two ADRs, not one"), following the per-task-ADR pattern ADR-0006/0007
+established so no task closes with an open decision waiting on another.
+No ADR for the split itself: a documentation-organization choice,
+trivially reversible.
+
+### 4. S2.T1 split into S2.T1.1 / S2.T1.2 — ticket-level tracking
+
+The Sprint 2 spec groups the work as S2.T1 (ring primitive + unexported
+`naiveConsistentHash` comparator) and S2.T2 (bounded-loads selector +
+config wiring), but `PROGRESS.md` tracks the finer-grained `.scratch`
+tickets (T1.1 = ring, T1.2 = comparator) so each closes independently.
+Documented in `PROGRESS.md`'s Sprint 2 intro at split time. No ADR: task
+granularity, not design.
+
+### 5. The MILESTONES evidence/ADR bullets were folded into S2.T2/S2.T3 — owner-ratified after the fact
+
+`MILESTONES.md`'s Sprint 2 deliverables list the two distribution-property
+tests and the two ADRs as separate bullets, which the project owner
+tracked mentally as "S2.T4–T7". Those IDs never existed in the repo: the
+hot-key comparative test shipped inside S2.T2, the load-skew convergence
+test inside S2.T3, and each ADR closed with its implementation task, per
+the specs' folding. The owner ratified the folded deliverables on
+2026-09-20 after a code-level review of the tests, selector
+implementations, and ADRs against their claims — all verified correct,
+with live runs reproducing the published evidence. No ADR: a
+tracking-shape choice plus verification, not a design decision.
+
+### 6. Sprint 2 planned no retro task; S2.T8 was added ad hoc — this entry is the record of why
+
+Sprint 1 closed with S1.T10 (retro / architecture doc) as a scoped task;
+Sprint 2's plan contained no equivalent, and the sprint was declared
+complete by S2.T3's session without one. S2.T8 closes the gap for
+consistency: the header and diagram updates above, this deviations audit,
+an ADR sweep (result stated explicitly in the session log), and the closing
+session log. It appears in `PROGRESS.md` without a `MILESTONES.md` bullet
+by design. No ADR: process, not design.
 
 ## Later amendments to Sprint 1 contracts
 
