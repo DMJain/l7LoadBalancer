@@ -199,6 +199,13 @@ Scoped in `.scratch/s2-t1-t2-consistent-hash-bounded-loads/` as one spec plus th
     - ADR-0010 bundles `Backend`-owned latency state (amending ADR-0002, symmetric with ADR-0006), cold-start first-sample-direct-set semantics, the fixed 2s failure penalty (including why raw elapsed time was rejected and that `SLEEP_MS` has no enforced ceiling), and one line noting `RecordLatency` runs unconditionally.
   - Test approach: direct-method seam for `Backend`; `Selector`-interface seam for the selector; the existing `httptest` proxy harness for the two wiring cases; config/factory table cases mirroring the existing per-algorithm tests. Deterministic fixtures, no mocks.
 
+- [IN_PROGRESS] S2.T8 — Sprint 2 retro / architecture close-out (opencode, started 2026-09-19T19:22:15Z)
+  - Goal: close Sprint 2 the way S1.T10 closed Sprint 1 — flip the stale architecture-doc header to the Sprint 1–2 reference, add Sprint 2's request-lifecycle additions to the request-path diagram (`dispatchStart`, the three `RecordLatency` call sites), record the sprint's deviations from plan, confirm via an ADR sweep that no S2.T1–T3 decision went undocumented, and append the closing session log.
+  - Files: `docs/architecture.md`, `docs/sessions/2026-09-20-opencode.md`, `PROGRESS.md`
+  - Depends on: S2.T1.1, S2.T1.2, S2.T2, S2.T3
+  - Acceptance: header names Sprints 1–2 as the reference scope; diagram shows `reqState{backend, status, once, dispatchStart}` and the `RecordLatency` calls at `Director`/`ModifyResponse`/`ErrorHandler`; deviations audit records four Sprint 2 items (the one-planned-ADR-to-three-per-task-ADRs split, the S2.T1 ticket split, the MILESTONES evidence/ADR bullets folded into S2.T2/T3 with owner ratification, and this task's own ad-hoc addition — Sprint 2 planned no retro); the session log states the ADR-sweep result explicitly rather than silently skipping the check; docs-only, no code changes.
+  - Test approach: none — docs-only (AGENTS.md TDD exception).
+
 ## Sprint 3, 4, 5
 
 See `MILESTONES.md`. Tasks added per sprint.
