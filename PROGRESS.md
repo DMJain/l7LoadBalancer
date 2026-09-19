@@ -230,6 +230,13 @@ Scoped in `.scratch/s3-t1-t3-health-passive-circuit/` as one spec plus six imple
     - Every existing proxy latency-recording test still passes, unchanged in outcome, now routed through the fan-out.
   - Test approach: the existing `httptest`-backed `proxy.Proxy` seam (S1.T6/ADR-0007, S2.T3) with a recording spy observer wrapping the latency adapter so call counts are directly assertable; 5xx / connection-refused / 2xx fixtures cover both terminal hooks.
 
+- [IN_PROGRESS] S3.T0.3 — Sprint 3 config schema: probe interval/timeout + circuit cooldown (issue 03) (opencode, started 2026-09-19T23:22:49Z, schema-only prefactor freezing the three new global duration fields and their validation rules before S3.T1/S3.T3 read them)
+  - Goal: add the global YAML knobs Sprint 3 needs — health `probe_interval`, health `probe_timeout`, and circuit `cooldown` — with documented built-in defaults when omitted and `Validate()` rules rejecting explicitly-set non-positive durations, so S3.T1 (active health checks) and S3.T3 (circuit breaker) can build in parallel without both editing `config.go`. Schema only: no runtime behavior reads these fields yet.
+  - Files: `internal/config/config.go`, `internal/config/config_validate_test.go`, `internal/config/config_load_test.go`, `PROGRESS.md`, `.scratch/s3-t1-t3-health-passive-circuit/issues/03-sprint3-config-schema.md`, `docs/sessions/2026-09-20-opencode.md`
+  - Depends on: none
+  - Acceptance: `Config` gains global `Health` (`probe_interval`, `probe_timeout`) and `Circuit` (`cooldown`) sections of optional `*time.Duration`; omission defaults to exported `DefaultProbeInterval`/`DefaultProbeTimeout`/`DefaultCircuitCooldown`; `Validate()` rejects a non-positive explicitly-set value for any of the three; `KnownFields(true)` strictness preserved (nested typos rejected); thresholds/window sizes/failure-to-open threshold deliberately **not** added (ADR-0011 decision 10 keeps them Go constants). Tests: omission→defaults, explicit→kept, non-positive (zero and negative) per field rejected, nested unknown-field typo rejected, `Load` leaves omitted durations nil and decodes explicit ones.
+  - Test approach: table-driven cases on the existing `Load`→`Validate` seam; `configs/example.yaml` round-trip (`TestExampleConfig`) proves a currently-committed config still loads unmodified.
+
 ## Sprint 4, 5
 
 See `MILESTONES.md`. Tasks added per sprint.
