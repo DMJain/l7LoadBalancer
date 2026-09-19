@@ -214,14 +214,10 @@ internal/circuit  — depends on backend (Sprint 3)
 
 ##### Sprint 2 selectors
 
-**ConsistentHashBoundedLoads** (Sprint 2):
-- **Algorithm**: Consistent hashing per Mirrokni-Thorup-Zadimoghaddam (2016). Per-backend load counters. When the first-choice backend exceeds `avg_load * (1 + ε)`, rehash to the next virtual node.
-- **Why bounded-loads over naive consistent hashing?** Naive consistent hashing can send all traffic for a hot key to one backend. Bounded-loads provides the sticky-routing property of consistent hashing while guaranteeing no backend exceeds `(1 + ε)` times the average load. ADR required (Sprint 2).
-- **Design decisions to document in ADR**:
-  - Hash function choice (xxhash vs FNV vs CRC32).
-  - Number of virtual nodes per backend.
-  - Epsilon (ε) value and whether it's configurable.
-  - Hash key: `r.URL.Path` or `r.Header.Get("X-Forwarded-For")` or configurable.
+**ConsistentHashBoundedLoads** (Sprint 2 — as built, ADR-0009):
+- **Algorithm**: Consistent hashing per Mirrokni-Thorup-Zadimoghaddam (2016) over the ADR-0008 ring. Load is the live `Backend.ActiveConns()` (not a cumulative counter), averaged over currently-healthy backends. Capacity is `max(1, ceil(avg_active * (1 + ε)))` with ε = 0.25, and a candidate is admitted when `ActiveConns() <= capacity`. The walk from the client-IP hash key takes the first candidate that is healthy and within capacity, rehashing onward otherwise.
+- **Why bounded-loads over naive consistent hashing?** A hot key pins traffic to whichever backend owns its ring position. Bounded-loads keeps the sticky-routing property while ensuring no backend exceeds `(1 + ε)` times the healthy-set average. The evidence (fixed-seed comparative test plus a 60-seed offline reproducer) is in ADR-0009.
+- **Decisions recorded in ADR-0009**: ε = 0.25 (constant, not config); load = `ActiveConns()` over healthy; capacity `max(1, ceil(avg * 1.25))` with `<=` admission; one-pass ring walk with a defensive least-loaded fallback; hash key = `RemoteAddr` port-stripped (ADR-0008). `naiveConsistentHash` (ADR-0008) is the unwired comparator the evidence measures against.
 
 **PowerOfTwoChoicesEWMA** (Sprint 2):
 - **Algorithm**: Pick two random healthy backends; choose the one with lower EWMA-tracked latency. Latency updated atomically on each response.
@@ -315,7 +311,7 @@ All non-trivial decisions must have an ADR. Current ADRs:
 | [0006](docs/adr/0006-backend-sethealthy-amends-adr-0002.md) | Add Backend.SetHealthy, amending ADR-0002 decision 5 | Accepted |
 | [0007](docs/adr/0007-proxy-request-lifecycle-and-exactly-once-decrement.md) | Proxy request lifecycle and exactly-once active-connection decrement | Accepted |
 | [0008](docs/adr/0008-consistent-hash-ring-pipeline-and-vnode-layout.md) | Consistent-hash ring hash pipeline, vnode key order, and vnode count | Accepted |
-| TBD (Sprint 2) | Why bounded-loads consistent hashing over naive CH | — |
+| [0009](docs/adr/0009-consistent-hash-bounded-loads-capacity-and-evidence.md) | Consistent-hash bounded loads: epsilon, load metric, capacity formula, and hot-key evidence | Accepted |
 | TBD (Sprint 2) | Why P2C-EWMA over least-connections for latency-skewed workloads | — |
 | TBD (Sprint 3) | Circuit breaker concurrency model | — |
 | TBD (Sprint 4) | Reload architecture: atomic pointer swap vs SO_REUSEPORT | — |
@@ -340,6 +336,7 @@ All non-trivial decisions must have an ADR. Current ADRs:
 14. **`Backend.SetHealthy(bool)` amends ADR-0002 decision 5** — ADR-0006. Added in S1.T3 so S1.T8 can drive health transitions before Sprint 3's health checker exists; Sprint 3 reuses it unchanged. Symmetric with `IncActive`/`DecActive` living directly on `Backend`.
 15. **Proxy per-request state + `sync.Once` release** — ADR-0007. `ServeHTTP` selects, `IncActive`s, and attaches a `reqState` (backend, status, once) to the request context; both the `ModifyResponse` body-wrapper `Close()` and `ErrorHandler` call `reqState.release()`, so `DecActive` runs exactly once. Status is read from `resp.StatusCode` (no `ResponseWriter` wrapper, preserving flush/hijack), and one "request complete" line is logged per request via a deferred call in `ServeHTTP`.
 16. **Consistent-hash ring: FNV-1a-64 → `fmix64`, `index:name` vnode keys, 150 vnodes, `iter.Seq` walk** — ADR-0008. The `fmix64` finalizer prevents a /24 subnet collapsing onto a minority of backends (raw FNV maps 256 same-subnet addresses onto 3 of 4 backends); index-first vnode keys avoid correlated vnode hashes in the pre-finalizer pipeline, and are retained post-finalizer as the design-record choice and defense in depth, not because the ordering is load-bearing then. The ring is immutable and placement-only, and its ordered candidate walk is an `iter.Seq[*backend.Backend]` so each selector's skip logic stays inline.
+17. **Bounded loads: ε = 0.25, load = `ActiveConns()` averaged over healthy, capacity = `max(1, ceil(avg × 1.25))`, `<=` admission** — ADR-0009. `consistent_hash` walks the ADR-0008 ring, admitting the first candidate that is healthy and within capacity; the exhaustion fallback (least-loaded candidate seen) is unreachable given the floor and is defensive only. `ErrNoHealthyBackends` remains the sole error condition. The checked-in fixed-seed hot-key test (naive 3,996 vs bounded 3,126 of 10,000) and the `offline`-tagged 60-seed reproducer give same-repo evidence, with the fallback never firing across all seeds.
 
 ---
 

@@ -25,14 +25,28 @@ import (
 // next to each type in roundrobin.go and leastconn.go and are re-checked on
 // every build, so they are deliberately not duplicated here.
 
+// requestForAddr builds the request every address-aware selector test uses:
+// a GET / whose RemoteAddr is remoteAddr. One construction path, whether the
+// caller has a *testing.T or not.
+func requestForAddr(remoteAddr string) *http.Request {
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.RemoteAddr = remoteAddr
+	return r
+}
+
+// selectAddr selects through s for a request whose client address is
+// remoteAddr. It is selectForAddr without the *testing.T, for helpers (like
+// the hot-key stream runner) that exercise many requests.
+func selectAddr(s Selector, remoteAddr string) (*backend.Backend, error) {
+	return s.Select(context.Background(), requestForAddr(remoteAddr))
+}
+
 // selectForAddr selects through s for a request whose client address is
 // remoteAddr, returning the backend and error unmodified so error-path tests
 // can assert both.
 func selectForAddr(t *testing.T, s Selector, remoteAddr string) (*backend.Backend, error) {
 	t.Helper()
-	r := httptest.NewRequest(http.MethodGet, "/", nil)
-	r.RemoteAddr = remoteAddr
-	return s.Select(context.Background(), r)
+	return selectAddr(s, remoteAddr)
 }
 
 // selectNameForAddr is selectForAddr for the happy path: it fails the test

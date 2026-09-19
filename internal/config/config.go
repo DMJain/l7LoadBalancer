@@ -27,14 +27,15 @@ const (
 )
 
 // implementedAlgorithms is the set of algorithms this build can actually
-// select. It deliberately excludes the Sprint 2 identifiers until the
-// selectors that back them exist: validation answers "will this work?", not
-// "does this parse?". Adding a selector is a one-line addition here.
+// select. It excludes the Sprint 2 identifiers whose selectors do not exist
+// yet (`p2c_ewma`): validation answers "will this work?", not "does this
+// parse?". Adding a selector is a one-line addition here.
 //
 // See ADR-0004.
 var implementedAlgorithms = map[string]struct{}{
-	AlgorithmRoundRobin: {},
-	AlgorithmLeastConn:  {},
+	AlgorithmRoundRobin:     {},
+	AlgorithmLeastConn:      {},
+	AlgorithmConsistentHash: {},
 }
 
 // backendNamePattern restricts backend names to the intersection of what is

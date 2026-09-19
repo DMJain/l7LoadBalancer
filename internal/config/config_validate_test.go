@@ -137,10 +137,12 @@ func TestValidate(t *testing.T) {
 			errSubstr: "algorithm",
 		},
 		{
-			name:      "unimplemented algorithm consistent_hash",
-			yaml:      "listen: \":8080\"\nalgorithm: \"consistent_hash\"\nbackends:\n" + backendYAML("backend-a", "http://127.0.0.1:9001"),
-			wantErr:   true,
-			errSubstr: "algorithm",
+			name: "consistent_hash is accepted",
+			yaml: "listen: \":8080\"\nalgorithm: \"consistent_hash\"\nbackends:\n" + backendYAML("backend-a", "http://127.0.0.1:9001"),
+			check: func(t *testing.T, cfg *Config) {
+				t.Helper()
+				assert.Equal(t, AlgorithmConsistentHash, cfg.Algorithm)
+			},
 		},
 		{
 			name:      "algorithm is case-sensitive",

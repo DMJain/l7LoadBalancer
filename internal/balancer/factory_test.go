@@ -20,6 +20,7 @@ func TestNewFromConfigMapsAlgorithm(t *testing.T) {
 	}{
 		{algorithm: config.AlgorithmRoundRobin, want: &RoundRobin{}},
 		{algorithm: config.AlgorithmLeastConn, want: &LeastConnections{}},
+		{algorithm: config.AlgorithmConsistentHash, want: &ConsistentHashBoundedLoads{}},
 	}
 
 	for _, tt := range tests {
@@ -34,17 +35,16 @@ func TestNewFromConfigMapsAlgorithm(t *testing.T) {
 }
 
 // TestNewFromConfigRejectsUnsupportedAlgorithm covers every value the factory
-// must refuse: the Sprint 2 identifiers (whose constructors still panic),
-// an arbitrary unknown string, and the empty string. Empty is included
-// deliberately — config.Validate normalizes it to round_robin, so an empty
-// Algorithm reaching the factory means the caller skipped validation, and a
-// silent default here would mask that.
+// must refuse: the remaining Sprint 2 identifier (whose constructor still
+// panics), an arbitrary unknown string, and the empty string. Empty is
+// included deliberately — config.Validate normalizes it to round_robin, so an
+// empty Algorithm reaching the factory means the caller skipped validation,
+// and a silent default here would mask that.
 func TestNewFromConfigRejectsUnsupportedAlgorithm(t *testing.T) {
 	tests := []struct {
 		name      string
 		algorithm string
 	}{
-		{name: "consistent_hash (Sprint 2)", algorithm: config.AlgorithmConsistentHash},
 		{name: "p2c_ewma (Sprint 2)", algorithm: config.AlgorithmP2CEWMA},
 		{name: "unknown string", algorithm: "random"},
 		{name: "empty string", algorithm: ""},

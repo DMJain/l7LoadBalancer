@@ -129,7 +129,7 @@ As-built package status:
 |---|---|---|
 | `cmd/l7LoadBalancer` | Sprint 1 | Thin wiring layer: `config.Load`/`Validate` → `backend.NewRegistry` → `balancer.NewFromConfig` → `proxy.New` → `http.Server`; SIGINT/SIGTERM graceful shutdown. Fatal + exit 1 on any startup failure (no silent fallback). |
 | `internal/proxy` | Sprint 1 | Wraps `httputil.ReverseProxy`; owns the request lifecycle, 503/502 short-circuits, active-connection accounting, and the per-request log line. |
-| `internal/balancer` | Sprint 1 | `Selector` interface + `ErrNoHealthyBackends` (the only exported sentinel), `RoundRobin` and `LeastConnections`, and the `NewFromConfig` factory. Sprint 2 adds `ConsistentHashBoundedLoads` and `PowerOfTwoChoicesEWMA` here. |
+| `internal/balancer` | Sprint 1–2 | `Selector` interface + `ErrNoHealthyBackends` (the only exported sentinel), `RoundRobin`, `LeastConnections`, and (Sprint 2) `ConsistentHashBoundedLoads` over an unexported ring, plus the `NewFromConfig` factory. `PowerOfTwoChoicesEWMA` is still a stub. |
 | `internal/backend` | Sprint 1 | `Backend` (identity + unexported `atomic` health/active state, methods-only access) and `Registry` (ordered, immutable in Sprint 1). |
 | `internal/config` | Sprint 1 | Strict YAML loading (`KnownFields(true)`) and fail-fast validation; algorithm identifier constants. Immutable after init in Sprint 1. |
 | `internal/logger` | Sprint 1 | `log/slog` JSON setup and the frozen canonical field vocabulary. Leaf. |
@@ -157,7 +157,7 @@ which sync primitive) lives in
   identifier table** in
   [`docs/design/sprint-1-contracts.md`](design/sprint-1-contracts.md#algorithm-identifier-table).
   `config.Validate` accepts only the implemented set (Sprint 1:
-  `round_robin`, `least_conn`) — see
+  `round_robin`, `least_conn`; Sprint 2 adds `consistent_hash`) — see
   [ADR-0004](adr/0004-reject-unimplemented-algorithms-in-validate.md).
 - Every selector carries a compile-time assertion
   `var _ Selector = (*X)(nil)`.
@@ -169,6 +169,15 @@ ordered `iter.Seq[*backend.Backend]` candidate walk that each selector
 filters with its own inline condition. Its hash pipeline, vnode key format,
 and vnode count are recorded in
 [ADR-0008](adr/0008-consistent-hash-ring-pipeline-and-vnode-layout.md).
+
+`consistent_hash` maps to `ConsistentHashBoundedLoads`: the walk from the
+client-IP hash key admits the first candidate that is both healthy and within
+`max(1, ceil(avg_active * 1.25))` (`avg_active` over healthy backends), so a
+hot key is rehashed past a backend that has reached its share of the load.
+The deliberately unwired `naiveConsistentHash` comparator exists only to
+prove that property in the checked-in hot-key test; ε, the load metric,
+capacity formula, and the evidence are recorded in
+[ADR-0009](adr/0009-consistent-hash-bounded-loads-capacity-and-evidence.md).
 
 ## Decision index
 
@@ -184,13 +193,13 @@ All non-trivial decisions are recorded in `docs/adr/`. Accepted:
 | [0006](adr/0006-backend-sethealthy-amends-adr-0002.md) | Add Backend.SetHealthy, amending ADR-0002 decision 5 | Accepted |
 | [0007](adr/0007-proxy-request-lifecycle-and-exactly-once-decrement.md) | Proxy request lifecycle and exactly-once active-connection decrement | Accepted |
 | [0008](adr/0008-consistent-hash-ring-pipeline-and-vnode-layout.md) | Consistent-hash ring hash pipeline, vnode key order, and vnode count | Accepted |
+| [0009](adr/0009-consistent-hash-bounded-loads-capacity-and-evidence.md) | Consistent-hash bounded loads: epsilon, load metric, capacity formula, and hot-key evidence | Accepted |
 
 Tracked but not yet written (each decides in the sprint that delivers the
 feature):
 
 | Sprint | Decision |
 |--------|----------|
-| 2 | Why bounded-loads consistent hashing over naive CH |
 | 2 | Why P2C-EWMA over least-connections for latency-skewed workloads |
 | 3 | Circuit breaker concurrency model |
 | 4 | Reload architecture: atomic pointer swap vs SO_REUSEPORT |
@@ -270,9 +279,9 @@ Read those two ADRs alongside the contracts doc's
 A future agent should not assume any of the following exist. Each names its
 owning sprint:
 
-- **Consistent-hash-bounded-loads and P2C-EWMA selectors** — Sprint 2.
-  (Stubs with `panic("not implemented")` bodies live in
-  `internal/balancer/consistent_hash.go` and `p2c_ewma.go`.)
+- **P2C-EWMA selector** — Sprint 2. (A stub with a `panic("not implemented")`
+  body lives in `internal/balancer/p2c_ewma.go`; `consistent_hash` landed in
+  S2.T2 as `ConsistentHashBoundedLoads`.)
 - **Health checking (active + passive)** — Sprint 3.
 - **Circuit breaking** — Sprint 3.
 - **Prometheus metrics** — Sprint 3.

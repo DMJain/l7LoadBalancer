@@ -25,7 +25,7 @@ Strategic plan. Each sprint = one weekend of focused work. Tasks under each spri
 **Goal**: Implement the intellectually meaty selection algorithms.
 
 **Deliverables**:
-- `ConsistentHashBoundedLoads` per Mirrokni-Thorup-Zadimoghaddam (2016) — per-backend load counters, rehash when a backend is over capacity.
+- `ConsistentHashBoundedLoads` per Mirrokni-Thorup-Zadimoghaddam (2016) — live `ActiveConns()` averaged over healthy backends, rehash when a backend is over `max(1, ceil(avg × 1.25))` (ADR-0009).
 - `PowerOfTwoChoicesEWMA` — pick two random backends, choose lower EWMA-tracked latency; atomic latency updates.
 - Unit tests demonstrating distribution properties (P2C converges load onto faster backends under latency skew; consistent-hash bounded-loads rebalances hot keys).
 - ADR: why bounded-loads over naive consistent hashing.

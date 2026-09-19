@@ -34,17 +34,19 @@ var ErrNoHealthyBackends = errors.New("balancer: no healthy backends")
 //
 // It accepts exactly the identifiers config.Validate accepts
 // (config's implementedAlgorithms set). An unrecognized value — including
-// the Sprint 2 identifiers whose constructors still panic, and the empty
-// string — returns a wrapped error rather than falling back to a default:
-// config.Validate already normalizes an omitted algorithm to round_robin,
-// so an unrecognized value here means validation was skipped, and defaulting
-// would mask that. Sprint 2 adds a case per new selector.
+// the not-yet-implemented p2c_ewma, whose constructor still panics, and the
+// empty string — returns a wrapped error rather than falling back to a
+// default: config.Validate already normalizes an omitted algorithm to
+// round_robin, so an unrecognized value here means validation was skipped,
+// and defaulting would mask that. Each sprint adds a case per new selector.
 func NewFromConfig(cfg *config.Config, reg *backend.Registry) (Selector, error) {
 	switch cfg.Algorithm {
 	case config.AlgorithmRoundRobin:
 		return NewRoundRobin(reg), nil
 	case config.AlgorithmLeastConn:
 		return NewLeastConnections(reg), nil
+	case config.AlgorithmConsistentHash:
+		return NewConsistentHashBoundedLoads(reg), nil
 	default:
 		return nil, fmt.Errorf("balancer: unsupported algorithm %q", cfg.Algorithm)
 	}
