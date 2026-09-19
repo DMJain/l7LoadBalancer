@@ -163,7 +163,7 @@ Scoped in `.scratch/s2-t1-t2-consistent-hash-bounded-loads/` as one spec plus th
     - ADR-0008 records the hash pipeline, vnode key order, and vnode count, each citing measured evidence.
   - Test approach: direct ring-level tests (no selector, no HTTP), `testify/require` for setup and `assert` for values, deterministic fixtures so assertions cannot flake.
 
-- [ ] S2.T1.2 — `naiveConsistentHash` selector (issue 02)
+- [IN_PROGRESS] S2.T1.2 — `naiveConsistentHash` selector (issue 02) (opencode, started 2026-09-19T06:58:41Z, unexported health-aware/load-blind Selector over the ring)
   - Goal: unexported, health-aware but load-blind `Selector` over the ring, walk skipping unhealthy candidates; deliberately never reachable via `NewFromConfig`/`implementedAlgorithms`; exists as the empirical comparator for bounded-loads.
   - Depends on: S2.T1.1
 
