@@ -217,6 +217,19 @@ Scoped in `.scratch/s3-t1-t3-health-passive-circuit/` as one spec plus six imple
   - Acceptance: `SetHealthy` gone; `MarkHealthy()`/`MarkUnhealthy()` added over the same field; every caller updated; no behavior change; `make test` and `make test-race` pass unchanged; PROGRESS and the issue's boxes updated. Decision already recorded in ADR-0011 decision 2 (amending ADR-0006) — no new ADR.
   - Test approach: mechanical translation of the existing direct-method tests to the new names, with explicit `MarkUnhealthy`→unhealthy and `MarkHealthy`→healthy assertions; no new behavior to test.
 
+- [IN_PROGRESS] S3.T0.2 — Round-trip observer fan-out (issue 02) (opencode, started 2026-09-19T22:34:00Z, generalize the proxy's single hardcoded `RecordLatency` call into a `RoundTripObserver` fan-out sized for three listeners; ADR-0011 decision 9)
+  - Goal: replace `modifyResponse`/`errorHandler`'s hardcoded `state.backend.RecordLatency(...)` call with a generic `RoundTripObserver` fan-out plus an additive `Proxy.RegisterObserver(...)`, so S3.T2 (passive outlier detection) and S3.T3 (circuit breaker) can each register a listener without further changes to `proxy.go`'s hook logic. Prefactor: unblocks both, neither needs the other.
+  - Files: `internal/proxy/proxy.go`, `internal/proxy/proxy_test.go`, `cmd/l7LoadBalancer/main.go`, `PROGRESS.md`, `.scratch/s3-t1-t3-health-passive-circuit/issues/02-round-trip-observer-fanout.md`, `docs/sessions/2026-09-20-opencode.md`
+  - Depends on: none
+  - Acceptance:
+    - `internal/proxy` gains a `RoundTripObserver` interface — `ObserveRoundTrip(b *backend.Backend, d time.Duration, success bool)` — per ADR-0011 decision 9; consumer-defined in `proxy`.
+    - `Proxy` gains an additive `RegisterObserver(o RoundTripObserver)` method; `New(reg, sel)`'s frozen two-argument signature is untouched.
+    - `modifyResponse` computes `success := resp.StatusCode < 500` and `d := time.Since(state.dispatchStart)`; `errorHandler` always passes `success = false, d = p2cFailurePenalty`; both fan out to every registered observer, unconditionally — recording stays unconditional while any future gating stays conditional, so no observer call site gains an early-return guard.
+    - The hardcoded `RecordLatency` call becomes a small adapter observer (`NewLatencyObserver`) registered in `main.go` after the `Proxy` is constructed; behavior unchanged (real round-trip duration recorded on `modifyResponse`, fixed 2s penalty on `errorHandler`).
+    - Tests assert invocation **count** (not just content) for every registered observer against both terminal hooks — one request through a 5xx fixture (`modifyResponse`) and one through a connection-refused fixture (`errorHandler`) each invokes every observer exactly once; a 2xx request invokes each exactly once with `success=true` and a real non-zero duration.
+    - Every existing proxy latency-recording test still passes, unchanged in outcome, now routed through the fan-out.
+  - Test approach: the existing `httptest`-backed `proxy.Proxy` seam (S1.T6/ADR-0007, S2.T3) with a recording spy observer wrapping the latency adapter so call counts are directly assertable; 5xx / connection-refused / 2xx fixtures cover both terminal hooks.
+
 ## Sprint 4, 5
 
 See `MILESTONES.md`. Tasks added per sprint.
