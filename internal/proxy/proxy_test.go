@@ -249,6 +249,7 @@ func TestProxyRecordsRoundTripLatencyOnSuccess(t *testing.T) {
 	reg.All()[1].MarkUnhealthy()
 
 	p := New(reg, balancer.NewRoundRobin(reg))
+	p.RegisterObserver(NewLatencyObserver())
 
 	rec := httptest.NewRecorder()
 	p.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
@@ -265,6 +266,7 @@ func TestProxyRecordsRoundTripLatencyOnSuccess(t *testing.T) {
 func TestProxyRecordsPenaltyOnBackendFailure(t *testing.T) {
 	reg := registryFrom(t, backendEntry{"backend-a", deadBackendURL(t)})
 	p := New(reg, balancer.NewRoundRobin(reg))
+	p.RegisterObserver(NewLatencyObserver())
 
 	rec := httptest.NewRecorder()
 	p.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
@@ -272,6 +274,129 @@ func TestProxyRecordsPenaltyOnBackendFailure(t *testing.T) {
 
 	assert.Equal(t, p2cFailurePenalty, reg.All()[0].EWMALatency(),
 		"a failed round trip must record the fixed penalty, not the real elapsed time")
+}
+
+// observerCall records one ObserveRoundTrip invocation.
+type observerCall struct {
+	backend *backend.Backend
+	d       time.Duration
+	success bool
+}
+
+// spyObserver records every round trip it is notified of and, when inner is
+// non-nil, delegates to it after recording. The delegation is what lets a test
+// assert an exact invocation count for an observer (the latency adapter) whose
+// own side effect — an EWMA write — cannot itself be counted.
+type spyObserver struct {
+	inner RoundTripObserver
+
+	mu    sync.Mutex
+	calls []observerCall
+}
+
+func (s *spyObserver) ObserveRoundTrip(b *backend.Backend, d time.Duration, success bool) {
+	s.mu.Lock()
+	s.calls = append(s.calls, observerCall{backend: b, d: d, success: success})
+	s.mu.Unlock()
+	if s.inner != nil {
+		s.inner.ObserveRoundTrip(b, d, success)
+	}
+}
+
+func (s *spyObserver) snapshot() []observerCall {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]observerCall(nil), s.calls...)
+}
+
+// TestProxyObserverFanOutInvokesEachObserverOnceOnSuccess proves a successful
+// round trip notifies every registered observer exactly once, with
+// success=true and a real, non-zero round-trip duration — asserting call
+// count, not merely call content, so an accidental double registration cannot
+// pass silently.
+func TestProxyObserverFanOutInvokesEachObserverOnceOnSuccess(t *testing.T) {
+	serving := startBackend(t, "backend-a")
+	reg := registryFrom(t, backendEntry{"backend-a", serving.URL})
+	p := New(reg, balancer.NewRoundRobin(reg))
+
+	latency := &spyObserver{inner: NewLatencyObserver()}
+	spy := &spyObserver{}
+	p.RegisterObserver(latency)
+	p.RegisterObserver(spy)
+
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	calls := spy.snapshot()
+	require.Len(t, calls, 1, "each observer must be invoked exactly once per request")
+	assert.Equal(t, reg.All()[0], calls[0].backend)
+	assert.True(t, calls[0].success)
+	assert.Positive(t, calls[0].d)
+
+	assert.Len(t, latency.snapshot(), 1, "the latency adapter must be invoked exactly once")
+	assert.Positive(t, reg.All()[0].EWMALatency(),
+		"the latency adapter must record the round-trip duration")
+}
+
+// TestProxyObserverFanOutInvokesEachObserverOnceOn5xx proves the fan-out's
+// modifyResponse hook fires for a 5xx response — a failure signal that still
+// produced a response — exactly once per observer, with success=false.
+func TestProxyObserverFanOutInvokesEachObserverOnceOn5xx(t *testing.T) {
+	backendSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(backendSrv.Close)
+
+	reg := registryFrom(t, backendEntry{"backend-a", backendSrv.URL})
+	p := New(reg, balancer.NewRoundRobin(reg))
+
+	latency := &spyObserver{inner: NewLatencyObserver()}
+	spy := &spyObserver{}
+	p.RegisterObserver(latency)
+	p.RegisterObserver(spy)
+
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	require.Equal(t, http.StatusInternalServerError, rec.Code)
+
+	calls := spy.snapshot()
+	require.Len(t, calls, 1, "each observer must be invoked exactly once per request")
+	assert.Equal(t, reg.All()[0], calls[0].backend)
+	assert.False(t, calls[0].success)
+	assert.Positive(t, calls[0].d)
+
+	assert.Len(t, latency.snapshot(), 1, "the latency adapter must be invoked exactly once")
+	assert.Positive(t, reg.All()[0].EWMALatency(),
+		"the latency adapter must record the round-trip duration")
+}
+
+// TestProxyObserverFanOutInvokesEachObserverOnceOnConnectionRefused proves the
+// fan-out's errorHandler hook fires for a transport failure — the signal
+// passive detection and the circuit breaker both watch — exactly once per
+// observer, with success=false and the fixed failure penalty as the duration.
+func TestProxyObserverFanOutInvokesEachObserverOnceOnConnectionRefused(t *testing.T) {
+	reg := registryFrom(t, backendEntry{"backend-a", deadBackendURL(t)})
+	p := New(reg, balancer.NewRoundRobin(reg))
+
+	latency := &spyObserver{inner: NewLatencyObserver()}
+	spy := &spyObserver{}
+	p.RegisterObserver(latency)
+	p.RegisterObserver(spy)
+
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	require.Equal(t, http.StatusBadGateway, rec.Code)
+
+	calls := spy.snapshot()
+	require.Len(t, calls, 1, "each observer must be invoked exactly once per request")
+	assert.Equal(t, reg.All()[0], calls[0].backend)
+	assert.False(t, calls[0].success)
+	assert.Equal(t, p2cFailurePenalty, calls[0].d)
+
+	assert.Len(t, latency.snapshot(), 1, "the latency adapter must be invoked exactly once")
+	assert.Equal(t, p2cFailurePenalty, reg.All()[0].EWMALatency(),
+		"the latency adapter must record the fixed failure penalty")
 }
 
 // logRecord is one parsed JSON slog line.

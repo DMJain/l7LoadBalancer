@@ -20,10 +20,10 @@ import (
 // otherwise record a near-zero latency and look attractively fast to
 // PowerOfTwoChoicesEWMA — the opposite of the intended effect. 2s comfortably
 // dominates the committed dummy-backend latencies (50/150/300ms) with headroom
-// because SLEEP_MS has no enforced ceiling. It is the fixed input to
-// RecordLatency — folded through the EWMA like any observation rather than
-// hard-setting the field, so repeated failures converge the estimate toward 2s.
-// See ADR-0010.
+// because SLEEP_MS has no enforced ceiling. It is the fixed duration the
+// failure path hands to the observer fan-out; the latency observer folds it
+// through the EWMA like any observation rather than hard-setting the field, so
+// repeated failures converge the estimate toward 2s. See ADR-0010.
 const p2cFailurePenalty = 2 * time.Second
 
 // reqState is the per-request bookkeeping shared between ServeHTTP, Director,
@@ -67,18 +67,57 @@ func stateFrom(ctx context.Context) *reqState {
 	return state
 }
 
+// RoundTripObserver is notified of every backend round trip's outcome. It is
+// a consumer-defined interface (ADR-0002's Selector exception does not apply
+// here): proxy only stores and calls it, while passive outlier detection
+// (S3.T2) and the circuit breaker (S3.T3) implement it in their own packages.
+//
+// ObserveRoundTrip is called unconditionally — success and failure alike,
+// regardless of the configured selector or the circuit's current state —
+// mirroring how IncActive/DecActive already run unconditionally. "Recording is
+// unconditional; gating is conditional": a future early-return guard on this
+// call site looks like a reasonable simplification and is actively wrong,
+// because it is the only path that feeds a half-open trial's result back into
+// the circuit's decision. See ADR-0011 decision 9.
+type RoundTripObserver interface {
+	ObserveRoundTrip(b *backend.Backend, d time.Duration, success bool)
+}
+
+// latencyObserver feeds every round trip's duration into its backend's
+// EWMA latency estimate — the behavior the proxy hardcoded before ADR-0011
+// decision 9 generalized it into an observer fan-out. It ignores success: the
+// duration it is handed already encodes the failure penalty on the error path.
+type latencyObserver struct{}
+
+func (latencyObserver) ObserveRoundTrip(b *backend.Backend, d time.Duration, _ bool) {
+	b.RecordLatency(d)
+}
+
+var _ RoundTripObserver = latencyObserver{}
+
+// NewLatencyObserver returns the round trip observer that records each
+// duration into the serving backend's EWMA latency estimate (ADR-0010). main
+// registers it after constructing the Proxy, alongside the other observers;
+// see ADR-0011 decision 9.
+func NewLatencyObserver() RoundTripObserver {
+	return latencyObserver{}
+}
+
 // Proxy wraps net/http/httputil.ReverseProxy, delegating backend selection
 // to a balancer.Selector on each request and tracking ActiveConns around the
 // round trip. Implemented in S1.T6.
 //
 // Concurrency: the request path is stateless apart from the per-request
 // reqState carried in the request context and the atomics on *backend.Backend.
-// rp is built once in New and is safe for concurrent use.
+// rp is built once in New and is safe for concurrent use. observers are
+// appended to at construction time via RegisterObserver and only read
+// afterwards, so the request path needs no lock — see RegisterObserver.
 type Proxy struct {
-	reg    *backend.Registry
-	sel    balancer.Selector
-	rp     *httputil.ReverseProxy
-	logger *slog.Logger
+	reg       *backend.Registry
+	sel       balancer.Selector
+	rp        *httputil.ReverseProxy
+	logger    *slog.Logger
+	observers []RoundTripObserver
 }
 
 // New constructs a Proxy over reg using sel for backend selection.
@@ -98,6 +137,26 @@ func New(reg *backend.Registry, sel balancer.Selector) *Proxy {
 		ErrorHandler:   p.errorHandler,
 	}
 	return p
+}
+
+// RegisterObserver adds o to the set notified of every backend round trip.
+// It is additive: New(reg, sel)'s frozen two-argument signature is untouched.
+//
+// RegisterObserver must be called before the Proxy begins serving traffic —
+// observers are appended to a slice that ServeHTTP's goroutine reads without a
+// lock. This matches the intended wiring: main registers every observer at
+// construction time, before ListenAndServe.
+func (p *Proxy) RegisterObserver(o RoundTripObserver) {
+	p.observers = append(p.observers, o)
+}
+
+// observe fans a round trip's outcome out to every registered observer. It is
+// the single unconditional recording path for both terminal hooks. See
+// ADR-0011 decision 9.
+func (p *Proxy) observe(state *reqState, d time.Duration, success bool) {
+	for _, o := range p.observers {
+		o.ObserveRoundTrip(state.backend, d, success)
+	}
 }
 
 // ServeHTTP selects a backend, then proxies the request to it.
@@ -145,36 +204,38 @@ func (p *Proxy) director(r *http.Request) {
 	state.dispatchStart = time.Now()
 }
 
-// modifyResponse records the backend's status for logging, records the backend
-// round-trip latency for P2C-EWMA, and wraps the response body so the
-// active-connection slot is released when the client finishes consuming (or
-// abandons) the body. Decrementing here directly would signal "done" while a
-// streamed body is still being read. The actual decrement is once-guarded, so
-// ErrorHandler calling release too is safe.
+// modifyResponse records the backend's status for logging, fans the backend
+// round-trip outcome out to every registered observer, and wraps the response
+// body so the active-connection slot is released when the client finishes
+// consuming (or abandons) the body. Decrementing here directly would signal
+// "done" while a streamed body is still being read. The actual decrement is
+// once-guarded, so ErrorHandler calling release too is safe.
 //
-// RecordLatency runs unconditionally, regardless of the configured selector —
-// like IncActive/DecActive, it is not gated on the selector actually reading
-// it. See ADR-0010.
+// The fan-out runs unconditionally, regardless of the configured selector —
+// like IncActive/DecActive, it is not gated on any observer actually reading
+// it. success is "this response is not a server error": a 5xx still reached
+// the backend and produced a response, but is a failure signal for passive
+// detection and the circuit. See ADR-0010 and ADR-0011 decision 9.
 func (p *Proxy) modifyResponse(resp *http.Response) error {
 	state := stateFrom(resp.Request.Context())
 	if state == nil {
 		return nil
 	}
 	state.status = resp.StatusCode
-	state.backend.RecordLatency(time.Since(state.dispatchStart))
+	p.observe(state, time.Since(state.dispatchStart), resp.StatusCode < 500)
 	resp.Body = &releaseBody{ReadCloser: resp.Body, release: state.release}
 	return nil
 }
 
-// errorHandler runs when no response could be proxied. It records the fixed
-// failure penalty, releases the request's active-connection slot, logs the
-// cause (the canonical field vocabulary has no error field, so the cause is a
-// separate WARN line), and responds 502.
+// errorHandler runs when no response could be proxied. It fans the fixed
+// failure penalty out to every registered observer, releases the request's
+// active-connection slot, logs the cause (the canonical field vocabulary has
+// no error field, so the cause is a separate WARN line), and responds 502.
 func (p *Proxy) errorHandler(w http.ResponseWriter, r *http.Request, err error) {
 	attrs := []any{"err", err, "path", r.URL.Path}
 	if state := stateFrom(r.Context()); state != nil {
 		state.status = http.StatusBadGateway
-		state.backend.RecordLatency(p2cFailurePenalty)
+		p.observe(state, p2cFailurePenalty, false)
 		state.release()
 		attrs = append(attrs, "backend", state.backend.Name)
 	}

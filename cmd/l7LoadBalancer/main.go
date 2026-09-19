@@ -19,10 +19,11 @@ import (
 )
 
 // main is a thin wiring layer: load and validate config, build the registry,
-// pick a selector from the configured algorithm, wrap it in the proxy, and
-// serve. All selection, routing, and connection accounting lives in the
-// internal packages; see ADR-0002 for the interface placement this wiring
-// relies on.
+// pick a selector from the configured algorithm, wrap it in the proxy (with
+// its round-trip observers registered), and serve. All selection, routing, and
+// connection accounting lives in the internal packages; see ADR-0002 for the
+// interface placement this wiring relies on and ADR-0011 decision 9 for the
+// observer registration.
 //
 // The listen address comes from the config file (cfg.Listen), not a flag:
 // `listen` is part of the frozen YAML schema and config.Validate checks it is
@@ -65,7 +66,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:              cfg.Listen,
-		Handler:           proxy.New(reg, sel),
+		Handler:           newHandler(reg, sel),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
@@ -89,4 +90,17 @@ func main() {
 		os.Exit(1)
 	}
 	log.Info("shutdown complete")
+}
+
+// newHandler builds the proxy and registers the round-trip observers that
+// record every backend round trip. Registration happens here, at construction
+// time before the server starts, so the request path can read the observer
+// slice without a lock. Currently only latency recording is wired; Sprint 3's
+// passive-outlier detector and circuit breaker register here too as they land
+// (ADR-0011 decision 9). Observer registration is deliberately separate from
+// proxy.New, whose two-argument signature is frozen.
+func newHandler(reg *backend.Registry, sel balancer.Selector) http.Handler {
+	p := proxy.New(reg, sel)
+	p.RegisterObserver(proxy.NewLatencyObserver())
+	return p
 }

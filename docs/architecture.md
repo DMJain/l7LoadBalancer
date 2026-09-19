@@ -66,18 +66,19 @@ httputil.ReverseProxy.ServeHTTP
   │                      window, distinct from latency_ms (ADR-0010)
   ├─ Transport           stdlib default; dispatches to the backend
   │
-  ├─ ModifyResponse      records resp.StatusCode;
-  │                      records backend.RecordLatency(since dispatchStart)
-  │                      (unconditional, any selector — ADR-0010);
+  ├─ ModifyResponse      records resp.StatusCode; fans
+  │                      ObserveRoundTrip(since dispatchStart,
+  │                      success = status < 500) out to every registered
+  │                      RoundTripObserver (ADR-0011 decision 9);
   │                      wraps resp.Body in releaseBody
   │                        └─ releaseBody.Close()
   │                             └─ reqState.release()   (sync.Once)
   │                                  └─ backend.DecActive()
   │
-  ├─ ErrorHandler        records 502, records backend.RecordLatency(2s
-  │                      failure penalty — ADR-0010), calls
-  │                      reqState.release(), logs the transport error
-  │                      at WARN, writes 502
+  ├─ ErrorHandler        records 502; fans ObserveRoundTrip(false, 2s
+  │                      failure penalty) out to every registered
+  │                      RoundTripObserver; calls reqState.release(),
+  │                      logs the transport error at WARN, writes 502
   │
   └─ deferred logRequest emits one "request complete" slog line
                          (canonical fields) on every path
@@ -106,6 +107,16 @@ Lifecycle notes (full rationale in
    `remote_addr`, `path`) on the success, 503, 502, and abort paths. The 502
    path additionally logs the transport cause at WARN (the vocabulary has no
    `err` field).
+6. Both terminal hooks (`ModifyResponse`, `ErrorHandler`) fan every round
+   trip's outcome out to every registered `RoundTripObserver`, unconditionally
+   — including failures and, once the circuit breaker exists, requests to an
+   open-circuit backend. Recording is unconditional; gating is conditional.
+   Registration is additive (`Proxy.RegisterObserver`), so `New(reg, sel)`'s
+   signature stays frozen; latency recording is the first observer
+   (`NewLatencyObserver`), with passive outlier detection and the circuit
+   breaker to follow. See
+   [ADR-0011](adr/0011-health-passive-outlier-and-circuit-breaker-composition.md)
+   decision 9.
 
 ## Component map
 
