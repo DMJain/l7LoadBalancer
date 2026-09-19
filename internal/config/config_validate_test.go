@@ -131,10 +131,12 @@ func TestValidate(t *testing.T) {
 			errSubstr: "algorithm",
 		},
 		{
-			name:      "unimplemented algorithm p2c_ewma",
-			yaml:      "listen: \":8080\"\nalgorithm: \"p2c_ewma\"\nbackends:\n" + backendYAML("backend-a", "http://127.0.0.1:9001"),
-			wantErr:   true,
-			errSubstr: "algorithm",
+			name: "p2c_ewma is accepted",
+			yaml: "listen: \":8080\"\nalgorithm: \"p2c_ewma\"\nbackends:\n" + backendYAML("backend-a", "http://127.0.0.1:9001"),
+			check: func(t *testing.T, cfg *Config) {
+				t.Helper()
+				assert.Equal(t, AlgorithmP2CEWMA, cfg.Algorithm)
+			},
 		},
 		{
 			name: "consistent_hash is accepted",

@@ -14,6 +14,18 @@ import (
 	"github.com/DMJain/l7LoadBalancer/internal/balancer"
 )
 
+// p2cFailurePenalty is the latency recorded for a round trip that failed
+// before a response was received. A fixed penalty, not the real
+// time-to-failure: a backend failing fast (e.g. connection refused) would
+// otherwise record a near-zero latency and look attractively fast to
+// PowerOfTwoChoicesEWMA — the opposite of the intended effect. 2s comfortably
+// dominates the committed dummy-backend latencies (50/150/300ms) with headroom
+// because SLEEP_MS has no enforced ceiling. It is the fixed input to
+// RecordLatency — folded through the EWMA like any observation rather than
+// hard-setting the field, so repeated failures converge the estimate toward 2s.
+// See ADR-0010.
+const p2cFailurePenalty = 2 * time.Second
+
 // reqState is the per-request bookkeeping shared between ServeHTTP, Director,
 // ModifyResponse, and ErrorHandler.
 //
@@ -27,6 +39,16 @@ type reqState struct {
 	backend *backend.Backend
 	status  int
 	once    sync.Once
+
+	// dispatchStart is captured at the end of director(), just before the
+	// request is dispatched, and consumed in modifyResponse when the response
+	// headers arrive. Its window is the backend round trip only. It is
+	// deliberately NOT the `start` ServeHTTP captures for the "request
+	// complete" log line's latency_ms: that window also includes selection
+	// overhead and the full response-body copy to the client, so reusing one
+	// measurement for both would conflate backend speed with client consume
+	// time. See ADR-0010.
+	dispatchStart time.Time
 }
 
 // release drops this request's active-connection slot exactly once.
@@ -110,7 +132,9 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // director reads the backend chosen in ServeHTTP off the request context and
-// rewrites only the destination scheme and host. It never calls Select.
+// rewrites only the destination scheme and host. It never calls Select. It
+// also marks the start of the backend round trip for the latency recorded in
+// modifyResponse/errorHandler.
 func (p *Proxy) director(r *http.Request) {
 	state := stateFrom(r.Context())
 	if state == nil {
@@ -118,31 +142,39 @@ func (p *Proxy) director(r *http.Request) {
 	}
 	r.URL.Scheme = state.backend.URL.Scheme
 	r.URL.Host = state.backend.URL.Host
+	state.dispatchStart = time.Now()
 }
 
-// modifyResponse records the backend's status for logging and wraps the
-// response body so the active-connection slot is released when the client
-// finishes consuming (or abandons) the body. Decrementing here directly would
-// signal "done" while a streamed body is still being read. The actual
-// decrement is once-guarded, so ErrorHandler calling release too is safe.
+// modifyResponse records the backend's status for logging, records the backend
+// round-trip latency for P2C-EWMA, and wraps the response body so the
+// active-connection slot is released when the client finishes consuming (or
+// abandons) the body. Decrementing here directly would signal "done" while a
+// streamed body is still being read. The actual decrement is once-guarded, so
+// ErrorHandler calling release too is safe.
+//
+// RecordLatency runs unconditionally, regardless of the configured selector —
+// like IncActive/DecActive, it is not gated on the selector actually reading
+// it. See ADR-0010.
 func (p *Proxy) modifyResponse(resp *http.Response) error {
 	state := stateFrom(resp.Request.Context())
 	if state == nil {
 		return nil
 	}
 	state.status = resp.StatusCode
+	state.backend.RecordLatency(time.Since(state.dispatchStart))
 	resp.Body = &releaseBody{ReadCloser: resp.Body, release: state.release}
 	return nil
 }
 
-// errorHandler runs when no response could be proxied. It releases the
-// request's active-connection slot, logs the cause (the canonical field
-// vocabulary has no error field, so the cause is a separate WARN line), and
-// responds 502.
+// errorHandler runs when no response could be proxied. It records the fixed
+// failure penalty, releases the request's active-connection slot, logs the
+// cause (the canonical field vocabulary has no error field, so the cause is a
+// separate WARN line), and responds 502.
 func (p *Proxy) errorHandler(w http.ResponseWriter, r *http.Request, err error) {
 	attrs := []any{"err", err, "path", r.URL.Path}
 	if state := stateFrom(r.Context()); state != nil {
 		state.status = http.StatusBadGateway
+		state.backend.RecordLatency(p2cFailurePenalty)
 		state.release()
 		attrs = append(attrs, "backend", state.backend.Name)
 	}

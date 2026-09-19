@@ -71,7 +71,14 @@ bypass — are documented as inline code comments at their use sites instead.
    and negative values — so "sub-second" is a description of today's
    committed defaults, not a guaranteed margin; a future chaos configuration
    simulating a "legitimately slow but alive" backend in the 800–900ms range
-   must not collapse the distinction the penalty exists to preserve.
+   must not collapse the distinction the penalty exists to preserve. The
+   penalty is the fixed *input* to `RecordLatency`, not a hard overwrite of the
+   stored estimate: it is folded through the same EWMA as any observation, so
+   repeated failures converge the estimate toward 2s (roughly 1.3s after ten
+   consecutive failures, 1.75s after twenty) while a single transient failure
+   does not erase a backend's history. That is the behavior the Sprint 2 spec's
+   Implementation Decisions prescribe (`… calls state.backend.RecordLatency(p2cFailurePenalty)`);
+   "flat" describes the penalty input, not the resulting smoothed value.
 
 4. **Recording is unconditional, and the window measured is the backend
    round trip only.** `RecordLatency` is called on every request's backend
@@ -85,6 +92,32 @@ bypass — are documented as inline code comments at their use sites instead.
    reflects backend speed rather than how long the client took to consume a
    streamed body. That window is why `reqState` carries a second timestamp
    distinct from the log line's `start`; the two are not interchangeable.
+
+## Evidence
+
+### Load-skew property (checked in)
+
+`TestPowerOfTwoChoicesEWMAShiftsLoadToFasterBackend` seeds one fast backend
+(10ms) and three slow (500ms) across four healthy backends, then makes 4,000
+`Select` calls. Because P2C samples two of the four, the fast backend is drawn
+half the time and wins every comparison it appears in; each slow backend is
+drawn and compared against a slow peer the other times. One recorded run:
+
+| Backend | Selections | Share |
+|---|---|---|
+| backend-a (fast, 10ms) | **2,043** | 51.1% |
+| backend-b (slow, 500ms) | 671 | 16.8% |
+| backend-c (slow, 500ms) | 647 | 16.2% |
+| backend-d (slow, 500ms) | 639 | 16.0% |
+
+The test asserts the fast backend lands near half the requests
+(`InDelta(2000, ±400)`) and receives more than twice the busiest slow
+backend's share. `TestPowerOfTwoChoicesEWMAPrefersFasterOfTwo` pins the
+two-backend case, where both backends are always sampled and the faster one is
+therefore chosen on every call. As with ADR-0009's hot-key result, these are
+this repository's own measurements on a deterministic fixture; the generator
+uses `math/rand/v2`'s global source, so the exact split varies run to run while
+the property does not.
 
 ## Consequences
 
@@ -110,6 +143,12 @@ bypass — are documented as inline code comments at their use sites instead.
 - Neutral: a never-recorded backend reads zero and therefore tends to win its
   first comparisons; the effect is bounded to one request per backend and
   self-corrects.
+- Neutral: recording on `errorHandler` is unconditional, so a client
+  cancellation that aborts the round trip also records the penalty even though
+  the backend is not at fault. Distinguishing cancellation is deliberately out
+  of scope here (Sprint 4 owns client-cancellation handling); the spec records
+  the errorHandler path unconditionally, and any exclusion belongs with the
+  Sprint 4 lifecycle work rather than as an unreviewed branch here.
 
 ## Alternatives considered
 

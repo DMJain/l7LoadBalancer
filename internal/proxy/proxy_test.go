@@ -236,6 +236,44 @@ func (s errorSelector) Select(context.Context, *http.Request) (*backend.Backend,
 	return nil, s.err
 }
 
+// TestProxyRecordsRoundTripLatencyOnSuccess proves the proxy records a real,
+// non-zero, backend-round-trip-scoped latency on the backend that served the
+// request — and only on that backend — even though the configured selector
+// (RoundRobin) never reads it.
+func TestProxyRecordsRoundTripLatencyOnSuccess(t *testing.T) {
+	serving := startBackend(t, "backend-a")
+	reg := registryFrom(t,
+		backendEntry{"backend-a", serving.URL},
+		backendEntry{"backend-b", "http://127.0.0.1:1"},
+	)
+	reg.All()[1].SetHealthy(false)
+
+	p := New(reg, balancer.NewRoundRobin(reg))
+
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	assert.Positive(t, reg.All()[0].EWMALatency(),
+		"the backend that served the request must record a real round-trip latency")
+	assert.Zero(t, reg.All()[1].EWMALatency(),
+		"a backend that did not serve the request must not record a latency")
+}
+
+// TestProxyRecordsPenaltyOnBackendFailure proves the failure path records the
+// fixed penalty rather than the real (much shorter) elapsed time-to-failure.
+func TestProxyRecordsPenaltyOnBackendFailure(t *testing.T) {
+	reg := registryFrom(t, backendEntry{"backend-a", deadBackendURL(t)})
+	p := New(reg, balancer.NewRoundRobin(reg))
+
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	require.Equal(t, http.StatusBadGateway, rec.Code)
+
+	assert.Equal(t, p2cFailurePenalty, reg.All()[0].EWMALatency(),
+		"a failed round trip must record the fixed penalty, not the real elapsed time")
+}
+
 // logRecord is one parsed JSON slog line.
 type logRecord map[string]any
 

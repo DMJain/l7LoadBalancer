@@ -3,6 +3,7 @@ package backend
 import (
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -61,6 +62,43 @@ func TestBackendConcurrentActiveConns(t *testing.T) {
 	}
 	wg.Wait()
 	assert.Equal(t, int64(goroutines), b.ActiveConns(), "interleaved inc/dec must net out")
+}
+
+func TestBackendLatencyRecordAndEWMA(t *testing.T) {
+	b := &Backend{Name: "backend-a"}
+
+	assert.Zero(t, b.EWMALatency(), "a never-recorded backend reads zero")
+
+	b.RecordLatency(100 * time.Millisecond)
+	assert.Equal(t, 100*time.Millisecond, b.EWMALatency(),
+		"the first sample must be stored directly, not blended from a zero baseline")
+
+	b.RecordLatency(200 * time.Millisecond)
+	assert.InDelta(t, 110*time.Millisecond, b.EWMALatency(), float64(time.Millisecond),
+		"second sample blends α·observed + (1-α)·previous with α=0.1")
+
+	b.RecordLatency(0)
+	assert.InDelta(t, 99*time.Millisecond, b.EWMALatency(), float64(time.Millisecond),
+		"a zero observation blends toward zero rather than being treated as cold again")
+}
+
+func TestBackendConcurrentRecordLatency(t *testing.T) {
+	const goroutines = 100
+	b := &Backend{Name: "backend-a"}
+
+	var wg sync.WaitGroup
+	for i := 0; i < goroutines; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			b.RecordLatency(time.Millisecond)
+			_ = b.EWMALatency()
+		}()
+	}
+	wg.Wait()
+
+	assert.InDelta(t, time.Millisecond, b.EWMALatency(), float64(time.Microsecond),
+		"recording the same sample concurrently must converge to that value, race-free")
 }
 
 func TestBackendConcurrentHealthToggling(t *testing.T) {

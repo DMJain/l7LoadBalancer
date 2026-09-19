@@ -129,8 +129,8 @@ As-built package status:
 |---|---|---|
 | `cmd/l7LoadBalancer` | Sprint 1 | Thin wiring layer: `config.Load`/`Validate` → `backend.NewRegistry` → `balancer.NewFromConfig` → `proxy.New` → `http.Server`; SIGINT/SIGTERM graceful shutdown. Fatal + exit 1 on any startup failure (no silent fallback). |
 | `internal/proxy` | Sprint 1 | Wraps `httputil.ReverseProxy`; owns the request lifecycle, 503/502 short-circuits, active-connection accounting, and the per-request log line. |
-| `internal/balancer` | Sprint 1–2 | `Selector` interface + `ErrNoHealthyBackends` (the only exported sentinel), `RoundRobin`, `LeastConnections`, and (Sprint 2) `ConsistentHashBoundedLoads` over an unexported ring, plus the `NewFromConfig` factory. `PowerOfTwoChoicesEWMA` is still a stub. |
-| `internal/backend` | Sprint 1 | `Backend` (identity + unexported `atomic` health/active state, methods-only access) and `Registry` (ordered, immutable in Sprint 1). |
+| `internal/balancer` | Sprint 1–2 | `Selector` interface + `ErrNoHealthyBackends` (the only exported sentinel), `RoundRobin`, `LeastConnections`, `ConsistentHashBoundedLoads` over an unexported ring, and `PowerOfTwoChoicesEWMA` over per-backend EWMA latency, plus the `NewFromConfig` factory. |
+| `internal/backend` | Sprint 1–2 | `Backend` (identity + unexported `atomic` health/active/EWMA-latency state, methods-only access) and `Registry` (ordered, immutable until Sprint 4's hot-reload). |
 | `internal/config` | Sprint 1 | Strict YAML loading (`KnownFields(true)`) and fail-fast validation; algorithm identifier constants. Immutable after init in Sprint 1. |
 | `internal/logger` | Sprint 1 | `log/slog` JSON setup and the frozen canonical field vocabulary. Leaf. |
 | `internal/metrics` | Sprint 3 (stub) | Prometheus instruments. Names/labels reserved in `internal/metrics/doc.go`. |
@@ -156,8 +156,9 @@ which sync primitive) lives in
 - The config-string → constant → selector-type mapping is the **algorithm
   identifier table** in
   [`docs/design/sprint-1-contracts.md`](design/sprint-1-contracts.md#algorithm-identifier-table).
-  `config.Validate` accepts only the implemented set (Sprint 1:
-  `round_robin`, `least_conn`; Sprint 2 adds `consistent_hash`) — see
+  `config.Validate` accepts only the implemented set (all four Sprint
+  1–2 identifiers: `round_robin`, `least_conn`, `consistent_hash`,
+  `p2c_ewma`) — see
   [ADR-0004](adr/0004-reject-unimplemented-algorithms-in-validate.md).
 - Every selector carries a compile-time assertion
   `var _ Selector = (*X)(nil)`.
@@ -179,6 +180,14 @@ prove that property in the checked-in hot-key test; ε, the load metric,
 capacity formula, and the evidence are recorded in
 [ADR-0009](adr/0009-consistent-hash-bounded-loads-capacity-and-evidence.md).
 
+`p2c_ewma` maps to `PowerOfTwoChoicesEWMA`: it snapshots the healthy set,
+draws two distinct backends, and returns the one with the lower
+`Backend.EWMALatency()`. The proxy records that latency on every request's
+backend round trip — `director()` to `modifyResponse` — unconditionally and
+regardless of the configured selector, with failures recording a fixed 2s
+penalty. The latency state, cold-start rule, and penalty are recorded in
+[ADR-0010](adr/0010-p2c-ewma-backend-latency-state-cold-start-and-failure-penalty.md).
+
 ## Decision index
 
 All non-trivial decisions are recorded in `docs/adr/`. Accepted:
@@ -194,13 +203,13 @@ All non-trivial decisions are recorded in `docs/adr/`. Accepted:
 | [0007](adr/0007-proxy-request-lifecycle-and-exactly-once-decrement.md) | Proxy request lifecycle and exactly-once active-connection decrement | Accepted |
 | [0008](adr/0008-consistent-hash-ring-pipeline-and-vnode-layout.md) | Consistent-hash ring hash pipeline, vnode key order, and vnode count | Accepted |
 | [0009](adr/0009-consistent-hash-bounded-loads-capacity-and-evidence.md) | Consistent-hash bounded loads: epsilon, load metric, capacity formula, and hot-key evidence | Accepted |
+| [0010](adr/0010-p2c-ewma-backend-latency-state-cold-start-and-failure-penalty.md) | P2C-EWMA: Backend-owned latency state, cold-start semantics, and the failure penalty | Accepted |
 
 Tracked but not yet written (each decides in the sprint that delivers the
 feature):
 
 | Sprint | Decision |
 |--------|----------|
-| 2 | Why P2C-EWMA over least-connections for latency-skewed workloads |
 | 3 | Circuit breaker concurrency model |
 | 4 | Reload architecture: atomic pointer swap vs SO_REUSEPORT |
 | 4 | Deployment target decision (deferred from Sprint 1 per ADR-0005) |
@@ -279,9 +288,6 @@ Read those two ADRs alongside the contracts doc's
 A future agent should not assume any of the following exist. Each names its
 owning sprint:
 
-- **P2C-EWMA selector** — Sprint 2. (A stub with a `panic("not implemented")`
-  body lives in `internal/balancer/p2c_ewma.go`; `consistent_hash` landed in
-  S2.T2 as `ConsistentHashBoundedLoads`.)
 - **Health checking (active + passive)** — Sprint 3.
 - **Circuit breaking** — Sprint 3.
 - **Prometheus metrics** — Sprint 3.

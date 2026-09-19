@@ -219,14 +219,11 @@ internal/circuit  — depends on backend (Sprint 3)
 - **Why bounded-loads over naive consistent hashing?** A hot key pins traffic to whichever backend owns its ring position. Bounded-loads keeps the sticky-routing property while ensuring no backend exceeds `(1 + ε)` times the healthy-set average. The evidence (fixed-seed comparative test plus a 60-seed offline reproducer) is in ADR-0009.
 - **Decisions recorded in ADR-0009**: ε = 0.25 (constant, not config); load = `ActiveConns()` over healthy; capacity `max(1, ceil(avg * 1.25))` with `<=` admission; one-pass ring walk with a defensive least-loaded fallback; hash key = `RemoteAddr` port-stripped (ADR-0008). `naiveConsistentHash` (ADR-0008) is the unwired comparator the evidence measures against.
 
-**PowerOfTwoChoicesEWMA** (Sprint 2):
-- **Algorithm**: Pick two random healthy backends; choose the one with lower EWMA-tracked latency. Latency updated atomically on each response.
-- **Why P2C over LeastConnections when latency is skewed?** LeastConnections treats all connections as equal; P2C-EWMA favors backends that are actually responding faster, naturally shifting load away from degraded-but-not-dead backends. ADR required (Sprint 2).
-- **EWMA smoothing factor** (α): determines how quickly the latency estimate adapts. Too high = noisy, too low = slow to react. Document the choice in the ADR.
-- **Design decisions to document in ADR**:
-  - EWMA α value.
-  - What to do when fewer than 2 backends are healthy (fallback to only choice, or error?).
-  - Atomic latency representation (int64 nanoseconds? fixed-point?).
+**PowerOfTwoChoicesEWMA** (Sprint 2 — as built, ADR-0010):
+- **Algorithm**: `Select` snapshots `Registry.Healthy()`; zero healthy → `ErrNoHealthyBackends`; exactly one → returned directly with no draw; two or more → two distinct indices drawn via `math/rand/v2` package-level functions, lower `Backend.EWMALatency()` wins (ties broken arbitrarily). No session affinity and no hash key, unlike `consistent_hash`.
+- **Why P2C over LeastConnections when latency is skewed?** LeastConnections treats all connections as equal; a slow-but-healthy backend looks identical to a fast one until its queue builds. P2C-EWMA compares two sampled backends' EWMA-tracked latency and shifts traffic away from a degraded-but-not-dead backend. Two random samples give exponentially better balance than one (Mitzenmacher, 2001).
+- **Decisions recorded in ADR-0010**: `Backend`-owned latency state (`RecordLatency`/`EWMALatency`, unexported `atomic.Int64` nanoseconds, amending ADR-0002 decision 5 symmetric with ADR-0006); cold-start first sample sets directly (no zero-blend); failures record a fixed `2 * time.Second` penalty rather than real time-to-failure. α = 0.1, the CAS retry loop, the `math/rand/v2` source, and the sole-healthy bypass are inline comments, judged not to clear the ADR bar.
+- **Latency window**: recorded from `director()` (just before dispatch) to `modifyResponse` (response headers) — the backend round trip only, deliberately distinct from the `latency_ms` log field's full client-facing window. `RecordLatency` runs unconditionally, success and failure, regardless of configured selector, mirroring `IncActive`/`DecActive`.
 
 #### `internal/proxy` — Reverse proxy handler
 
@@ -312,7 +309,7 @@ All non-trivial decisions must have an ADR. Current ADRs:
 | [0007](docs/adr/0007-proxy-request-lifecycle-and-exactly-once-decrement.md) | Proxy request lifecycle and exactly-once active-connection decrement | Accepted |
 | [0008](docs/adr/0008-consistent-hash-ring-pipeline-and-vnode-layout.md) | Consistent-hash ring hash pipeline, vnode key order, and vnode count | Accepted |
 | [0009](docs/adr/0009-consistent-hash-bounded-loads-capacity-and-evidence.md) | Consistent-hash bounded loads: epsilon, load metric, capacity formula, and hot-key evidence | Accepted |
-| TBD (Sprint 2) | Why P2C-EWMA over least-connections for latency-skewed workloads | — |
+| [0010](docs/adr/0010-p2c-ewma-backend-latency-state-cold-start-and-failure-penalty.md) | P2C-EWMA: Backend-owned latency state, cold-start semantics, and the failure penalty | Accepted |
 | TBD (Sprint 3) | Circuit breaker concurrency model | — |
 | TBD (Sprint 4) | Reload architecture: atomic pointer swap vs SO_REUSEPORT | — |
 | TBD (Sprint 4) | Deployment target decision (deferred from Sprint 1 per ADR-0005) | — |
@@ -337,6 +334,7 @@ All non-trivial decisions must have an ADR. Current ADRs:
 15. **Proxy per-request state + `sync.Once` release** — ADR-0007. `ServeHTTP` selects, `IncActive`s, and attaches a `reqState` (backend, status, once) to the request context; both the `ModifyResponse` body-wrapper `Close()` and `ErrorHandler` call `reqState.release()`, so `DecActive` runs exactly once. Status is read from `resp.StatusCode` (no `ResponseWriter` wrapper, preserving flush/hijack), and one "request complete" line is logged per request via a deferred call in `ServeHTTP`.
 16. **Consistent-hash ring: FNV-1a-64 → `fmix64`, `index:name` vnode keys, 150 vnodes, `iter.Seq` walk** — ADR-0008. The `fmix64` finalizer prevents a /24 subnet collapsing onto a minority of backends (raw FNV maps 256 same-subnet addresses onto 3 of 4 backends); index-first vnode keys avoid correlated vnode hashes in the pre-finalizer pipeline, and are retained post-finalizer as the design-record choice and defense in depth, not because the ordering is load-bearing then. The ring is immutable and placement-only, and its ordered candidate walk is an `iter.Seq[*backend.Backend]` so each selector's skip logic stays inline.
 17. **Bounded loads: ε = 0.25, load = `ActiveConns()` averaged over healthy, capacity = `max(1, ceil(avg × 1.25))`, `<=` admission** — ADR-0009. `consistent_hash` walks the ADR-0008 ring, admitting the first candidate that is healthy and within capacity; the exhaustion fallback (least-loaded candidate seen) is unreachable given the floor and is defensive only. `ErrNoHealthyBackends` remains the sole error condition. The checked-in fixed-seed hot-key test (naive 3,996 vs bounded 3,126 of 10,000) and the `offline`-tagged 60-seed reproducer give same-repo evidence, with the fallback never firing across all seeds.
+18. **P2C-EWMA: `Backend`-owned EWMA latency, cold-start direct-set, fixed 2s failure penalty** — ADR-0010. `Backend` gains `RecordLatency`/`EWMALatency` behind an unexported `atomic.Int64` nanoseconds field (method-only access, amending ADR-0002 again, symmetric with ADR-0006); the first-ever sample is stored directly rather than blended from zero; a failed round trip records a fixed `2 * time.Second` (not real time-to-failure, which would make a fast failure look attractively fast); `p2c_ewma` is wired into `config.implementedAlgorithms` and `NewFromConfig`. The proxy records the backend round trip only (`director()` → `modifyResponse`), unconditionally and regardless of selector. α = 0.1, the CAS loop, the `math/rand/v2` source, and the sole-healthy bypass are inline comments.
 
 ---
 

@@ -51,3 +51,15 @@ across healthy backends and ε = 0.25 (Mirrokni-Thorup-Zadimoghaddam's cited
 production value). The floor of 1 exists because an idle system has
 `avg_load = 0`, which would otherwise fail every backend's very first request.
 _Avoid_: cap used without the floor, threshold
+
+**EWMA latency** (p2c-ewma context):
+A backend's exponentially weighted moving average of recent round-trip
+durations, `latency_new = α·observed + (1-α)·latency_old` with α = 0.1,
+maintained by `Backend.RecordLatency` and read by `PowerOfTwoChoicesEWMA`. It
+measures the backend round trip only — from just before dispatch to the
+response headers — deliberately not the client-facing request duration the
+`latency_ms` log field measures. A failed round trip records a fixed 2s
+penalty rather than the real time-to-failure, so a fast failure cannot look
+attractively fast. The first-ever sample is stored directly rather than blended
+from a zero baseline. See ADR-0010.
+_Avoid_: latency (unqualified), response time, EWMA alone
