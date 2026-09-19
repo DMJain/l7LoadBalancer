@@ -206,7 +206,18 @@ Scoped in `.scratch/s2-t1-t2-consistent-hash-bounded-loads/` as one spec plus th
   - Acceptance: header names Sprints 1–2 as the reference scope; diagram shows `reqState{backend, status, once, dispatchStart}` and the `RecordLatency` calls at `Director`/`ModifyResponse`/`ErrorHandler`; deviations audit records four Sprint 2 items (the one-planned-ADR-to-three-per-task-ADRs split, the S2.T1 ticket split, the MILESTONES evidence/ADR bullets folded into S2.T2/T3 with owner ratification, and this task's own ad-hoc addition — Sprint 2 planned no retro); the session log states the ADR-sweep result explicitly rather than silently skipping the check; docs-only, no code changes.
   - Test approach: none — docs-only (AGENTS.md TDD exception).
 
-## Sprint 3, 4, 5
+## Sprint 3 — Resilience & Observability
+
+Scoped in `.scratch/s3-t1-t3-health-passive-circuit/` as one spec plus six implementation tickets; ADR-0011 composes the three subsystems (active health checks, passive outlier detection, per-backend circuit breaker) and splits the work into three mechanical prefactors (issues 01–03) that unblock three otherwise-independent subsystem tickets (issues 04–06) to be built in parallel. PROGRESS tracks the finer-grained tickets so each closes independently.
+
+- [IN_PROGRESS] S3.T0.1 — Split `Backend.SetHealthy` into `MarkHealthy`/`MarkUnhealthy` (issue 01) (opencode, started 2026-09-19T21:14:35Z, split the single-bool setter into two named methods so the active/passive recovery asymmetry from ADR-0011 decision 2 is legible at every call site; mechanical rename, no behavior change)
+  - Goal: remove `Backend.SetHealthy(bool)` and add `Backend.MarkHealthy()` / `Backend.MarkUnhealthy()` over the same `atomic.Bool`, then update every caller (S1.T8's cross-selector health-transition tests included), so S3.T1 and S3.T2 can drive health transitions by intent rather than by bool argument.
+  - Files: `internal/backend/backend.go`, `internal/backend/registry.go`, `internal/backend/backend_test.go`, `internal/backend/registry_test.go`, `internal/balancer/roundrobin_test.go`, `internal/balancer/leastconn_test.go`, `internal/balancer/selector_test.go`, `internal/balancer/naive_consistent_hash_test.go`, `internal/balancer/consistent_hash_test.go`, `internal/balancer/p2c_ewma_test.go`, `internal/proxy/proxy_test.go`, `AGENTS.md`, `docs/architecture.md`
+  - Depends on: none
+  - Acceptance: `SetHealthy` gone; `MarkHealthy()`/`MarkUnhealthy()` added over the same field; every caller updated; no behavior change; `make test` and `make test-race` pass unchanged; PROGRESS and the issue's boxes updated. Decision already recorded in ADR-0011 decision 2 (amending ADR-0006) — no new ADR.
+  - Test approach: mechanical translation of the existing direct-method tests to the new names, with explicit `MarkUnhealthy`→unhealthy and `MarkHealthy`→healthy assertions; no new behavior to test.
+
+## Sprint 4, 5
 
 See `MILESTONES.md`. Tasks added per sprint.
 
