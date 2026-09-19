@@ -63,3 +63,30 @@ penalty rather than the real time-to-failure, so a fast failure cannot look
 attractively fast. The first-ever sample is stored directly rather than blended
 from a zero baseline. See ADR-0010.
 _Avoid_: latency (unqualified), response time, EWMA alone
+
+**Probe** (active health check context):
+A single out-of-band GET issued by the health checker to a backend's
+configured URL (not the request-serving path — no separate health endpoint
+is configured). Only a 2xx response counts as success; 3xx is treated as a
+failure because `httputil.ReverseProxy` forwards redirects verbatim to
+clients rather than following them, so a redirecting backend is unusable
+even though it is "up."
+_Avoid_: health check (the subsystem), ping
+
+**Selectable** (Sprint 3 context):
+A backend eligible for routing right now: healthy (per active/passive
+detection) *and* its circuit is not open. Distinct from `IsHealthy()`,
+which reflects only the active/passive signal and says nothing about
+circuit state. `Registry.Selectable()` is what every selector iterates;
+`IsHealthy()` stays the narrower, honest name for the raw signal. See
+ADR-0011.
+_Avoid_: healthy (as a synonym once circuit state exists), available
+
+**Trial** (circuit-breaker context):
+The single request a half-open circuit admits to decide whether it
+returns to Closed (trial succeeds) or back to Open (trial fails). Not a
+synthetic probe — it is whatever real request the selector happens to
+route to the backend next while half-open. Admission is enforced by the
+breaker's own `Allow()` gate, not by pool membership: a half-open backend
+stays fully `Selectable()`. See ADR-0011.
+_Avoid_: probe (reserved for the active health-check context), health check
