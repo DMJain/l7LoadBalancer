@@ -165,14 +165,15 @@ internal/circuit  — depends on backend (Sprint 3)
 
 - **`Backend` struct**:
   - Exported: `Name string`, `URL *url.URL`.
-  - Unexported (ADR-0002 decision 5): `healthy atomic.Bool`, `active atomic.Int64`.
-  - Methods: `IsHealthy() bool`, `MarkHealthy()`, `MarkUnhealthy()` (ADR-0011 decision 2), `IncActive()`, `DecActive()`, `ActiveConns() int64`.
+  - Unexported (ADR-0002 decision 5): `healthy atomic.Bool`, `active atomic.Int64`, `latencyEWMA atomic.Int64` (ADR-0010), and the circuit snapshot `circuit atomic.Pointer[circuitSnapshot]` (ADR-0012).
+  - Methods: `IsHealthy() bool`, `MarkHealthy()`, `MarkUnhealthy()` (ADR-0011 decision 2), `IncActive()`, `DecActive()`, `ActiveConns() int64`, `RecordLatency`/`EWMALatency` (ADR-0010), and `CircuitOpen`/`CircuitAllow`/`CircuitSuccess`/`CircuitFailure` (ADR-0012).
   - **Why unexported fields?** Callers in `balancer` and `proxy` access state through methods. Sprint 3 can replace `atomic.Bool` with a richer health-state enum without touching any caller. Compile-time enforcement: you literally can't access the field from outside the package.
 
 - **`Registry` struct**:
   - `NewRegistry(cfgs []config.BackendConfig) (*Registry, error)` — builds backends from validated config.
   - `All() []*Backend` — fresh slice per call. Safe to iterate concurrently.
-  - `Healthy() []*Backend` — fresh slice of healthy backends per call.
+  - `Selectable() []*Backend` — fresh slice of backends eligible for routing per call: `IsHealthy() && circuit-not-open` (renamed from `Healthy()` in S3.T3; see ADR-0011 decision 1 and ADR-0012).
+  - `SetCircuitGate(CircuitGate)` / `Allow(b) bool` — the registry-mediated circuit gate (`CircuitGate` is a consumer-defined interface in `backend`, implemented by `circuit.Breaker`). `SetCircuitGate` runs once before serving; `Allow` is the proxy's pre-dispatch admission check. See ADR-0012.
   - **Sprint 1**: immutable after construction. **Sprint 4**: `atomic.Pointer` swap for hot-reload.
 
 - **Concurrency model**:
@@ -181,7 +182,7 @@ internal/circuit  — depends on backend (Sprint 3)
   |-------|--------|---------|----------------|
   | `Backend.healthy` | Health checker (Sprint 3); `NewRegistry` (Sprint 1) | Selectors via `IsHealthy()`, proxy, metrics | `atomic.Bool` |
   | `Backend.active` | Proxy: `IncActive()` before dispatch, `DecActive()` on body `Close()` | `LeastConnections` via `ActiveConns()`, metrics | `atomic.Int64` |
-  | Registry backend set | `NewRegistry` at construction | `All()`, `Healthy()`, all selectors | Immutable (Sprint 1) / `atomic.Pointer` swap (Sprint 4) |
+  | Registry backend set | `NewRegistry` at construction | `All()`, `Selectable()`, all selectors | Immutable (Sprint 1) / `atomic.Pointer` swap (Sprint 4) |
 
 #### `internal/balancer` — Selector interface and implementations
 
@@ -202,12 +203,12 @@ internal/circuit  — depends on backend (Sprint 3)
 ##### Sprint 1 selectors
 
 **RoundRobin** (S1.T4):
-- **Algorithm**: Rotate across `Registry.Healthy()` using an atomic counter (`atomic.Uint64`). No mutex — lock-free.
+- **Algorithm**: Rotate across `Registry.Selectable()` using an atomic counter (`atomic.Uint64`). No mutex — lock-free.
 - **Why atomic counter over mutex?** Round-robin rotation is a single increment; `atomic.AddUint64` is cheaper than `sync.Mutex.Lock/Unlock` and cannot deadlock. The counter value is never "stale" in a meaningful way — if two goroutines race, the result is still a valid round-robin rotation.
 - Compile-time assertion: `var _ Selector = (*RoundRobin)(nil)`.
 
 **LeastConnections** (S1.T5):
-- **Algorithm**: Scan `Registry.Healthy()`, pick the backend with the lowest `ActiveConns()`. Ties broken by registry order (first-wins).
+- **Algorithm**: Scan `Registry.Selectable()`, pick the backend with the lowest `ActiveConns()`. Ties broken by registry order (first-wins).
 - **Why deterministic tie-breaking?** Reproducible tests. If ties were broken randomly, assertions on "which backend was chosen" would flake.
 - **Reads `ActiveConns` atomically; does not mutate it.** Mutation is the proxy's job (S1.T6). This separation of concerns means the selector is stateless with respect to connection tracking.
 - Compile-time assertion: `var _ Selector = (*LeastConnections)(nil)`.
@@ -220,7 +221,7 @@ internal/circuit  — depends on backend (Sprint 3)
 - **Decisions recorded in ADR-0009**: ε = 0.25 (constant, not config); load = `ActiveConns()` over healthy; capacity `max(1, ceil(avg * 1.25))` with `<=` admission; one-pass ring walk with a defensive least-loaded fallback; hash key = `RemoteAddr` port-stripped (ADR-0008). `naiveConsistentHash` (ADR-0008) is the unwired comparator the evidence measures against.
 
 **PowerOfTwoChoicesEWMA** (Sprint 2 — as built, ADR-0010):
-- **Algorithm**: `Select` snapshots `Registry.Healthy()`; zero healthy → `ErrNoHealthyBackends`; exactly one → returned directly with no draw; two or more → two distinct indices drawn via `math/rand/v2` package-level functions, lower `Backend.EWMALatency()` wins (ties broken arbitrarily). No session affinity and no hash key, unlike `consistent_hash`.
+- **Algorithm**: `Select` snapshots `Registry.Selectable()`; zero healthy → `ErrNoHealthyBackends`; exactly one → returned directly with no draw; two or more → two distinct indices drawn via `math/rand/v2` package-level functions, lower `Backend.EWMALatency()` wins (ties broken arbitrarily). No session affinity and no hash key, unlike `consistent_hash`.
 - **Why P2C over LeastConnections when latency is skewed?** LeastConnections treats all connections as equal; a slow-but-healthy backend looks identical to a fast one until its queue builds. P2C-EWMA compares two sampled backends' EWMA-tracked latency and shifts traffic away from a degraded-but-not-dead backend. Two random samples give exponentially better balance than one (Mitzenmacher, 2001).
 - **Decisions recorded in ADR-0010**: `Backend`-owned latency state (`RecordLatency`/`EWMALatency`, unexported `atomic.Int64` nanoseconds, amending ADR-0002 decision 5 symmetric with ADR-0006); cold-start first sample sets directly (no zero-blend); failures record a fixed `2 * time.Second` penalty rather than real time-to-failure. α = 0.1, the CAS retry loop, the `math/rand/v2` source, and the sole-healthy bypass are inline comments, judged not to clear the ADR bar.
 - **Latency window**: recorded from `director()` (just before dispatch) to `modifyResponse` (response headers) — the backend round trip only, deliberately distinct from the `latency_ms` log field's full client-facing window. `RecordLatency` runs unconditionally, success and failure, regardless of configured selector, mirroring `IncActive`/`DecActive`.
@@ -233,11 +234,12 @@ internal/circuit  — depends on backend (Sprint 3)
 - **Request lifecycle**:
   1. `ServeHTTP` calls `sel.Select(ctx, r)`.
   2. If `ErrNoHealthyBackends` → respond 503 immediately.
-  3. Otherwise, `IncActive()` on the chosen backend.
-  4. `Director` rewrites `req.URL.Scheme` and `req.URL.Host`.
-  5. `ReverseProxy` dispatches the request.
-  6. `ModifyResponse` wraps `resp.Body` with a `Close()` that calls `DecActive()` **exactly once**.
-  7. `ErrorHandler` also decrements if the backend fails mid-response.
+  3. `Registry.Allow(b)` gates the dispatch (circuit breaker, ADR-0012); a denial responds 503 before `IncActive()`, so active-connection accounting is never touched.
+  4. Otherwise, `IncActive()` on the chosen backend.
+  5. `Director` rewrites `req.URL.Scheme` and `req.URL.Host`.
+  6. `ReverseProxy` dispatches the request.
+  7. `ModifyResponse` wraps `resp.Body` with a `Close()` that calls `DecActive()` **exactly once**.
+  8. `ErrorHandler` also decrements if the backend fails mid-response.
 - **Why decrement in body `Close()` and not in `ModifyResponse` directly?**
   The response body may be streamed. If we decrement in `ModifyResponse`, we signal "request done" while the body is still being read. The body wrapper ensures we decrement only after the client has consumed (or abandoned) the response. This is critical for `LeastConnections` accuracy.
 - **ActiveConns leak prevention**: Test with 100 concurrent in-flight requests; assert `ActiveConns` returns to 0 within a drain window.
@@ -265,11 +267,12 @@ internal/circuit  — depends on backend (Sprint 3)
 #### `internal/circuit` — Circuit breaker (Sprint 3)
 
 - **State machine**: Closed → Open → Half-Open → Closed.
-  - **Closed**: All requests pass through. Track failure count.
-  - **Open**: All requests immediately rejected (503). Timer-based cooldown.
-  - **Half-Open**: Allow one trial request. If it succeeds → Closed. If it fails → Open again.
+  - **Closed**: All requests pass through. Track a **consecutive** failure count — any success resets it to zero.
+  - **Open**: All requests denied (503). The circuit is `Open` until the configured `circuit.cooldown` has elapsed; there is no timer or goroutine, the promotion is evaluated lazily on the next read.
+  - **Half-Open**: Exactly one trial request is admitted (`Allow()` CASes the trial slot). A single success → Closed; a single failure → Open again, with no inner threshold.
 - **Why per-backend?** A single global circuit breaker would trip when any backend fails, taking down routing to all backends. Per-backend isolation means one failing backend doesn't affect the others.
-- **Concurrency**: Likely mutex, not atomic — closed→open→half-open transitions are compound (check-then-act). Decide in Sprint 3 ADR.
+- **State and policy split**: the state (enum, consecutive-failure count, opened-at timestamp, half-open-trial flag) lives on `Backend` as one immutable snapshot behind `atomic.Pointer`, replaced by CAS; the policy (failure-to-open threshold constant, config cooldown) lives in `internal/circuit.Breaker`, which passes both into `Backend`'s methods. `circuit` imports `backend`, never the reverse. `Backend.{CircuitOpen,CircuitAllow,CircuitSuccess,CircuitFailure}` are the state API; `CircuitGate` is defined in `backend` and implemented by `circuit.Breaker` (consumer-defined interface, keeping the graph acyclic). See ADR-0011 and ADR-0012.
+- **Admission**: the proxy calls `Registry.Allow(b)` after `Select()` and before `IncActive()`; a denial is answered 503 without dispatching or touching active-connection accounting. `Registry.Selectable()` excludes an `Open` circuit but includes a `Half-Open` one, so a trial is a real selected request, not a synthetic probe.
 
 #### `cmd/l7LoadBalancer/main.go` — Entry point
 
@@ -311,6 +314,7 @@ All non-trivial decisions must have an ADR. Current ADRs:
 | [0009](docs/adr/0009-consistent-hash-bounded-loads-capacity-and-evidence.md) | Consistent-hash bounded loads: epsilon, load metric, capacity formula, and hot-key evidence | Accepted |
 | [0010](docs/adr/0010-p2c-ewma-backend-latency-state-cold-start-and-failure-penalty.md) | P2C-EWMA: Backend-owned latency state, cold-start semantics, and the failure penalty | Accepted |
 | [0011](docs/adr/0011-health-passive-outlier-and-circuit-breaker-composition.md) | Health, passive-outlier, and circuit-breaker composition | Accepted |
+| [0012](docs/adr/0012-circuit-gate-interface-and-backend-state-methods.md) | Circuit breaker gate interface, Registry-mediated admission, and Backend state API | Accepted |
 | TBD (Sprint 4) | Reload architecture: atomic pointer swap vs SO_REUSEPORT | — |
 | TBD (Sprint 4) | Deployment target decision (deferred from Sprint 1 per ADR-0005) | — |
 | TBD (Sprint 4) | Retry policy (or deliberate absence) | — |
@@ -335,6 +339,7 @@ All non-trivial decisions must have an ADR. Current ADRs:
 16. **Consistent-hash ring: FNV-1a-64 → `fmix64`, `index:name` vnode keys, 150 vnodes, `iter.Seq` walk** — ADR-0008. The `fmix64` finalizer prevents a /24 subnet collapsing onto a minority of backends (raw FNV maps 256 same-subnet addresses onto 3 of 4 backends); index-first vnode keys avoid correlated vnode hashes in the pre-finalizer pipeline, and are retained post-finalizer as the design-record choice and defense in depth, not because the ordering is load-bearing then. The ring is immutable and placement-only, and its ordered candidate walk is an `iter.Seq[*backend.Backend]` so each selector's skip logic stays inline.
 17. **Bounded loads: ε = 0.25, load = `ActiveConns()` averaged over healthy, capacity = `max(1, ceil(avg × 1.25))`, `<=` admission** — ADR-0009. `consistent_hash` walks the ADR-0008 ring, admitting the first candidate that is healthy and within capacity; the exhaustion fallback (least-loaded candidate seen) is unreachable given the floor and is defensive only. `ErrNoHealthyBackends` remains the sole error condition. The checked-in fixed-seed hot-key test (naive 4,005 vs bounded 3,126 of 10,000) and the `offline`-tagged 60-seed reproducer give same-repo evidence, with the fallback never firing across all seeds.
 18. **P2C-EWMA: `Backend`-owned EWMA latency, cold-start direct-set, fixed 2s failure penalty** — ADR-0010. `Backend` gains `RecordLatency`/`EWMALatency` behind an unexported `atomic.Int64` nanoseconds field (method-only access, amending ADR-0002 again, symmetric with ADR-0006); the first-ever sample is stored directly rather than blended from zero; a failed round trip records a fixed `2 * time.Second` (not real time-to-failure, which would make a fast failure look attractively fast); `p2c_ewma` is wired into `config.implementedAlgorithms` and `NewFromConfig`. The proxy records the backend round trip only (`director()` → `modifyResponse`), unconditionally and regardless of selector. α = 0.1, the CAS loop, the `math/rand/v2` source, and the sole-healthy bypass are inline comments.
+19. **Circuit gate is consumer-defined and Registry-mediated; circuit state is one CAS-able snapshot on `Backend`** — ADR-0012. `backend` defines `CircuitGate{Open,Allow}` (so it never imports `circuit`, which imports `backend`); `Registry.SetCircuitGate` installs `circuit.Breaker`, `Selectable()` filters on `!gate.Open(b)`, and `Registry.Allow(b)` delegates so `ServeHTTP` gates via `p.reg` and `Proxy`'s frozen `New(reg, sel)` is untouched. `Backend` holds the whole circuit state (enum, consecutive failures, trial flag, opened-at) as one `atomic.Pointer[circuitSnapshot]` replaced by CAS, with `cooldown`/`threshold` passed in per call so tuning stays in `circuit`. Outcomes observed while `Open` are ignored (a stale in-flight response must not bypass the cooldown); `circuitFailuresBeforeOpen = 3`. See ADR-0011 decisions 1, 5–8 for the composition this implements.
 
 ---
 
@@ -418,7 +423,7 @@ For every implementation task (T2–T8):
 | `config.Load` | Valid YAML, missing file, invalid YAML syntax, unknown fields rejected |
 | `config.Validate` | Missing listen, zero backends, malformed URL, hostless URL, duplicate names, unknown algorithm, empty algorithm defaults to round_robin |
 | `backend.Backend` | IsHealthy reads initial state, IncActive/DecActive/ActiveConns correctness, concurrent access under -race |
-| `backend.Registry` | Construction from config, All() returns all, Healthy() filters, concurrent health toggle + ActiveConns under -race |
+| `backend.Registry` | Construction from config, All() returns all, Selectable() filters (incl. circuit-open exclusion), concurrent health toggle + ActiveConns under -race |
 | `balancer.RoundRobin` | Cyclic order over N backends, empty registry → ErrNoHealthyBackends, concurrent 1000 selects within ±5% expected distribution |
 | `balancer.LeastConnections` | Pre-seeded ActiveConns → minimum chosen, tie-break by registry order, empty registry → ErrNoHealthyBackends |
 | `balancer.selector_test` (cross-cutting) | Interface conformance assertions, health transition mid-run (both selectors) |
