@@ -65,7 +65,7 @@ func NewConsistentHashBoundedLoads(reg *backend.Registry) *ConsistentHashBounded
 // of the healthy set is always <= ceil(mean * 1.25), so at least the
 // least-loaded healthy backend is admissible, and the walk always reaches it.
 func (s *ConsistentHashBoundedLoads) Select(ctx context.Context, r *http.Request) (*backend.Backend, error) {
-	healthy := s.reg.Healthy()
+	healthy := s.reg.Selectable()
 	if len(healthy) == 0 {
 		return nil, ErrNoHealthyBackends
 	}

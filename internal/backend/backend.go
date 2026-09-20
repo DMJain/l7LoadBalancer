@@ -13,6 +13,32 @@ import (
 // "constant, not config" posture ADR-0009 took for ε. See ADR-0010.
 const ewmaAlpha = 0.1
 
+// circuitState is the circuit breaker's three-state enum. It is unexported so
+// callers must reach circuit state through Backend's methods, never a field.
+// See ADR-0011 decision 5 and ADR-0012.
+type circuitState int32
+
+const (
+	circuitClosed circuitState = iota
+	circuitOpen
+	circuitHalfOpen
+)
+
+// circuitSnapshot is the circuit breaker's entire state as one immutable value,
+// replaced atomically: the state enum, the consecutive-failure count, the
+// half-open trial flag, and the instant the circuit opened. Bundling them into
+// one pointer means every compound transition — open, close, promote, take the
+// trial — is a single CompareAndSwap, which is what gives the half-open trial
+// slot its exactly-one guarantee without a mutex (ADR-0011 decision 6). A nil
+// pointer reads as the zero snapshot, i.e. a closed circuit, so a plain
+// &Backend{} needs no initialization.
+type circuitSnapshot struct {
+	state    circuitState
+	failures int32
+	trial    bool
+	openedAt time.Time
+}
+
 // Backend represents one upstream server the load balancer can route to.
 //
 // Concurrency: healthy is written by the health checker (active probes and
@@ -20,14 +46,16 @@ const ewmaAlpha = 0.1
 // the proxy on the hot path. active is incremented/decremented by the
 // proxy around each round trip (S1.T6) and read by LeastConnections and
 // metrics (Sprint 3). latencyEWMA is written by the proxy on every round
-// trip (S2.T3) and read by PowerOfTwoChoicesEWMA. All three fields are
-// unexported atomics; callers MUST use
+// trip (S2.T3) and read by PowerOfTwoChoicesEWMA. circuit is the whole
+// circuit-breaker state (S3.T3), read and CAS-updated by every selector
+// (via Registry.Selectable) and the proxy admission gate. All fields are
+// unexported; callers MUST use
 // IsHealthy/MarkHealthy/MarkUnhealthy/IncActive/DecActive/ActiveConns/
-// RecordLatency/EWMALatency and never touch the fields directly — this keeps
-// the field type free to change (e.g. atomic.Bool to a state enum in Sprint 3)
-// without touching balancer or proxy code.
+// RecordLatency/EWMALatency/CircuitOpen/CircuitAllow/CircuitSuccess/
+// CircuitFailure and never touch the fields directly — this keeps the field
+// representation free to change without touching balancer or proxy code.
 // See docs/design/sprint-1-contracts.md "Concurrency ownership table",
-// ADR-0010, and ADR-0011.
+// ADR-0010, ADR-0011, and ADR-0012.
 type Backend struct {
 	Name string
 	URL  *url.URL
@@ -35,6 +63,7 @@ type Backend struct {
 	healthy     atomic.Bool
 	active      atomic.Int64
 	latencyEWMA atomic.Int64
+	circuit     atomic.Pointer[circuitSnapshot]
 }
 
 // IsHealthy reports whether the backend is currently eligible for
@@ -120,4 +149,127 @@ func (b *Backend) RecordLatency(d time.Duration) {
 // sample, and stops reading zero. See ADR-0010.
 func (b *Backend) EWMALatency() time.Duration {
 	return time.Duration(b.latencyEWMA.Load())
+}
+
+// currentCircuit returns the backend's circuit state, lazily promoting an Open
+// circuit whose cooldown has elapsed to Half-Open on the spot. There is no
+// timer or goroutine: the promotion happens inside this read, so
+// Registry.Selectable and the per-request admission gate observe the same
+// transition (ADR-0011 decision 6). cooldown is passed in by internal/circuit
+// so the tuning value stays in that package (ADR-0012 decision 4).
+func (b *Backend) currentCircuit(cooldown time.Duration) circuitSnapshot {
+	for {
+		old := b.circuit.Load()
+		cur := circuitSnapshot{}
+		if old != nil {
+			cur = *old
+		}
+		if cur.state != circuitOpen || time.Since(cur.openedAt) < cooldown {
+			return cur
+		}
+		next := circuitSnapshot{state: circuitHalfOpen}
+		if b.circuit.CompareAndSwap(old, &next) {
+			return next
+		}
+	}
+}
+
+// CircuitOpen reports whether b's circuit is currently Open, performing the
+// lazy Open→Half-Open promotion described on currentCircuit. A half-open
+// circuit is not open, so a backend whose cooldown has elapsed is selectable
+// again (ADR-0011 decision 1).
+func (b *Backend) CircuitOpen(cooldown time.Duration) bool {
+	return b.currentCircuit(cooldown).state == circuitOpen
+}
+
+// CircuitAllow reports whether b may dispatch a request now: Closed admits,
+// Open denies, and Half-Open admits exactly one request — the trial — by
+// CompareAndSwap-ing the trial flag. Two requests landing in the same instant a
+// circuit becomes half-open therefore cannot both believe they are the trial
+// (ADR-0011 decision 6). cooldown is supplied by internal/circuit.
+func (b *Backend) CircuitAllow(cooldown time.Duration) bool {
+	for {
+		old := b.circuit.Load()
+		cur := circuitSnapshot{}
+		if old != nil {
+			cur = *old
+		}
+		switch cur.state {
+		case circuitOpen:
+			if time.Since(cur.openedAt) < cooldown {
+				return false
+			}
+			// Cooldown elapsed: promote, then loop to take the trial.
+			next := circuitSnapshot{state: circuitHalfOpen}
+			b.circuit.CompareAndSwap(old, &next)
+		case circuitHalfOpen:
+			if cur.trial {
+				return false
+			}
+			next := cur
+			next.trial = true
+			if b.circuit.CompareAndSwap(old, &next) {
+				return true
+			}
+		default:
+			return true
+		}
+	}
+}
+
+// CircuitSuccess records a successful round trip. From Closed it resets the
+// consecutive-failure count to zero (ADR-0011 decision 8); from Half-Open it
+// closes the circuit, resolving the trial with a single success and no
+// threshold (ADR-0011 decision 6). An outcome observed while Open is ignored:
+// a request admitted before the circuit opened can still be in flight, and
+// letting its stale success close the circuit would bypass the cooldown.
+func (b *Backend) CircuitSuccess() {
+	for {
+		old := b.circuit.Load()
+		if old != nil && old.state == circuitOpen {
+			return
+		}
+		next := circuitSnapshot{state: circuitClosed}
+		if b.circuit.CompareAndSwap(old, &next) {
+			return
+		}
+	}
+}
+
+// CircuitFailure records a failed round trip (a 5xx response or an errorHandler
+// transport failure). From Closed it increments the consecutive-failure count
+// and opens the circuit at threshold; from Half-Open it reopens immediately —
+// the trial failed — with a fresh opened-at timestamp and no inner threshold
+// (ADR-0011 decisions 6 and 8). An outcome observed while Open is ignored, so a
+// stale in-flight failure cannot move the opened-at timestamp.
+func (b *Backend) CircuitFailure(threshold int) {
+	for {
+		old := b.circuit.Load()
+		cur := circuitSnapshot{}
+		if old != nil {
+			cur = *old
+		}
+		switch cur.state {
+		case circuitOpen:
+			return
+		case circuitHalfOpen:
+			next := circuitSnapshot{state: circuitOpen, openedAt: time.Now()}
+			if b.circuit.CompareAndSwap(old, &next) {
+				return
+			}
+		default:
+			if int(cur.failures)+1 >= threshold {
+				next := circuitSnapshot{state: circuitOpen, openedAt: time.Now()}
+				if b.circuit.CompareAndSwap(old, &next) {
+					return
+				}
+				continue
+			}
+			next := cur
+			next.failures++
+			if b.circuit.CompareAndSwap(old, &next) {
+				return
+			}
+		}
+	}
 }

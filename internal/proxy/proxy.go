@@ -168,10 +168,13 @@ func (p *Proxy) observe(state *reqState, d time.Duration, success bool) {
 //
 // Selection happens here rather than in Director because Director cannot
 // write a response, so the ErrNoHealthyBackends path could not short-circuit
-// to a 503. On the success path IncActive is called and the chosen backend is
-// attached to the request context for Director/ModifyResponse/ErrorHandler.
-// One "request complete" line is logged per request via the deferred call,
-// which also runs on the http.ErrAbortHandler panic path.
+// to a 503. After selection the circuit gate is consulted via
+// Registry.Allow(b) and only then is IncActive called: a denied request is
+// answered 503 before dispatch and never touches active-connection accounting
+// (ADR-0011 decision 7). On the dispatch path the chosen backend is attached
+// to the request context for Director/ModifyResponse/ErrorHandler. One
+// "request complete" line is logged per request via the deferred call, which
+// also runs on the http.ErrAbortHandler panic path.
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	state := &reqState{}
@@ -189,6 +192,14 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	state.backend = b
+	if !p.reg.Allow(b) {
+		state.status = http.StatusServiceUnavailable
+		p.logger.Warn("request denied by circuit breaker",
+			"backend", b.Name, "path", r.URL.Path)
+		http.Error(w, http.StatusText(http.StatusServiceUnavailable), http.StatusServiceUnavailable)
+		return
+	}
+
 	b.IncActive()
 
 	ctx := context.WithValue(r.Context(), reqStateKey{}, state)

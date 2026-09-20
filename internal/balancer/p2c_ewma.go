@@ -41,7 +41,7 @@ func NewPowerOfTwoChoicesEWMA(reg *backend.Registry) *PowerOfTwoChoicesEWMA {
 // from two different backends' floating-point histories is not a
 // reproducible-by-design scenario the way registry-order ties are.
 func (s *PowerOfTwoChoicesEWMA) Select(ctx context.Context, r *http.Request) (*backend.Backend, error) {
-	healthy := s.reg.Healthy()
+	healthy := s.reg.Selectable()
 	switch len(healthy) {
 	case 0:
 		return nil, ErrNoHealthyBackends

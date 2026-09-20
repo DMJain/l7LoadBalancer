@@ -119,7 +119,18 @@ func TestRegistryAllIncludesUnhealthy(t *testing.T) {
 	}
 }
 
-func TestRegistryHealthyFilters(t *testing.T) {
+// fakeGate is a minimal CircuitGate for testing the registry's gate delegation
+// without importing internal/circuit, which would be an import cycle from this
+// package. A backend present in open reports as circuit-open; every other
+// backend is admitted.
+type fakeGate struct {
+	open map[*Backend]bool
+}
+
+func (g fakeGate) Open(b *Backend) bool  { return g.open[b] }
+func (g fakeGate) Allow(b *Backend) bool { return !g.open[b] }
+
+func TestRegistrySelectableFilters(t *testing.T) {
 	tests := []struct {
 		name      string
 		unhealthy []string
@@ -149,9 +160,34 @@ func TestRegistryHealthyFilters(t *testing.T) {
 				backendByName(t, reg, name).MarkUnhealthy()
 			}
 
-			assert.Equal(t, tt.wantNames, names(reg.Healthy()))
+			assert.Equal(t, tt.wantNames, names(reg.Selectable()))
 		})
 	}
+}
+
+func TestRegistrySelectableHonorsCircuitGate(t *testing.T) {
+	reg, err := NewRegistry(testConfigs())
+	require.NoError(t, err)
+
+	gate := fakeGate{open: make(map[*Backend]bool)}
+	reg.SetCircuitGate(gate)
+
+	b := backendByName(t, reg, "backend-b")
+	gate.open[b] = true
+
+	assert.Equal(t, []string{"backend-a", "backend-c"}, names(reg.Selectable()),
+		"a circuit-open backend must be excluded from Selectable")
+	assert.False(t, reg.Allow(b), "a circuit-open backend must be denied")
+	assert.True(t, reg.Allow(backendByName(t, reg, "backend-a")),
+		"a backend with no open circuit must be admitted")
+}
+
+func TestRegistryAllowWithoutGateAdmits(t *testing.T) {
+	reg, err := NewRegistry(testConfigs())
+	require.NoError(t, err)
+
+	assert.True(t, reg.Allow(reg.All()[0]),
+		"with no circuit gate set, admission must be unconditional")
 }
 
 func TestRegistrySnapshotsAreFresh(t *testing.T) {
@@ -164,11 +200,11 @@ func TestRegistrySnapshotsAreFresh(t *testing.T) {
 
 	assert.Equal(t, []string{"backend-a", "backend-b", "backend-c"}, names(reg.All()))
 
-	healthy := reg.Healthy()
+	healthy := reg.Selectable()
 	require.Len(t, healthy, 3)
 	healthy[0] = nil
 
-	assert.Equal(t, []string{"backend-a", "backend-b", "backend-c"}, names(reg.Healthy()))
+	assert.Equal(t, []string{"backend-a", "backend-b", "backend-c"}, names(reg.Selectable()))
 }
 
 func TestRegistryConcurrentMutation(t *testing.T) {

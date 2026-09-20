@@ -14,7 +14,7 @@ import (
 )
 
 // These tests exercise the ring's own API directly: pure placement and
-// candidate-walk properties, with no Selector, no Registry.Healthy()
+// candidate-walk properties, with no Selector, no Registry.Selectable()
 // filtering, and no HTTP. Placement is a ring property, not a selector
 // property, so testing it through Select would only add health/error-path
 // noise. See ADR-0008.

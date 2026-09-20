@@ -13,6 +13,7 @@ import (
 
 	"github.com/DMJain/l7LoadBalancer/internal/backend"
 	"github.com/DMJain/l7LoadBalancer/internal/balancer"
+	"github.com/DMJain/l7LoadBalancer/internal/circuit"
 	"github.com/DMJain/l7LoadBalancer/internal/config"
 	"github.com/DMJain/l7LoadBalancer/internal/health"
 	"github.com/DMJain/l7LoadBalancer/internal/logger"
@@ -53,6 +54,13 @@ func main() {
 		os.Exit(1)
 	}
 
+	// The circuit breaker is both the registry's eligibility/admission gate and
+	// a round-trip observer. Installing the gate before selection begins means
+	// every selector's Registry.Selectable snapshot already excludes open
+	// circuits (ADR-0011 decision 1, ADR-0012).
+	breaker := circuit.New(*cfg.Circuit.Cooldown)
+	reg.SetCircuitGate(breaker)
+
 	sel, err := balancer.NewFromConfig(cfg, reg)
 	if err != nil {
 		log.Error("selector build failed", "algorithm", cfg.Algorithm, "err", err)
@@ -64,11 +72,12 @@ func main() {
 		"listen", cfg.Listen,
 		"algorithm", cfg.Algorithm,
 		"backend_count", len(cfg.Backends),
+		"circuit_cooldown", *cfg.Circuit.Cooldown,
 	)
 
 	srv := &http.Server{
 		Addr:              cfg.Listen,
-		Handler:           newHandler(reg, sel),
+		Handler:           newHandler(reg, sel, breaker),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
@@ -107,13 +116,13 @@ func main() {
 // newHandler builds the proxy and registers the round-trip observers that
 // record every backend round trip. Registration happens here, at construction
 // time before the server starts, so the request path can read the observer
-// slice without a lock. Latency recording and passive outlier detection are
-// wired; the circuit breaker registers here too as it lands (ADR-0011 decision
-// 9). Observer registration is deliberately separate from proxy.New, whose
-// two-argument signature is frozen.
-func newHandler(reg *backend.Registry, sel balancer.Selector) http.Handler {
+// slice without a lock. Latency recording, passive outlier detection, and the
+// circuit breaker are all wired (ADR-0011 decision 9). Observer registration is
+// deliberately separate from proxy.New, whose two-argument signature is frozen.
+func newHandler(reg *backend.Registry, sel balancer.Selector, breaker *circuit.Breaker) http.Handler {
 	p := proxy.New(reg, sel)
 	p.RegisterObserver(proxy.NewLatencyObserver())
 	p.RegisterObserver(health.NewOutlierDetector())
+	p.RegisterObserver(breaker)
 	return p
 }

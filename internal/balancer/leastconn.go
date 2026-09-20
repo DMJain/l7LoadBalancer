@@ -27,7 +27,7 @@ func NewLeastConnections(reg *backend.Registry) *LeastConnections {
 // reproducible. ActiveConns is read, never mutated: connection bookkeeping is
 // the proxy's job (S1.T6).
 func (s *LeastConnections) Select(ctx context.Context, r *http.Request) (*backend.Backend, error) {
-	healthy := s.reg.Healthy()
+	healthy := s.reg.Selectable()
 	if len(healthy) == 0 {
 		return nil, ErrNoHealthyBackends
 	}

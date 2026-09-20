@@ -132,7 +132,7 @@ func busiest(counts map[string]int) int {
 // Select to see the same load snapshot. It shares admits with Select, so the
 // evidence it produces cannot drift from the behavior it measures.
 func (s *ConsistentHashBoundedLoads) wouldNeedFallback(addr string) bool {
-	healthy := s.reg.Healthy()
+	healthy := s.reg.Selectable()
 	if len(healthy) == 0 {
 		return false
 	}

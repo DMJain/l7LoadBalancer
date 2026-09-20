@@ -29,12 +29,12 @@ func NewRoundRobin(reg *backend.Registry) *RoundRobin {
 
 // Select implements Selector. It snapshots the healthy set, returns
 // ErrNoHealthyBackends when that set is empty, and otherwise indexes into
-// the snapshot with the next counter value. Because Healthy() returns a
+// the snapshot with the next counter value. Because Selectable() returns a
 // fresh snapshot per call, indexing modulo the current length is correct
 // even as the healthy set changes size between calls — no cross-call
 // consistency is needed.
 func (s *RoundRobin) Select(ctx context.Context, r *http.Request) (*backend.Backend, error) {
-	healthy := s.reg.Healthy()
+	healthy := s.reg.Selectable()
 	if len(healthy) == 0 {
 		return nil, ErrNoHealthyBackends
 	}

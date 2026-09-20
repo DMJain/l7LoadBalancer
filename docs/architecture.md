@@ -51,11 +51,16 @@ proxy.Proxy.ServeHTTP                              internal/proxy/proxy.go
   │                                            or balancer.LeastConnections
   │                                               │ snapshots
   │                                               ▼
-  │                                          backend.Registry.Healthy()
+  │                                          backend.Registry.Selectable()
+  │                                          (healthy AND circuit-not-open)
   │
   ├─ ErrNoHealthyBackends ─────────────────► 503 short-circuit
   │                                            (ReverseProxy never runs)
   ├─ other select error ───────────────────► 502
+  │
+  ├─ Registry.Allow(b) ────────────────────► 503 short-circuit when the
+  │   (circuit gate: circuit.Breaker)         circuit denies (ADR-0012);
+  │                                            no dispatch, no IncActive
   │
   ├─ backend.IncActive()
   ├─ attach reqState{backend, status, once, dispatchStart} to request context
@@ -118,9 +123,11 @@ Lifecycle notes (full rationale in
    Registration is additive (`Proxy.RegisterObserver`), so `New(reg, sel)`'s
    signature stays frozen; latency recording is the first observer
    (`NewLatencyObserver`), passive outlier detection the second
-   (`health.NewOutlierDetector`), with the circuit breaker to follow. See
+   (`health.NewOutlierDetector`), and the circuit breaker the third
+   (`circuit.Breaker`, also the registry's `CircuitGate`). See
    [ADR-0011](adr/0011-health-passive-outlier-and-circuit-breaker-composition.md)
-   decision 9.
+   decision 9 and
+   [ADR-0012](adr/0012-circuit-gate-interface-and-backend-state-methods.md).
 
 ## Component map
 
@@ -152,12 +159,12 @@ As-built package status:
 | `cmd/l7LoadBalancer` | Sprint 1, extended Sprint 3 | Thin wiring layer: `config.Load`/`Validate` → `backend.NewRegistry` → `balancer.NewFromConfig` → `proxy.New` → `health.New`/`Start` → `http.Server`; SIGINT/SIGTERM graceful shutdown (the health-checker goroutines share its `signal.NotifyContext`). Fatal + exit 1 on any startup failure (no silent fallback). |
 | `internal/proxy` | Sprint 1 | Wraps `httputil.ReverseProxy`; owns the request lifecycle, 503/502 short-circuits, active-connection accounting, and the per-request log line. |
 | `internal/balancer` | Sprint 1–2 | `Selector` interface + `ErrNoHealthyBackends` (the only exported sentinel), `RoundRobin`, `LeastConnections`, `ConsistentHashBoundedLoads` over an unexported ring, and `PowerOfTwoChoicesEWMA` over per-backend EWMA latency, plus the `NewFromConfig` factory. |
-| `internal/backend` | Sprint 1–2 | `Backend` (identity + unexported `atomic` health/active/EWMA-latency state, methods-only access) and `Registry` (ordered, immutable until Sprint 4's hot-reload). |
+| `internal/backend` | Sprint 1–3 | `Backend` (identity + unexported `atomic` health/active/EWMA-latency state and a CAS-guarded circuit snapshot, methods-only access) and `Registry` (ordered, immutable until Sprint 4's hot-reload; `Selectable()` plus the `CircuitGate`/`Allow` admission seam). |
 | `internal/config` | Sprint 1, extended Sprint 3 | Strict YAML loading (`KnownFields(true)`) and fail-fast validation; algorithm identifier constants. Sprint 3 adds optional global `health:` (probe interval/timeout) and `circuit:` (cooldown) duration sections, defaulted in `Validate` and rejected when explicitly non-positive (ADR-0011 decision 10). Immutable after init in Sprint 1. |
 | `internal/logger` | Sprint 1 | `log/slog` JSON setup and the frozen canonical field vocabulary. Leaf. |
 | `internal/metrics` | Sprint 3 (stub) | Prometheus instruments. Names/labels reserved in `internal/metrics/doc.go`. |
-| `internal/health` | Sprint 3, in progress | Active health checking built: `Checker` owns one probe goroutine per backend (started by `main` on the shared `sigCtx`), probes each backend's configured URL with a dedicated `http.Client` (its own timeout, no redirect following), and drives `Backend.MarkHealthy`/`MarkUnhealthy` through an N-consecutive-failure / M-consecutive-success state machine whose thresholds are Go constants (ADR-0011 decisions 2, 10, 11, 13). Passive outlier detection built: `OutlierDetector` implements `proxy.RoundTripObserver` (structurally, without importing `proxy`), keeps a count-based sliding window of recent outcomes per backend, and ejects via `MarkUnhealthy` after N failures within the window — recovering only when a later active probe is observed to have reinstated the backend (ADR-0011 decisions 3, 8, 9, 12). |
-| `internal/circuit` | Sprint 3 (stub) | Per-backend circuit breaker state machine. |
+| `internal/health` | Sprint 3 | Active health checking: `Checker` owns one probe goroutine per backend (started by `main` on the shared `sigCtx`), probes each backend's configured URL with a dedicated `http.Client` (its own timeout, no redirect following), and drives `Backend.MarkHealthy`/`MarkUnhealthy` through an N-consecutive-failure / M-consecutive-success state machine whose thresholds are Go constants (ADR-0011 decisions 2, 10, 11, 13). Passive outlier detection: `OutlierDetector` implements `proxy.RoundTripObserver` (structurally, without importing `proxy`), keeps a count-based sliding window of recent outcomes per backend, and ejects via `MarkUnhealthy` after N failures within the window — recovering only when a later active probe is observed to have reinstated the backend (ADR-0011 decisions 3, 8, 9, 12). |
+| `internal/circuit` | Sprint 3 | `Breaker`: the circuit policy (consecutive-failure-to-open constant, config cooldown). Drives `Backend`'s circuit-state methods, implements `backend.CircuitGate` and `proxy.RoundTripObserver` structurally, and is installed by `main` as both the registry gate and an observer. |
 
 **Dependency rule**: `internal/backend` does **not** import `internal/balancer`.
 A `Backend` has no notion of how it is selected; adding that import is a sign
@@ -230,6 +237,28 @@ are Go constants, not config. `internal/health` depends only on
 [ADR-0011](adr/0011-health-passive-outlier-and-circuit-breaker-composition.md)
 decisions 2, 10, 11, and 13.
 
+### Circuit breaker (Sprint 3)
+
+`circuit.New(cooldown)` builds a `Breaker` holding only policy: the unexported
+`circuitFailuresBeforeOpen` (3) constant and the configured cooldown. Circuit
+*state* — the closed/open/half-open enum, consecutive-failure count, half-open
+trial flag, and opened-at timestamp — lives on `Backend` as one immutable
+`atomic.Pointer[circuitSnapshot]` replaced by `CompareAndSwap`, so every
+compound transition is a single atomic step and `internal/backend` needs no
+import from `internal/circuit` (ADR-0012 decisions 3–4).
+
+`Breaker` plays two roles, both wired in `main`: it is the registry's
+`CircuitGate` (ADR-0012 decision 1) and a registered `RoundTripObserver`.
+`Registry.Selectable()` filters on `IsHealthy() && !gate.Open(b)`, and
+`ServeHTTP` calls `Registry.Allow(b)` after `Select()` and before
+`IncActive()`; a denial is a 503 with a distinct WARN line and no
+active-connection accounting (ADR-0011 decision 7). A half-open backend stays
+`Selectable()` — only `Allow`'s CAS on the trial flag admits the single
+in-flight trial. Outcomes while a circuit is `Open` are ignored, so a stale
+in-flight response cannot bypass the cooldown; a single half-open success
+closes the circuit and a single failure reopens it, with no inner threshold.
+The consecutive-failure counter is reset by any success, distinct from passive
+detection's sliding window (ADR-0011 decision 8). See ADR-0011 and ADR-0012.
 
 ## Decision index
 
@@ -248,6 +277,7 @@ All non-trivial decisions are recorded in `docs/adr/`. Accepted:
 | [0009](adr/0009-consistent-hash-bounded-loads-capacity-and-evidence.md) | Consistent-hash bounded loads: epsilon, load metric, capacity formula, and hot-key evidence | Accepted |
 | [0010](adr/0010-p2c-ewma-backend-latency-state-cold-start-and-failure-penalty.md) | P2C-EWMA: Backend-owned latency state, cold-start semantics, and the failure penalty | Accepted |
 | [0011](adr/0011-health-passive-outlier-and-circuit-breaker-composition.md) | Health, passive-outlier, and circuit-breaker composition | Accepted |
+| [0012](adr/0012-circuit-gate-interface-and-backend-state-methods.md) | Circuit breaker gate interface, Registry-mediated admission, and Backend state API | Accepted |
 
 Tracked but not yet written (each decides in the sprint that delivers the
 feature):
@@ -362,7 +392,7 @@ by design. No ADR: process, not design.
 ## Later amendments to Sprint 1 contracts
 
 `docs/design/sprint-1-contracts.md` is **frozen** and is intentionally not
-edited. Three ADRs accepted after the freeze amend rows of its
+edited. Four ADRs accepted after the freeze amend rows of its
 concurrency-ownership table:
 
 - [ADR-0006](adr/0006-backend-sethealthy-amends-adr-0002.md) amended the
@@ -379,9 +409,16 @@ concurrency-ownership table:
   active-only-recovery asymmetry legible at the call site. Decision 1 renames
   `Registry.Healthy()` to `Registry.Selectable()` (eligible = healthy AND
   circuit-not-open) when circuit state first exists, in Sprint 3's
-  circuit-breaker task.
+  circuit-breaker task. **Landed in S3.T3.**
+- [ADR-0012](adr/0012-circuit-gate-interface-and-backend-state-methods.md)
+  adds the mechanism decision 1 needed: the `CircuitGate` interface and
+  `Registry.SetCircuitGate`/`Allow` admission path, plus the CAS-guarded
+  `Backend` circuit-state method API. The Sprint 1 contracts doc's circuit row
+  ("likely mutex; decide in the Sprint 3 ADR") is superseded by ADR-0011
+  decision 6 and ADR-0012 decision 3 — an immutable-snapshot
+  `CompareAndSwap`, not a mutex.
 
-Read those three ADRs alongside the contracts doc's
+Read those four ADRs alongside the contracts doc's
 [concurrency-ownership table](design/sprint-1-contracts.md#concurrency-ownership-table).
 
 ## Deliberately not here yet

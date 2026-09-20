@@ -113,3 +113,24 @@ route to the backend next while half-open. Admission is enforced by the
 breaker's own `Allow()` gate, not by pool membership: a half-open backend
 stays fully `Selectable()`. See ADR-0011.
 _Avoid_: probe (reserved for the active health-check context), health check
+
+**Circuit breaker** (Sprint 3 context):
+The per-backend closed/open/half-open gate that stops routing to a backend
+whose round trips are failing. Separate from `healthy`: the breaker never
+writes `MarkHealthy`/`MarkUnhealthy`, so selection eligibility is the two
+facts ANDed (`Selectable`), not one bit fought over. Closed tracks a
+*consecutive* failure count (any success resets it) and opens at 3; Open
+denies every request until the `cooldown` elapses; Half-Open admits one
+`Trial`. State lives on `Backend` as one CAS-guarded snapshot; the policy
+(threshold, cooldown) lives in `circuit.Breaker`. See ADR-0011 and ADR-0012.
+_Avoid_: unhealthy (that is the health signal, a different gate), ejection
+(passive detection's word), outage
+
+**Cooldown** (circuit-breaker context):
+How long a tripped circuit stays Open before a read may lazily promote it to
+Half-Open. A global `circuit.cooldown` YAML field defaulting to 30s, not a
+per-backend setting. There is no timer: the promotion is evaluated (and
+CAS-transitioned) inside whichever request or selection read next observes
+that the cooldown has elapsed, so a backend nothing is routing to simply is
+not observed to recover yet. See ADR-0011 decision 6 and ADR-0012.
+_Avoid_: timeout (that is probe/transport concern), retry delay

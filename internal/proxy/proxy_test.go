@@ -22,6 +22,7 @@ import (
 
 	"github.com/DMJain/l7LoadBalancer/internal/backend"
 	"github.com/DMJain/l7LoadBalancer/internal/balancer"
+	"github.com/DMJain/l7LoadBalancer/internal/circuit"
 	"github.com/DMJain/l7LoadBalancer/internal/config"
 	"github.com/DMJain/l7LoadBalancer/internal/health"
 )
@@ -605,4 +606,119 @@ func TestProxyLogsRequestCompleteOn502(t *testing.T) {
 
 	assert.NotEmpty(t, recordsWithMsg(recs, "backend round-trip failed"),
 		"the transport error should be logged with its cause")
+}
+
+// fixedSelector always returns the same backend, ignoring health and circuit
+// state. It forces ServeHTTP's pre-dispatch circuit admission path, which a
+// real selector's Selectable() snapshot would otherwise route around.
+type fixedSelector struct{ b *backend.Backend }
+
+func (s fixedSelector) Select(context.Context, *http.Request) (*backend.Backend, error) {
+	return s.b, nil
+}
+
+// openCircuit installs br as reg's gate and drives enough consecutive failures
+// through it to open b's circuit. The minute-long cooldown keeps it open for
+// the duration of a test.
+func openCircuit(t *testing.T, reg *backend.Registry, br *circuit.Breaker, b *backend.Backend) {
+	t.Helper()
+	reg.SetCircuitGate(br)
+	for i := 0; i < 10; i++ {
+		br.ObserveRoundTrip(b, 0, false)
+	}
+	require.False(t, reg.Allow(b), "setup: circuit must be open")
+}
+
+func TestProxyCircuitDenialReturns503WithoutIncActive(t *testing.T) {
+	reg := registryFrom(t, backendEntry{"backend-a", startBackend(t, "backend-a").URL})
+	b := reg.All()[0]
+	br := circuit.New(time.Minute)
+	openCircuit(t, reg, br, b)
+
+	p := New(reg, fixedSelector{b: b})
+
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/denied", nil))
+
+	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+	assert.Equal(t, int64(0), b.ActiveConns(),
+		"a circuit-denied request must never touch active-connection accounting")
+}
+
+func TestProxyLogsCircuitDenial(t *testing.T) {
+	logger, dump := captureLogger(t)
+	useLogger(t, logger)
+
+	reg := registryFrom(t, backendEntry{"backend-a", "http://127.0.0.1:1"})
+	b := reg.All()[0]
+	br := circuit.New(time.Minute)
+	openCircuit(t, reg, br, b)
+
+	p := New(reg, fixedSelector{b: b})
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/denied", nil))
+	require.Equal(t, http.StatusServiceUnavailable, rec.Code)
+
+	recs := dump()
+	denials := recordsWithMsg(recs, "request denied by circuit breaker")
+	require.Len(t, denials, 1, "a denial must emit exactly one distinct WARN line")
+	assert.Equal(t, "WARN", denials[0].level())
+	assert.Equal(t, "backend-a", denials[0]["backend"])
+	assert.Equal(t, "/denied", denials[0]["path"])
+
+	completes := recordsWithMsg(recs, "request complete")
+	require.Len(t, completes, 1)
+	assert.Equal(t, "WARN", completes[0].level())
+	assert.Equal(t, "backend-a", completes[0]["backend"])
+	assert.Equal(t, float64(http.StatusServiceUnavailable), completes[0]["status"])
+}
+
+// TestProxyCircuitOpensOnRepeated5xxAndStopsRouting is MILESTONES.md's Sprint 3
+// chaos-test exit criterion at unit-test scale: injecting 5xx responses on one
+// backend eventually opens its circuit, after which selection stops routing to
+// it while a healthy peer keeps serving.
+func TestProxyCircuitOpensOnRepeated5xxAndStopsRouting(t *testing.T) {
+	good := startBackend(t, "good")
+	bad := failingBackend(t)
+
+	reg := registryFrom(t,
+		backendEntry{"good", good.URL},
+		backendEntry{"bad", bad.URL},
+	)
+	br := circuit.New(time.Minute)
+	reg.SetCircuitGate(br)
+
+	p := New(reg, balancer.NewRoundRobin(reg))
+	p.RegisterObserver(NewLatencyObserver())
+	p.RegisterObserver(br)
+
+	front := httptest.NewServer(p)
+	t.Cleanup(front.Close)
+
+	badBackend := reg.All()[1]
+
+	// Round-robin alternates the two backends; the bad backend's own 5xx
+	// outcomes are consecutive from its perspective, so its circuit opens.
+	for i := 0; i < 40; i++ {
+		resp, err := front.Client().Get(front.URL)
+		require.NoError(t, err)
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+	}
+
+	require.NotContains(t, reg.Selectable(), badBackend,
+		"repeated 5xx must open the bad backend's circuit and exclude it from selection")
+	assert.Equal(t, int64(0), badBackend.ActiveConns())
+
+	for i := 0; i < 10; i++ {
+		resp, err := front.Client().Get(front.URL)
+		require.NoError(t, err)
+		body, err := io.ReadAll(resp.Body)
+		require.NoError(t, err)
+		_ = resp.Body.Close()
+
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+		assert.Equal(t, "good", string(body),
+			"an open-circuit backend must stop receiving traffic")
+	}
 }
