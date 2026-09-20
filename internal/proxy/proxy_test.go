@@ -23,6 +23,7 @@ import (
 	"github.com/DMJain/l7LoadBalancer/internal/backend"
 	"github.com/DMJain/l7LoadBalancer/internal/balancer"
 	"github.com/DMJain/l7LoadBalancer/internal/config"
+	"github.com/DMJain/l7LoadBalancer/internal/health"
 )
 
 // TestMain silences the process default logger. Proxy reads slog.Default() at
@@ -477,6 +478,43 @@ func TestProxyLogsRequestCompleteOn503(t *testing.T) {
 	assert.Equal(t, float64(http.StatusServiceUnavailable), completes[0]["status"])
 	assert.Equal(t, "GET", completes[0]["method"])
 	assert.Equal(t, "/none", completes[0]["path"])
+}
+
+// TestProxyFanOutFeedsPassiveOutlierDetectorAlongsideLatencyObserver proves the
+// detector receives outcomes through the real proxy fan-out when registered
+// next to another observer, and that a persistently failing backend is ejected
+// without any HTTP interaction with the detector directly. The latency observer
+// recording a positive EWMA is the "alongside" half: both registered observers
+// were fed by the same request path.
+func TestProxyFanOutFeedsPassiveOutlierDetectorAlongsideLatencyObserver(t *testing.T) {
+	failing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(failing.Close)
+
+	reg := registryFrom(t, backendEntry{"backend-a", failing.URL})
+	p := New(reg, balancer.NewRoundRobin(reg))
+	p.RegisterObserver(NewLatencyObserver())
+	p.RegisterObserver(health.NewOutlierDetector())
+
+	front := httptest.NewServer(p)
+	t.Cleanup(front.Close)
+
+	b := reg.All()[0]
+	require.True(t, b.IsHealthy(), "NewRegistry starts every backend healthy")
+
+	// Every 5xx is one passive failure. Once the detector ejects the backend,
+	// selection returns ErrNoHealthyBackends and the loop stops early (503).
+	for i := 0; i < 50 && b.IsHealthy(); i++ {
+		resp, err := front.Client().Get(front.URL)
+		require.NoError(t, err)
+		_ = resp.Body.Close()
+	}
+
+	assert.False(t, b.IsHealthy(),
+		"the passive outlier detector must eject a backend failing through the real proxy fan-out")
+	assert.Positive(t, b.EWMALatency(),
+		"the latency observer registered alongside must also have received outcomes")
 }
 
 func TestProxyLogsRequestCompleteOn502(t *testing.T) {

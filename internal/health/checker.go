@@ -1,8 +1,10 @@
 // Package health implements the load balancer's health-checking subsystems.
 // Active probing (this file) owns one goroutine per backend and drives
 // Backend.MarkHealthy/MarkUnhealthy through a consecutive-outcome state
-// machine. Passive outlier detection lands alongside it in Sprint 3 and is
-// what makes MarkUnhealthy reachable from live traffic rather than probes.
+// machine. Passive outlier detection (outlier.go) observes live request
+// outcomes through the proxy's RoundTripObserver fan-out and is what makes
+// MarkUnhealthy reachable from traffic rather than probes; only active probes
+// reinstate a backend it ejected.
 package health
 
 import (

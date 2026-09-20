@@ -107,12 +107,13 @@ func main() {
 // newHandler builds the proxy and registers the round-trip observers that
 // record every backend round trip. Registration happens here, at construction
 // time before the server starts, so the request path can read the observer
-// slice without a lock. Currently only latency recording is wired; Sprint 3's
-// passive-outlier detector and circuit breaker register here too as they land
-// (ADR-0011 decision 9). Observer registration is deliberately separate from
-// proxy.New, whose two-argument signature is frozen.
+// slice without a lock. Latency recording and passive outlier detection are
+// wired; the circuit breaker registers here too as it lands (ADR-0011 decision
+// 9). Observer registration is deliberately separate from proxy.New, whose
+// two-argument signature is frozen.
 func newHandler(reg *backend.Registry, sel balancer.Selector) http.Handler {
 	p := proxy.New(reg, sel)
 	p.RegisterObserver(proxy.NewLatencyObserver())
+	p.RegisterObserver(health.NewOutlierDetector())
 	return p
 }

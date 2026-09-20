@@ -117,8 +117,8 @@ Lifecycle notes (full rationale in
    answered before dispatch, so it never produces a round trip to record.
    Registration is additive (`Proxy.RegisterObserver`), so `New(reg, sel)`'s
    signature stays frozen; latency recording is the first observer
-   (`NewLatencyObserver`), with passive outlier detection and the circuit
-   breaker to follow. See
+   (`NewLatencyObserver`), passive outlier detection the second
+   (`health.NewOutlierDetector`), with the circuit breaker to follow. See
    [ADR-0011](adr/0011-health-passive-outlier-and-circuit-breaker-composition.md)
    decision 9.
 
@@ -156,7 +156,7 @@ As-built package status:
 | `internal/config` | Sprint 1, extended Sprint 3 | Strict YAML loading (`KnownFields(true)`) and fail-fast validation; algorithm identifier constants. Sprint 3 adds optional global `health:` (probe interval/timeout) and `circuit:` (cooldown) duration sections, defaulted in `Validate` and rejected when explicitly non-positive (ADR-0011 decision 10). Immutable after init in Sprint 1. |
 | `internal/logger` | Sprint 1 | `log/slog` JSON setup and the frozen canonical field vocabulary. Leaf. |
 | `internal/metrics` | Sprint 3 (stub) | Prometheus instruments. Names/labels reserved in `internal/metrics/doc.go`. |
-| `internal/health` | Sprint 3, in progress | Active health checking built: `Checker` owns one probe goroutine per backend (started by `main` on the shared `sigCtx`), probes each backend's configured URL with a dedicated `http.Client` (its own timeout, no redirect following), and drives `Backend.MarkHealthy`/`MarkUnhealthy` through an N-consecutive-failure / M-consecutive-success state machine whose thresholds are Go constants (ADR-0011 decisions 2, 10, 11, 13). Passive outlier detection is the remaining Sprint 3 half. |
+| `internal/health` | Sprint 3, in progress | Active health checking built: `Checker` owns one probe goroutine per backend (started by `main` on the shared `sigCtx`), probes each backend's configured URL with a dedicated `http.Client` (its own timeout, no redirect following), and drives `Backend.MarkHealthy`/`MarkUnhealthy` through an N-consecutive-failure / M-consecutive-success state machine whose thresholds are Go constants (ADR-0011 decisions 2, 10, 11, 13). Passive outlier detection built: `OutlierDetector` implements `proxy.RoundTripObserver` (structurally, without importing `proxy`), keeps a count-based sliding window of recent outcomes per backend, and ejects via `MarkUnhealthy` after N failures within the window — recovering only when a later active probe is observed to have reinstated the backend (ADR-0011 decisions 3, 8, 9, 12). |
 | `internal/circuit` | Sprint 3 (stub) | Per-backend circuit breaker state machine. |
 
 **Dependency rule**: `internal/backend` does **not** import `internal/balancer`.
@@ -389,8 +389,6 @@ Read those three ADRs alongside the contracts doc's
 A future agent should not assume any of the following exist. Each names its
 owning sprint:
 
-- **Passive outlier detection** (active health checking is built; this is the
-  other half of Sprint 3's health work) — Sprint 3.
 - **Circuit breaking** — Sprint 3.
 - **Prometheus metrics** — Sprint 3.
 - **Hot-reload (SIGHUP, `atomic.Pointer[Config]`)** — Sprint 4.

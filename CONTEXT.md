@@ -77,6 +77,25 @@ backend ejected by passive detection. The thresholds are Go constants, not
 config. See ADR-0011 decisions 2 and 10.
 _Avoid_: health check (the subsystem), ping
 
+**Outlier** (passive health check context):
+A backend whose recent live request outcomes are disproportionately
+failures — a 5xx response or a transport failure (connection refused,
+timeout). Detected in-band by `health.OutlierDetector` from the proxy's
+round-trip observer fan-out, over a count-based sliding window of the last
+10 outcomes per backend (not a time window, and not a consecutive streak).
+Distinct from an unhealthy-by-probe backend: an outlier may still be
+answering, just badly. See ADR-0011 decisions 8 and 12.
+_Avoid_: unhealthy (that is the state it may lead to, not the concept)
+
+**Ejection** (passive health check context):
+Marking a backend unhealthy (`MarkUnhealthy`) because enough failures
+appeared within its outlier window — 5 of the last 10. Ejection excludes the
+backend from selection immediately, without waiting for the next scheduled
+probe. Only a successful active probe reinstates it, so passive detection has
+no independent timer and never calls `MarkHealthy`; it resets its own episode
+once it observes the backend healthy again. See ADR-0011 decisions 2, 3, and 9.
+_Avoid_: circuit-open (a separate gate), removal
+
 **Selectable** (Sprint 3 context):
 A backend eligible for routing right now: healthy (per active/passive
 detection) *and* its circuit is not open. Distinct from `IsHealthy()`,
