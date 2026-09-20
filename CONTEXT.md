@@ -70,7 +70,11 @@ configured URL (not the request-serving path — no separate health endpoint
 is configured). Only a 2xx response counts as success; 3xx is treated as a
 failure because `httputil.ReverseProxy` forwards redirects verbatim to
 clients rather than following them, so a redirecting backend is unusable
-even though it is "up."
+even though it is "up." Consecutive probes drive the health state machine:
+3 consecutive failed probes eject a backend, 2 consecutive successful ones
+reinstate it — and active probes are the *only* path that reinstates a
+backend ejected by passive detection. The thresholds are Go constants, not
+config. See ADR-0011 decisions 2 and 10.
 _Avoid_: health check (the subsystem), ping
 
 **Selectable** (Sprint 3 context):

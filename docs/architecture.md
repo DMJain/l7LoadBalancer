@@ -3,8 +3,10 @@
 _This document describes the as-built architecture, sprint by sprint. See
 `MILESTONES.md` for the plan, `PROGRESS.md` for live task state, and
 `docs/design/sprint-1-contracts.md` for the frozen Sprint 1 contracts.
-Sprints 1 and 2 are complete: this document is the Sprint 1–2
-reference._
+Sprints 1 and 2 are complete, and Sprint 3 is in progress (active health
+checks built; passive outlier detection, circuit breaking, and metrics
+pending). This document is the Sprint 1–2 reference plus the as-built
+Sprint 3 pieces as they land._
 
 ## Overview
 
@@ -147,14 +149,14 @@ As-built package status:
 
 | Package | Status | Responsibility |
 |---|---|---|
-| `cmd/l7LoadBalancer` | Sprint 1 | Thin wiring layer: `config.Load`/`Validate` → `backend.NewRegistry` → `balancer.NewFromConfig` → `proxy.New` → `http.Server`; SIGINT/SIGTERM graceful shutdown. Fatal + exit 1 on any startup failure (no silent fallback). |
+| `cmd/l7LoadBalancer` | Sprint 1, extended Sprint 3 | Thin wiring layer: `config.Load`/`Validate` → `backend.NewRegistry` → `balancer.NewFromConfig` → `proxy.New` → `health.New`/`Start` → `http.Server`; SIGINT/SIGTERM graceful shutdown (the health-checker goroutines share its `signal.NotifyContext`). Fatal + exit 1 on any startup failure (no silent fallback). |
 | `internal/proxy` | Sprint 1 | Wraps `httputil.ReverseProxy`; owns the request lifecycle, 503/502 short-circuits, active-connection accounting, and the per-request log line. |
 | `internal/balancer` | Sprint 1–2 | `Selector` interface + `ErrNoHealthyBackends` (the only exported sentinel), `RoundRobin`, `LeastConnections`, `ConsistentHashBoundedLoads` over an unexported ring, and `PowerOfTwoChoicesEWMA` over per-backend EWMA latency, plus the `NewFromConfig` factory. |
 | `internal/backend` | Sprint 1–2 | `Backend` (identity + unexported `atomic` health/active/EWMA-latency state, methods-only access) and `Registry` (ordered, immutable until Sprint 4's hot-reload). |
 | `internal/config` | Sprint 1, extended Sprint 3 | Strict YAML loading (`KnownFields(true)`) and fail-fast validation; algorithm identifier constants. Sprint 3 adds optional global `health:` (probe interval/timeout) and `circuit:` (cooldown) duration sections, defaulted in `Validate` and rejected when explicitly non-positive (ADR-0011 decision 10). Immutable after init in Sprint 1. |
 | `internal/logger` | Sprint 1 | `log/slog` JSON setup and the frozen canonical field vocabulary. Leaf. |
 | `internal/metrics` | Sprint 3 (stub) | Prometheus instruments. Names/labels reserved in `internal/metrics/doc.go`. |
-| `internal/health` | Sprint 3 (stub) | Active probes + passive outlier detection. |
+| `internal/health` | Sprint 3, in progress | Active health checking built: `Checker` owns one probe goroutine per backend (started by `main` on the shared `sigCtx`), probes each backend's configured URL with a dedicated `http.Client` (its own timeout, no redirect following), and drives `Backend.MarkHealthy`/`MarkUnhealthy` through an N-consecutive-failure / M-consecutive-success state machine whose thresholds are Go constants (ADR-0011 decisions 2, 10, 11, 13). Passive outlier detection is the remaining Sprint 3 half. |
 | `internal/circuit` | Sprint 3 (stub) | Per-backend circuit breaker state machine. |
 
 **Dependency rule**: `internal/backend` does **not** import `internal/balancer`.
@@ -207,6 +209,27 @@ backend round trip — `director()` to `modifyResponse` — unconditionally and
 regardless of the configured selector, with failures recording a fixed 2s
 penalty. The latency state, cold-start rule, and penalty are recorded in
 [ADR-0010](adr/0010-p2c-ewma-backend-latency-state-cold-start-and-failure-penalty.md).
+
+### Active health checking (Sprint 3)
+
+`health.New(reg, interval, timeout)` builds a `Checker`; `main` calls
+`Checker.Start(sigCtx)`, which launches one goroutine per backend. Each
+goroutine owns a ticker and a per-backend prober holding consecutive-success /
+consecutive-failure counters; the probe-cycle logic is a method
+(`prober.probeOnce`) separate from the `for { select }` loop, so tests drive
+cycles directly with no ticker. A probe is a plain GET to the backend's
+already-configured URL — no separate health path — and only a 2xx response
+counts as success: the dedicated client returns `http.ErrUseLastResponse` on
+`CheckRedirect`, because `httputil.ReverseProxy` forwards redirects to clients
+verbatim, so a redirecting backend is unusable even though it answered.
+`probeFailuresBeforeUnhealthy` (3) consecutive failures call `MarkUnhealthy`;
+`probeSuccessesBeforeHealthy` (2) consecutive successes call `MarkHealthy`
+(the recovery path, by convention, for passive detection too). Both thresholds
+are Go constants, not config. `internal/health` depends only on
+`internal/backend` and shares no transport with `internal/proxy` — see
+[ADR-0011](adr/0011-health-passive-outlier-and-circuit-breaker-composition.md)
+decisions 2, 10, 11, and 13.
+
 
 ## Decision index
 
@@ -366,7 +389,8 @@ Read those three ADRs alongside the contracts doc's
 A future agent should not assume any of the following exist. Each names its
 owning sprint:
 
-- **Health checking (active + passive)** — Sprint 3.
+- **Passive outlier detection** (active health checking is built; this is the
+  other half of Sprint 3's health work) — Sprint 3.
 - **Circuit breaking** — Sprint 3.
 - **Prometheus metrics** — Sprint 3.
 - **Hot-reload (SIGHUP, `atomic.Pointer[Config]`)** — Sprint 4.

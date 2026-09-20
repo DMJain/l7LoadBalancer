@@ -14,16 +14,18 @@ import (
 	"github.com/DMJain/l7LoadBalancer/internal/backend"
 	"github.com/DMJain/l7LoadBalancer/internal/balancer"
 	"github.com/DMJain/l7LoadBalancer/internal/config"
+	"github.com/DMJain/l7LoadBalancer/internal/health"
 	"github.com/DMJain/l7LoadBalancer/internal/logger"
 	"github.com/DMJain/l7LoadBalancer/internal/proxy"
 )
 
 // main is a thin wiring layer: load and validate config, build the registry,
 // pick a selector from the configured algorithm, wrap it in the proxy (with
-// its round-trip observers registered), and serve. All selection, routing, and
-// connection accounting lives in the internal packages; see ADR-0002 for the
-// interface placement this wiring relies on and ADR-0011 decision 9 for the
-// observer registration.
+// its round-trip observers registered), start the active health checker, and
+// serve. All selection, routing, health, and connection accounting lives in
+// the internal packages; see ADR-0002 for the interface placement this wiring
+// relies on, ADR-0011 decision 9 for the observer registration, and ADR-0011
+// decision 13 for the health-checker goroutines sharing sigCtx.
 //
 // The listen address comes from the config file (cfg.Listen), not a flag:
 // `listen` is part of the frozen YAML schema and config.Validate checks it is
@@ -72,6 +74,16 @@ func main() {
 
 	sigCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+
+	// Active health probing shares sigCtx for shutdown (ADR-0011 decision 13):
+	// one goroutine per backend, no second shutdown primitive.
+	checker := health.New(reg, *cfg.Health.ProbeInterval, *cfg.Health.ProbeTimeout)
+	checker.Start(sigCtx)
+	log.Info("health checker started",
+		"probe_interval", *cfg.Health.ProbeInterval,
+		"probe_timeout", *cfg.Health.ProbeTimeout,
+		"backend_count", len(cfg.Backends),
+	)
 
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
