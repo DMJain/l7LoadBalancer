@@ -59,6 +59,19 @@ Every task, without exception, follows this order. **TDD is not optional.** Test
    - Identify every design decision. If any decision is non-trivial (why this algorithm? why this concurrency primitive? why this error handling?), draft an ADR **before** writing code.
 8. If the task involves a design decision not already covered by an ADR, **write the ADR first**, commit it, and reference it.
 
+### Step 2.5: Scope boundary check (mandatory, no exceptions)
+
+Before writing a single test or line of implementation, write down — in the ADR, the commit message, or a scratch note — two lists for the task you claimed in Step 1:
+
+- **In scope**: the exact acceptance criteria from `PROGRESS.md` for *this* task ID, nothing else.
+- **Out of scope**: anything adjacent that a grilling/spec/design session surfaced but that belongs to a *different* task ID, a later sprint, or `MILESTONES.md` items not yet approved.
+
+If something in "out of scope" is tempting to build inline because it's convenient while you're already in that file — don't. Add it as a proposed ticket in `PROGRESS.md`/`MILESTONES.md` for the user to approve, and stop there. This applies especially right after a grilling or spec-design session, which routinely surfaces a whole backlog of future tickets in one sitting — that backlog is a plan, not a to-do list to execute unattended.
+
+**Precedent**: S3.T3.5 (a circuit-state accessor) was implemented during an exploratory design session and had to be reverted because it was never an approved, claimed task — see the revert commit in git history. Treat that as the canonical example of what this step exists to prevent.
+
+If you catch yourself about to implement something you did not name in "in scope" above, stop and ask the user before writing the code, even mid-task.
+
 ### Step 3: Write tests FIRST (Red phase)
 
 9. Write the test file(s) for this task **before** any implementation code.
@@ -476,7 +489,7 @@ Per the user's discipline: do NOT set up any of these until Sprint 3 or later, a
 - Do not change `go.mod` module path.
 - Do not add heavyweight dependencies (frameworks, ORMs, config libraries like Viper).
 - Do not restructure `internal/` package boundaries.
-- Do not add features not in `MILESTONES.md`. Propose them to the user first; if accepted, add to `MILESTONES.md` before coding.
+- Do not add features not in `MILESTONES.md`, and do not implement work belonging to a future ticket or sprint while working on the current one — even if a grilling/spec session just surfaced it and it seems convenient to build inline. Propose it to the user first; if accepted, add it to `PROGRESS.md`/`MILESTONES.md` as its own ticket before coding. See Step 2.5 above.
 - **Do not skip tests to move faster.** Tests are written first. Always.
 - Do not commit if `make test-race` fails.
 - Do not deviate from frozen contracts without writing an ADR first.
