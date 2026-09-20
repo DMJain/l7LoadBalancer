@@ -11,12 +11,15 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+
 	"github.com/DMJain/l7LoadBalancer/internal/backend"
 	"github.com/DMJain/l7LoadBalancer/internal/balancer"
 	"github.com/DMJain/l7LoadBalancer/internal/circuit"
 	"github.com/DMJain/l7LoadBalancer/internal/config"
 	"github.com/DMJain/l7LoadBalancer/internal/health"
 	"github.com/DMJain/l7LoadBalancer/internal/logger"
+	"github.com/DMJain/l7LoadBalancer/internal/metrics"
 	"github.com/DMJain/l7LoadBalancer/internal/proxy"
 )
 
@@ -81,6 +84,16 @@ func main() {
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
+	// The metrics collector owns a private Prometheus registry and is exposed on
+	// its own listener, separate from client traffic (ADR-0013 decision 8). Only
+	// S3.T6 wires it into the request/health/circuit paths; here it is served.
+	collector := metrics.NewCollector()
+	metricsSrv := &http.Server{
+		Addr:              *cfg.Metrics.Listen,
+		Handler:           promhttp.HandlerFor(collector.Registry(), promhttp.HandlerOpts{}),
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+
 	sigCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -101,6 +114,14 @@ func main() {
 		}
 	}()
 
+	log.Info("metrics endpoint started", "listen", *cfg.Metrics.Listen)
+	go func() {
+		if err := metricsSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Error("metrics server error", "err", err)
+			os.Exit(1)
+		}
+	}()
+
 	<-sigCtx.Done()
 	log.Info("shutdown signal received")
 
@@ -108,6 +129,10 @@ func main() {
 	defer cancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		log.Error("graceful shutdown failed", "err", err)
+		os.Exit(1)
+	}
+	if err := metricsSrv.Shutdown(shutdownCtx); err != nil {
+		log.Error("metrics server shutdown failed", "err", err)
 		os.Exit(1)
 	}
 	log.Info("shutdown complete")

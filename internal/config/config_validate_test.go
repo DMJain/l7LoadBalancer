@@ -31,6 +31,14 @@ func configWithSprint3YAML(health, circuit string) string {
 		"backends:\n" + backendYAML("backend-a", "http://127.0.0.1:9001")
 }
 
+// configWithMetricsYAML builds a minimal otherwise-valid config with the
+// supplied metrics YAML block (which may be empty) spliced in before the
+// backends section.
+func configWithMetricsYAML(metrics string) string {
+	return "listen: \":8080\"\n" + metrics +
+		"backends:\n" + backendYAML("backend-a", "http://127.0.0.1:9001")
+}
+
 // loadAndValidate is the end-to-end seam under test: YAML -> Load -> Validate.
 func loadAndValidate(t *testing.T, contents string) (*Config, error) {
 	t.Helper()
@@ -273,6 +281,42 @@ func TestValidate(t *testing.T) {
 			yaml:      configWithSprint3YAML("", "circuit:\n  cooldown: \"-30s\"\n"),
 			wantErr:   true,
 			errSubstr: "cooldown",
+		},
+		{
+			name: "metrics listen omitted defaults to :9090",
+			yaml: threeBackendYAML(),
+			check: func(t *testing.T, cfg *Config) {
+				t.Helper()
+				require.NotNil(t, cfg.Metrics.Listen)
+				assert.Equal(t, DefaultMetricsListen, *cfg.Metrics.Listen)
+			},
+		},
+		{
+			name: "metrics listen set explicitly is kept",
+			yaml: configWithMetricsYAML("metrics:\n  listen: \":19191\"\n"),
+			check: func(t *testing.T, cfg *Config) {
+				t.Helper()
+				require.NotNil(t, cfg.Metrics.Listen)
+				assert.Equal(t, ":19191", *cfg.Metrics.Listen)
+			},
+		},
+		{
+			name:      "metrics listen without port is rejected",
+			yaml:      configWithMetricsYAML("metrics:\n  listen: \"foobar\"\n"),
+			wantErr:   true,
+			errSubstr: "metrics",
+		},
+		{
+			name:      "metrics listen with empty value is rejected",
+			yaml:      configWithMetricsYAML("metrics:\n  listen: \"\"\n"),
+			wantErr:   true,
+			errSubstr: "metrics",
+		},
+		{
+			name:      "metrics listen with out-of-range port is rejected",
+			yaml:      configWithMetricsYAML("metrics:\n  listen: \":99999\"\n"),
+			wantErr:   true,
+			errSubstr: "metrics",
 		},
 	}
 

@@ -63,6 +63,9 @@ const (
 	// DefaultCircuitCooldown is how long a tripped circuit stays Open before a
 	// read may promote it to Half-Open, when circuit.cooldown is omitted.
 	DefaultCircuitCooldown = 30 * time.Second
+	// DefaultMetricsListen is the address the Prometheus exposition endpoint
+	// binds when metrics.listen is omitted. Always-on; no disable toggle.
+	DefaultMetricsListen = ":9090"
 )
 
 // Config is the top-level load balancer configuration, loaded from YAML.
@@ -75,6 +78,7 @@ type Config struct {
 	Algorithm string          `yaml:"algorithm"`
 	Health    HealthConfig    `yaml:"health"`
 	Circuit   CircuitConfig   `yaml:"circuit"`
+	Metrics   MetricsConfig   `yaml:"metrics"`
 	Backends  []BackendConfig `yaml:"backends"`
 }
 
@@ -103,6 +107,16 @@ type CircuitConfig struct {
 	// Cooldown is how long a tripped circuit stays Open before a read may
 	// promote it to Half-Open. Omitted → DefaultCircuitCooldown.
 	Cooldown *time.Duration `yaml:"cooldown"`
+}
+
+// MetricsConfig holds the Prometheus exposition tunables. Always-on: there is
+// no disable toggle, matching the health:/circuit: precedent. Listen follows
+// the same nil-means-omitted convention as HealthConfig and CircuitConfig, so
+// Validate can tell "key absent" from "key set to empty".
+type MetricsConfig struct {
+	// Listen is the host:port the /metrics endpoint binds. Omitted →
+	// DefaultMetricsListen.
+	Listen *string `yaml:"listen"`
 }
 
 // BackendConfig describes one backend entry in the YAML config.
@@ -191,7 +205,10 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("config: unsupported algorithm %q", c.Algorithm)
 	}
 
-	return c.normalizeAndValidateDurations()
+	if err := c.normalizeAndValidateDurations(); err != nil {
+		return err
+	}
+	return c.normalizeAndValidateMetrics()
 }
 
 // normalizeAndValidateDurations applies the Sprint 3 defaults to every omitted
@@ -205,6 +222,24 @@ func (c *Config) normalizeAndValidateDurations() error {
 		return err
 	}
 	return normalizeDuration("circuit cooldown", &c.Circuit.Cooldown, DefaultCircuitCooldown)
+}
+
+// normalizeAndValidateMetrics defaults an omitted metrics.listen to
+// DefaultMetricsListen and rejects an explicitly-set value that is not a valid
+// host:port. Metrics exposition is always-on (ADR-0013 decision 8): there is no
+// disable toggle, so an explicit empty string is an error rather than a way to
+// switch it off. The pointer's nil-ness distinguishes "key absent" from "key
+// set to empty", mirroring normalizeDuration.
+func (c *Config) normalizeAndValidateMetrics() error {
+	if c.Metrics.Listen == nil {
+		listen := DefaultMetricsListen
+		c.Metrics.Listen = &listen
+		return nil
+	}
+	if *c.Metrics.Listen == "" {
+		return errors.New("config: metrics listen must not be empty")
+	}
+	return validateHostPort("metrics listen", *c.Metrics.Listen)
 }
 
 // normalizeDuration replaces an omitted duration (nil) with def and rejects an
@@ -221,18 +256,25 @@ func normalizeDuration(field string, value **time.Duration, def time.Duration) e
 	return nil
 }
 
-// validateListen enforces syntactic host:port validity only. It never binds,
+// validateListen enforces syntactic host:port validity for the client-traffic
+// listener.
+func validateListen(listen string) error {
+	return validateHostPort("listen", listen)
+}
+
+// validateHostPort enforces syntactic host:port validity only. It never binds,
 // resolves, or checks availability — those depend on runtime state and belong
 // to http.Server.ListenAndServe. net.SplitHostPort rejects strings with no
 // port ("foobar", "1.2.3.4"); the uint16 parse rejects out-of-range ports
-// like 99999.
-func validateListen(listen string) error {
-	_, port, err := net.SplitHostPort(listen)
+// like 99999. field is the config key being validated ("listen" or
+// "metrics listen"), used only to build an attributable error message.
+func validateHostPort(field, addr string) error {
+	_, port, err := net.SplitHostPort(addr)
 	if err != nil {
-		return fmt.Errorf("config: listen %q is not a valid host:port: %w", listen, err)
+		return fmt.Errorf("config: %s %q is not a valid host:port: %w", field, addr, err)
 	}
 	if _, err := strconv.ParseUint(port, 10, 16); err != nil {
-		return fmt.Errorf("config: listen %q has an invalid port: %w", listen, err)
+		return fmt.Errorf("config: %s %q has an invalid port: %w", field, addr, err)
 	}
 	return nil
 }

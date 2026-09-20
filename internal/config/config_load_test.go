@@ -129,6 +129,29 @@ backends:
 			wantErr:   true,
 			errSubstr: "cooldwn",
 		},
+		{
+			name:     "metrics listen decodes from YAML without defaulting",
+			contents: "listen: \":8080\"\nmetrics:\n  listen: \":19191\"\n",
+			check: func(t *testing.T, cfg *Config) {
+				t.Helper()
+				require.NotNil(t, cfg.Metrics.Listen)
+				assert.Equal(t, ":19191", *cfg.Metrics.Listen)
+			},
+		},
+		{
+			name:     "omitted metrics listen is left nil by Load",
+			contents: "listen: \":8080\"\n",
+			check: func(t *testing.T, cfg *Config) {
+				t.Helper()
+				assert.Nil(t, cfg.Metrics.Listen)
+			},
+		},
+		{
+			name:      "unknown field inside metrics section is rejected",
+			contents:  "listen: \":8080\"\nmetrics:\n  listn: \":9090\"\n",
+			wantErr:   true,
+			errSubstr: "listn",
+		},
 	}
 
 	for _, tc := range cases {

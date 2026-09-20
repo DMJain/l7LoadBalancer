@@ -145,10 +145,12 @@ Example log line per event type (JSON via `slog.NewJSONHandler`):
 From `internal/metrics/doc.go`:
 
 - Metric name prefixes: `lb_requests_total`, `lb_request_duration_seconds`,
-  `lb_backend_healthy`, `lb_circuit_state`.
+  `lb_backend_healthy`, `lb_circuit_state`, `lb_active_connections`
+  (added in S3.T4, amending this reservation — ADR-0013 decision 7).
 - Labels: `backend`, `method`, `status_class` — deliberately **not**
   `status_code`, to avoid unbounded cardinality from arbitrary upstream
-  status codes.
+  status codes. `lb_circuit_state` additionally carries `state`
+  (`closed`/`open`/`half_open`) as a label enum.
 
 Proposed latency histogram bucket boundaries (seconds), to be overridden
 with real measured data once Sprint 1's benchmark/manual-smoke numbers
