@@ -209,6 +209,18 @@ func TestProberConsecutiveCountersReset(t *testing.T) {
 	assert.False(t, b.IsHealthy())
 }
 
+// TestCheckerUsesDedicatedTransport proves the probe client does not resolve
+// to the shared http.DefaultTransport, which httputil.ReverseProxy also falls
+// back to. Without its own transport, probe tuning would silently couple to
+// live-request transport settings (ADR-0011 decision 11).
+func TestCheckerUsesDedicatedTransport(t *testing.T) {
+	reg := newTestRegistry(t, statusServer(t, http.StatusOK).URL)
+	c := New(reg, time.Second, time.Second)
+
+	require.NotNil(t, c.client.Transport)
+	assert.NotSame(t, http.DefaultTransport, c.client.Transport)
+}
+
 // TestProbeHonorsItsOwnClientTimeout proves the checker's dedicated client
 // timeout bounds a probe, independent of internal/proxy's transport.
 func TestProbeHonorsItsOwnClientTimeout(t *testing.T) {

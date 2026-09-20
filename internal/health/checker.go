@@ -51,20 +51,25 @@ type Checker struct {
 // New builds a Checker over reg that probes each backend every interval,
 // bounding a single probe by timeout.
 //
-// The probe client is dedicated to health checking: its own timeout, and a
-// CheckRedirect that returns http.ErrUseLastResponse so a 3xx is observed as
-// a failure rather than silently followed to a 2xx target. It shares no
-// transport with internal/proxy (ADR-0011 decision 11), so probe tuning never
-// couples to live-request transport settings.
+// The probe client is dedicated to health checking. It carries its own
+// transport — cloned from http.DefaultTransport so it keeps sensible stdlib
+// defaults without sharing the global connection pool that
+// httputil.ReverseProxy falls back to — plus its own timeout, and a
+// CheckRedirect returning http.ErrUseLastResponse so a 3xx is observed as a
+// failure rather than silently followed to a 2xx target. Sharing no transport
+// with internal/proxy (ADR-0011 decision 11) means probe tuning never couples
+// to live-request transport settings.
 //
 // interval and timeout are expected positive; config.Validate guarantees it.
 // It returns a Checker that does nothing until Start is called.
 func New(reg *backend.Registry, interval, timeout time.Duration) *Checker {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
 	return &Checker{
 		reg:      reg,
 		interval: interval,
 		client: &http.Client{
-			Timeout: timeout,
+			Transport: transport,
+			Timeout:   timeout,
 			CheckRedirect: func(*http.Request, []*http.Request) error {
 				return http.ErrUseLastResponse
 			},
@@ -88,11 +93,11 @@ func (c *Checker) Start(ctx context.Context) {
 // can drive probe cycles directly, with no real ticker or context
 // cancellation. It returns whether this probe succeeded.
 func (p *prober) probeOnce(ctx context.Context) bool {
-	if p.checker.probe(ctx, p.backend) {
+	if p.checker.probe(ctx, p.target) {
 		p.failures = 0
 		p.successes++
 		if p.successes >= probeSuccessesBeforeHealthy {
-			p.backend.MarkHealthy()
+			p.target.MarkHealthy()
 		}
 		return true
 	}
@@ -100,7 +105,7 @@ func (p *prober) probeOnce(ctx context.Context) bool {
 	p.successes = 0
 	p.failures++
 	if p.failures >= probeFailuresBeforeUnhealthy {
-		p.backend.MarkUnhealthy()
+		p.target.MarkUnhealthy()
 	}
 	return false
 }
@@ -110,14 +115,14 @@ func (p *prober) probeOnce(ctx context.Context) bool {
 // nothing else may touch a prober's counters.
 type prober struct {
 	checker *Checker
-	backend *backend.Backend
+	target  *backend.Backend
 
 	successes int
 	failures  int
 }
 
 func (c *Checker) newProber(b *backend.Backend) *prober {
-	return &prober{checker: c, backend: b}
+	return &prober{checker: c, target: b}
 }
 
 // run is the per-backend goroutine wiring: a ticker selecting against ctx.
