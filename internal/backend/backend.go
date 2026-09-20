@@ -188,6 +188,9 @@ func (b *Backend) CircuitOpen(cooldown time.Duration) bool {
 // circuit becomes half-open therefore cannot both believe they are the trial
 // (ADR-0011 decision 6). cooldown is supplied by internal/circuit.
 func (b *Backend) CircuitAllow(cooldown time.Duration) bool {
+	// Promote first so an open-but-cooled circuit is treated as half-open; the
+	// promotion rule then lives in exactly one place (currentCircuit).
+	b.currentCircuit(cooldown)
 	for {
 		old := b.circuit.Load()
 		cur := circuitSnapshot{}
@@ -196,12 +199,9 @@ func (b *Backend) CircuitAllow(cooldown time.Duration) bool {
 		}
 		switch cur.state {
 		case circuitOpen:
-			if time.Since(cur.openedAt) < cooldown {
-				return false
-			}
-			// Cooldown elapsed: promote, then loop to take the trial.
-			next := circuitSnapshot{state: circuitHalfOpen}
-			b.circuit.CompareAndSwap(old, &next)
+			// Still open: the cooldown has not elapsed (or the circuit was
+			// reopened concurrently).
+			return false
 		case circuitHalfOpen:
 			if cur.trial {
 				return false
@@ -223,6 +223,11 @@ func (b *Backend) CircuitAllow(cooldown time.Duration) bool {
 // threshold (ADR-0011 decision 6). An outcome observed while Open is ignored:
 // a request admitted before the circuit opened can still be in flight, and
 // letting its stale success close the circuit would bypass the cooldown.
+//
+// Known limitation (ADR-0012 consequences): a request admitted while Closed
+// whose response arrives while the circuit is Half-Open cannot be told apart
+// from the trial, because the frozen three-argument RoundTripObserver carries
+// no per-request trial marker; it may therefore resolve the trial early.
 func (b *Backend) CircuitSuccess() {
 	for {
 		old := b.circuit.Load()
@@ -241,7 +246,8 @@ func (b *Backend) CircuitSuccess() {
 // and opens the circuit at threshold; from Half-Open it reopens immediately —
 // the trial failed — with a fresh opened-at timestamp and no inner threshold
 // (ADR-0011 decisions 6 and 8). An outcome observed while Open is ignored, so a
-// stale in-flight failure cannot move the opened-at timestamp.
+// stale in-flight failure cannot move the opened-at timestamp. The same
+// stale-while-Half-Open limitation noted on CircuitSuccess applies here.
 func (b *Backend) CircuitFailure(threshold int) {
 	for {
 		old := b.circuit.Load()

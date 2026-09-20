@@ -13,10 +13,6 @@ import (
 	"github.com/DMJain/l7LoadBalancer/internal/config"
 )
 
-// Breaker must satisfy the gate interface backend defines and consumes, so a
-// registry can be handed one without backend importing circuit (ADR-0012).
-var _ backend.CircuitGate = (*Breaker)(nil)
-
 // testRegistry builds a two-backend registry over unresolvable-by-design URLs;
 // no request is ever dispatched in these tests, the breaker state is driven
 // directly.

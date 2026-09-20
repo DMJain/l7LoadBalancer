@@ -66,9 +66,11 @@ var (
 	_ backend.CircuitGate = (*Breaker)(nil)
 
 	// Breaker satisfies proxy.RoundTripObserver structurally. The assertion
-	// cannot be written here without importing internal/proxy, which would add
-	// an edge the package graph does not want; main's registration of it is the
-	// compile-time check.
+	// cannot name proxy.RoundTripObserver without importing internal/proxy,
+	// which the AGENTS.md package graph keeps circuit free of (`circuit`
+	// depends on `backend` only — an import of `proxy` would be acyclic but
+	// undocumented). main registering the breaker against the interface is the
+	// real compile-time check; this local shape pins the method signature.
 	_ interface {
 		ObserveRoundTrip(*backend.Backend, time.Duration, bool)
 	} = (*Breaker)(nil)

@@ -132,11 +132,11 @@ func busiest(counts map[string]int) int {
 // Select to see the same load snapshot. It shares admits with Select, so the
 // evidence it produces cannot drift from the behavior it measures.
 func (s *ConsistentHashBoundedLoads) wouldNeedFallback(addr string) bool {
-	healthy := s.reg.Selectable()
-	if len(healthy) == 0 {
+	selectable := s.reg.Selectable()
+	if len(selectable) == 0 {
 		return false
 	}
-	capacity := capacityFor(healthy)
+	capacity := capacityFor(selectable)
 	for b := range s.ring.candidates(requestHashKey(requestForAddr(addr))) {
 		if s.admits(b, capacity) {
 			return false

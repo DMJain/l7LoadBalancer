@@ -160,6 +160,16 @@ decision that is expensive to reverse:
   receiving zero traffic after its cooldown elapses is not observed to recover
   until traffic reaches it — the accepted consequence ADR-0011 decision 6
   already records.
+- Negative (known limitation): a request admitted while `Closed` whose response
+  arrives while the circuit is `Half-Open` cannot be distinguished from the
+  trial that `Allow` admitted, because the frozen three-argument
+  `RoundTripObserver` carries no per-request trial marker. Such a stale outcome
+  may resolve the trial early. Outcomes observed while `Open` are already
+  ignored, so the exposure is the narrow window between promotion and the
+  trial's own result; closing it fully would require threading a trial
+  indicator from `Allow` to the observer, which would change the interface
+  ADR-0011 decision 9 froze. Accepted as a bounded edge rather than solved with
+  speculative state.
 
 ## Alternatives considered
 

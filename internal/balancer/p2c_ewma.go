@@ -9,7 +9,8 @@ import (
 )
 
 // PowerOfTwoChoicesEWMA routes each request to whichever of two randomly
-// sampled healthy backends currently has the lower EWMA-tracked latency. It
+// sampled selectable backends (healthy and circuit-not-open) currently has the
+// lower EWMA-tracked latency. It
 // fills the gap LeastConnections and ConsistentHashBoundedLoads cannot see: a
 // backend that is healthy and accepting connections but simply slow. Two
 // random samples suffice to achieve exponentially better load balance than a
@@ -30,9 +31,9 @@ func NewPowerOfTwoChoicesEWMA(reg *backend.Registry) *PowerOfTwoChoicesEWMA {
 	return &PowerOfTwoChoicesEWMA{reg: reg}
 }
 
-// Select implements Selector. It snapshots the healthy set and returns
-// ErrNoHealthyBackends when it is empty. With exactly one healthy backend it
-// returns that backend directly — there is nothing to compare against, so a
+// Select implements Selector. It snapshots the selectable set and returns
+// ErrNoHealthyBackends when it is empty. With exactly one selectable backend
+// it returns that backend directly — there is nothing to compare against, so a
 // random draw would be theater, not policy. With two or more it draws two
 // distinct indices and returns the one with the lower EWMALatency.
 //
@@ -41,23 +42,23 @@ func NewPowerOfTwoChoicesEWMA(reg *backend.Registry) *PowerOfTwoChoicesEWMA {
 // from two different backends' floating-point histories is not a
 // reproducible-by-design scenario the way registry-order ties are.
 func (s *PowerOfTwoChoicesEWMA) Select(ctx context.Context, r *http.Request) (*backend.Backend, error) {
-	healthy := s.reg.Selectable()
-	switch len(healthy) {
+	selectable := s.reg.Selectable()
+	switch len(selectable) {
 	case 0:
 		return nil, ErrNoHealthyBackends
 	case 1:
-		return healthy[0], nil
+		return selectable[0], nil
 	}
 
-	i := rand.IntN(len(healthy))
-	j := rand.IntN(len(healthy) - 1)
+	i := rand.IntN(len(selectable))
+	j := rand.IntN(len(selectable) - 1)
 	if j >= i {
 		j++
 	}
-	if healthy[i].EWMALatency() <= healthy[j].EWMALatency() {
-		return healthy[i], nil
+	if selectable[i].EWMALatency() <= selectable[j].EWMALatency() {
+		return selectable[i], nil
 	}
-	return healthy[j], nil
+	return selectable[j], nil
 }
 
 var _ Selector = (*PowerOfTwoChoicesEWMA)(nil)
