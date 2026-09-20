@@ -6,19 +6,33 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-// Circuit-state label values for lb_circuit_state. They are plain snake_case
-// strings matching internal/circuit's state vocabulary so this package stays a
-// leaf and needs no import of the circuit package (ADR-0013 decision 5).
+// CircuitState is the closed set of lb_circuit_state label values. It is a
+// distinct type rather than a bare string so an unrecognized state is a
+// deliberate conversion, not an easy accident. The values are snake_case and
+// match internal/circuit's state vocabulary, but this package stays a leaf and
+// never imports the circuit package (ADR-0013 decision 5).
+type CircuitState string
+
 const (
-	CircuitStateClosed   = "closed"
-	CircuitStateOpen     = "open"
-	CircuitStateHalfOpen = "half_open"
+	CircuitStateClosed   CircuitState = "closed"
+	CircuitStateOpen     CircuitState = "open"
+	CircuitStateHalfOpen CircuitState = "half_open"
 )
 
 // circuitStates is the closed set of lb_circuit_state label values. The setter
 // writes every one of them on every call so exactly one is 1 and the others
 // are 0 (ADR-0013 decision 5).
-var circuitStates = []string{CircuitStateClosed, CircuitStateOpen, CircuitStateHalfOpen}
+var circuitStates = []CircuitState{CircuitStateClosed, CircuitStateOpen, CircuitStateHalfOpen}
+
+// valid reports whether s is one of the three known states.
+func (s CircuitState) valid() bool {
+	for _, known := range circuitStates {
+		if s == known {
+			return true
+		}
+	}
+	return false
+}
 
 // histogramBuckets are the provisional request-duration boundaries in seconds,
 // reserved in doc.go and documented as provisional pending Sprint 5's real
@@ -109,14 +123,19 @@ func (c *Collector) SetBackendHealthy(backend string, healthy bool) {
 // SetCircuitState sets the per-backend circuit-state label enum, writing every
 // known state on every call — the target to 1 and the other two to 0 — so the
 // exactly-one-state-is-1 invariant holds even if a caller only knows the new
-// state (ADR-0013 decision 5).
-func (c *Collector) SetCircuitState(backend, state string) {
+// state (ADR-0013 decision 5). An unrecognized state is ignored, leaving the
+// previous series untouched rather than zeroing all three and breaking the
+// invariant.
+func (c *Collector) SetCircuitState(backend string, state CircuitState) {
+	if !state.valid() {
+		return
+	}
 	for _, s := range circuitStates {
 		value := 0.0
 		if s == state {
 			value = 1
 		}
-		c.circuit.WithLabelValues(backend, s).Set(value)
+		c.circuit.WithLabelValues(backend, string(s)).Set(value)
 	}
 }
 

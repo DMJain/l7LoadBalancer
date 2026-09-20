@@ -90,11 +90,17 @@ from the design-session record in the spec above.
    `health:`/`circuit:` precedent of no per-subsystem disable switch.
 
 9. **Startup seeding of every backend's initial gauge values
-   (`healthy=1`, `state=closed`, `active_connections=0`) uses the exact same
-   `Collector` methods real transitions use** — not a separate seeding path —
-   because Prometheus `Vec` metrics materialize no series until first written
-   and a never-degraded system must render a complete dashboard on its first
-   scrape. (Implemented in S3.T6; recorded here as the design.)
+   (`healthy=1`, `state=closed`, `active_connections=0`) goes through the
+   `Collector`'s own setter methods** — `SetBackendHealthy`,
+   `SetCircuitState`, and `SetActiveConnections(backend, 0)` — not a separate
+   seeding code path, because Prometheus `Vec` metrics materialize no series
+   until first written and a never-degraded system must render a complete
+   dashboard on its first scrape. Where a gauge has a transition method that
+   is already a setter (healthy, circuit) seeding calls exactly that method;
+   the active-connections gauge's real transitions use
+   `IncActiveConnections`/`DecActiveConnections`, so seeding its initial `0`
+   uses `SetActiveConnections`. (Implemented in S3.T6; recorded here as the
+   design.)
 
 ### Transition logging
 

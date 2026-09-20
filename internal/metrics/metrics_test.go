@@ -103,9 +103,9 @@ func TestCollectorSetCircuitStateZeroesOtherStates(t *testing.T) {
 	c := NewCollector()
 	backend := "backend-a"
 
-	stateValue := func(state string) float64 {
+	stateValue := func(state CircuitState) float64 {
 		t.Helper()
-		m := findMetric(t, c, "lb_circuit_state", map[string]string{"backend": backend, "state": state})
+		m := findMetric(t, c, "lb_circuit_state", map[string]string{"backend": backend, "state": string(state)})
 		require.NotNilf(t, m, "state %q series must exist", state)
 		return m.GetGauge().GetValue()
 	}
@@ -124,6 +124,13 @@ func TestCollectorSetCircuitStateZeroesOtherStates(t *testing.T) {
 
 	// A third transition proves zeroing is unconditional on every call.
 	c.SetCircuitState(backend, CircuitStateHalfOpen)
+	assert.Equal(t, 0.0, stateValue(CircuitStateClosed))
+	assert.Equal(t, 0.0, stateValue(CircuitStateOpen))
+	assert.Equal(t, 1.0, stateValue(CircuitStateHalfOpen))
+
+	// An unrecognized state is ignored: the previous series stays intact
+	// rather than all three being zeroed.
+	c.SetCircuitState(backend, CircuitState("bogus"))
 	assert.Equal(t, 0.0, stateValue(CircuitStateClosed))
 	assert.Equal(t, 0.0, stateValue(CircuitStateOpen))
 	assert.Equal(t, 1.0, stateValue(CircuitStateHalfOpen))
@@ -168,7 +175,7 @@ func TestCollectorExpositionEndpoint(t *testing.T) {
 	c := NewCollector()
 	c.ObserveRequest("backend-a", "GET", "2xx", 12*time.Millisecond)
 	c.SetBackendHealthy("backend-a", true)
-	c.SetCircuitState("backend-a", CircuitStateClosed)
+	c.SetCircuitState("backend-a", CircuitStateOpen)
 	c.SetActiveConnections("backend-a", 1)
 
 	srv := httptest.NewServer(promhttp.HandlerFor(c.Registry(), promhttp.HandlerOpts{}))
@@ -186,8 +193,12 @@ func TestCollectorExpositionEndpoint(t *testing.T) {
 	wants := []string{
 		`lb_requests_total{backend="backend-a",method="GET",status_class="2xx"} 1`,
 		`lb_request_duration_seconds_count{backend="backend-a",method="GET",status_class="2xx"} 1`,
+		`lb_request_duration_seconds_bucket{backend="backend-a",method="GET",status_class="2xx",le="+Inf"} 1`,
 		`lb_backend_healthy{backend="backend-a"} 1`,
-		`lb_circuit_state{backend="backend-a",state="closed"} 1`,
+		// All three state series are present; only the target is 1.
+		`lb_circuit_state{backend="backend-a",state="closed"} 0`,
+		`lb_circuit_state{backend="backend-a",state="open"} 1`,
+		`lb_circuit_state{backend="backend-a",state="half_open"} 0`,
 		`lb_active_connections{backend="backend-a"} 1`,
 	}
 	for _, want := range wants {
