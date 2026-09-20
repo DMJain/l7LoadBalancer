@@ -65,6 +65,18 @@ func startBackend(t *testing.T, name string) *httptest.Server {
 	return srv
 }
 
+// failingBackend starts an httptest.Server that answers every request with 500,
+// the modifyResponse failure signal shared by the fan-out and passive-outlier
+// tests.
+func failingBackend(t *testing.T) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
 // deadBackendURL returns a URL that accepts TCP connections and immediately
 // closes them, so a round trip fails deterministically with a transport error
 // rather than depending on an unbound fixed port.
@@ -337,11 +349,7 @@ func TestProxyObserverFanOutInvokesEachObserverExactlyOnce(t *testing.T) {
 		{
 			name: "5xx response",
 			backendURL: func(t *testing.T) string {
-				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-					w.WriteHeader(http.StatusInternalServerError)
-				}))
-				t.Cleanup(srv.Close)
-				return srv.URL
+				return failingBackend(t).URL
 			},
 			wantStatus:  http.StatusInternalServerError,
 			wantSuccess: false,
@@ -482,19 +490,21 @@ func TestProxyLogsRequestCompleteOn503(t *testing.T) {
 
 // TestProxyFanOutFeedsPassiveOutlierDetectorAlongsideLatencyObserver proves the
 // detector receives outcomes through the real proxy fan-out when registered
-// next to another observer, and that a persistently failing backend is ejected
-// without any HTTP interaction with the detector directly. The latency observer
-// recording a positive EWMA is the "alongside" half: both registered observers
-// were fed by the same request path.
+// next to other observers, and that a persistently failing backend is ejected
+// without the test touching the detector's state directly. A spy sits alongside
+// the real latency observer and the detector: the spy receiving exactly one
+// call per request shows all three were fed the same request path, so the
+// detector's ejection is genuinely attributable to the fan-out (the generic
+// per-observer exactly-once guarantee itself is ticket 02's test, not this one).
 func TestProxyFanOutFeedsPassiveOutlierDetectorAlongsideLatencyObserver(t *testing.T) {
-	failing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-	}))
-	t.Cleanup(failing.Close)
+	failing := failingBackend(t)
 
 	reg := registryFrom(t, backendEntry{"backend-a", failing.URL})
 	p := New(reg, balancer.NewRoundRobin(reg))
-	p.RegisterObserver(NewLatencyObserver())
+	latency := &spyObserver{inner: NewLatencyObserver()}
+	spy := &spyObserver{}
+	p.RegisterObserver(latency)
+	p.RegisterObserver(spy)
 	p.RegisterObserver(health.NewOutlierDetector())
 
 	front := httptest.NewServer(p)
@@ -505,16 +515,73 @@ func TestProxyFanOutFeedsPassiveOutlierDetectorAlongsideLatencyObserver(t *testi
 
 	// Every 5xx is one passive failure. Once the detector ejects the backend,
 	// selection returns ErrNoHealthyBackends and the loop stops early (503).
+	requests := 0
+	for i := 0; i < 50 && b.IsHealthy(); i++ {
+		resp, err := front.Client().Get(front.URL)
+		require.NoError(t, err)
+		_ = resp.Body.Close()
+		requests++
+	}
+
+	require.False(t, b.IsHealthy(),
+		"the passive outlier detector must eject a backend failing through the real proxy fan-out")
+	require.Positive(t, requests)
+
+	// The other observers saw the same requests that drove the ejection.
+	assert.Len(t, spy.snapshot(), requests, "the spy must receive every request's outcome")
+	assert.Len(t, latency.snapshot(), requests, "the latency observer must receive every request's outcome")
+	assert.Positive(t, b.EWMALatency())
+}
+
+// TestProxyFanOutFeedsDetectorMixedResponseAndTransportFailures proves the
+// failure signal is the union the ticket specifies: a backend that alternately
+// returns 500 (the modifyResponse path) and aborts the connection with no
+// response at all (the errorHandler transport-failure path) is ejected once the
+// mixed failures reach the threshold, not only when one kind repeats.
+func TestProxyFanOutFeedsDetectorMixedResponseAndTransportFailures(t *testing.T) {
+	var seen, serverErrors atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if seen.Add(1)%2 == 0 {
+			serverErrors.Add(1)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		hj, ok := w.(http.Hijacker)
+		if !ok {
+			serverErrors.Add(1)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		conn, _, err := hj.Hijack()
+		if err != nil {
+			return
+		}
+		_ = conn.Close() // transport failure: not even a response line
+	}))
+	t.Cleanup(srv.Close)
+
+	reg := registryFrom(t, backendEntry{"backend-a", srv.URL})
+	p := New(reg, balancer.NewRoundRobin(reg))
+	p.RegisterObserver(health.NewOutlierDetector())
+
+	front := httptest.NewServer(p)
+	t.Cleanup(front.Close)
+
+	b := reg.All()[0]
+	require.True(t, b.IsHealthy())
+
 	for i := 0; i < 50 && b.IsHealthy(); i++ {
 		resp, err := front.Client().Get(front.URL)
 		require.NoError(t, err)
 		_ = resp.Body.Close()
 	}
 
-	assert.False(t, b.IsHealthy(),
-		"the passive outlier detector must eject a backend failing through the real proxy fan-out")
-	assert.Positive(t, b.EWMALatency(),
-		"the latency observer registered alongside must also have received outcomes")
+	require.False(t, b.IsHealthy(),
+		"mixed 5xx and transport failures must eject the backend")
+	assert.Positive(t, serverErrors.Load(),
+		"the run must have exercised the modifyResponse (5xx) path")
+	assert.Greater(t, seen.Load(), serverErrors.Load(),
+		"the run must have exercised the errorHandler (connection-abort) path")
 }
 
 func TestProxyLogsRequestCompleteOn502(t *testing.T) {

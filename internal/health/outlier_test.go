@@ -168,6 +168,23 @@ func TestOutlierDetectorEjectsExactlyOncePerEpisode(t *testing.T) {
 	assert.False(t, b.IsHealthy())
 }
 
+// TestOutlierDetectorDefaultEjectsViaMarkUnhealthy exercises the production
+// wiring rather than the counting seam: an unmodified detector — whose eject
+// function is the real (*backend.Backend).MarkUnhealthy assigned in
+// NewOutlierDetector — must still transition the backend's health on threshold
+// breach.
+func TestOutlierDetectorDefaultEjectsViaMarkUnhealthy(t *testing.T) {
+	b := outlierBackends(t, 1)[0]
+	d := NewOutlierDetector()
+
+	require.True(t, b.IsHealthy())
+	for i := 0; i < outlierFailuresBeforeEject; i++ {
+		d.ObserveRoundTrip(b, time.Millisecond, false)
+	}
+	assert.False(t, b.IsHealthy(),
+		"the production default must eject through Backend.MarkUnhealthy")
+}
+
 // TestOutlierDetectorConcurrentObserveEjectsEachBackendOnce drives the detector
 // from many goroutines per backend under -race: the lock-free-looking contract
 // must still eject each backend exactly once, not once per racing observer.
