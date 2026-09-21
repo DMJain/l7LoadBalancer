@@ -49,13 +49,17 @@ Then open <http://localhost:3000> — the `l7LoadBalancer` dashboard is already
 provisioned (anonymous, Viewer role) — and <http://localhost:9091> for
 Prometheus.
 
-Every dashboard panel is populated from the very first scrape, **before any
-client request is sent**, because `main.go`'s startup seeding materializes each
-backend's gauge series (`lb_backend_healthy=1`, `lb_circuit_state=closed`,
-`lb_active_connections=0`) through the same collector methods real transitions
-use (ADR-0013 decision 9).
+Every **gauge** panel — Circuit state, Backend healthy, Active connections —
+is populated from the very first scrape, **before any client request is sent**,
+because `main.go`'s startup seeding materializes each backend's gauge series
+(`lb_backend_healthy=1`, `lb_circuit_state=closed`, `lb_active_connections=0`)
+through the same collector methods real transitions use (ADR-0013 decision 9).
+The two **traffic-derived** panels — Request rate and Latency — are
+necessarily empty until requests flow (a counter/histogram `Vec` has no series
+until first observed, and `rate()` needs two samples); send traffic in the next
+section to fill them.
 
-## Smoke test 1 — complete dashboard on first scrape
+## Smoke test 1 — gauge panels populated on first scrape
 
 `smoke.sh` automates the checks below and prints the URLs:
 

@@ -63,3 +63,9 @@ to build correct panels and demonstrate them against real data)
   `lb_active_connections=0`, and all three `lb_circuit_state` series with
   `closed=1`). The Docker daemon was **not** running this session, so the
   full `docker compose up` smoke was not executed — see the session log.
+- Two-axis review follow-ups applied: the README no longer overclaims that the
+  traffic-derived panels populate before traffic (only the three gauge panels
+  do, via seeding); `smoke.sh` now queries Prometheus for the three seeded
+  gauge series instead of only checking Grafana provisioning. Per the owner,
+  this ticket stays `[DONE]` on the completed, documented deliverable, with the
+  end-to-end render smoke recorded as the owner's pending manual verification.
