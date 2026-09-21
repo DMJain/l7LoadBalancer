@@ -1,0 +1,90 @@
+package chaos_test
+
+import (
+	"context"
+	"log/slog"
+	"sync"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+)
+
+// captureHandler is a slog.Handler that retains every record it receives, so
+// the chaos tests can assert on transition lines by structured field rather
+// than by parsing JSON text. The tests build a logger over it and hand that
+// logger to health.Checker, health.OutlierDetector, and circuit.Breaker — the
+// only producers of the transition vocabulary.
+//
+// Concurrency: Handle is called from probe goroutines and request goroutines
+// while the test goroutine reads, so the record slice is mutex-guarded.
+type captureHandler struct {
+	mu      sync.Mutex
+	records []slog.Record
+}
+
+func (h *captureHandler) Enabled(context.Context, slog.Level) bool { return true }
+
+func (h *captureHandler) Handle(_ context.Context, r slog.Record) error {
+	h.mu.Lock()
+	h.records = append(h.records, r.Clone())
+	h.mu.Unlock()
+	return nil
+}
+
+// WithAttrs/WithGroup return the handler unchanged: the chaos assertions care
+// only about top-level transition fields, and no producer uses groups.
+func (h *captureHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *captureHandler) WithGroup(string) slog.Handler      { return h }
+
+// snapshot returns a copy of every record captured so far.
+func (h *captureHandler) snapshot() []slog.Record {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]slog.Record(nil), h.records...)
+}
+
+// recordFields flattens a record's attributes into a string map.
+func recordFields(r slog.Record) map[string]string {
+	fields := make(map[string]string, r.NumAttrs())
+	r.Attrs(func(a slog.Attr) bool {
+		fields[a.Key] = a.Value.String()
+		return true
+	})
+	return fields
+}
+
+// transitionCount returns how many captured records match all of event,
+// backend, and reason exactly. It is a field-allowlist match: timestamps,
+// levels, messages, and any other volatile fields are ignored, and there is no
+// substring or regex matching anywhere.
+func (h *captureHandler) transitionCount(event, backend, reason string) int {
+	n := 0
+	for _, r := range h.snapshot() {
+		f := recordFields(r)
+		if f["event"] == event && f["backend"] == backend && f["reason"] == reason {
+			n++
+		}
+	}
+	return n
+}
+
+// transitionRecords returns every captured record carrying an `event` field —
+// i.e. every health/circuit transition line, excluding the proxy's per-request
+// lines — for baseline "no transitions yet" assertions.
+func (h *captureHandler) transitionRecords() []slog.Record {
+	var out []slog.Record
+	for _, r := range h.snapshot() {
+		if recordFields(r)["event"] != "" {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// assertTransitionLogged asserts exactly one transition line matching the
+// frozen event/backend/reason triple was captured.
+func assertTransitionLogged(t *testing.T, h *captureHandler, event, backend, reason string) {
+	t.Helper()
+	require.Equal(t, 1, h.transitionCount(event, backend, reason),
+		"exactly one %s/%s transition line for backend %s", event, reason, backend)
+}
