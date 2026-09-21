@@ -51,11 +51,18 @@ func main() {
 		os.Exit(1)
 	}
 
+	// The metrics collector owns a private Prometheus registry and is exposed on
+	// its own listener, separate from client traffic (ADR-0013 decision 8). It is
+	// built before the registry so every backend's gauge series can be seeded the
+	// moment the registry exists (ADR-0013 decision 9).
+	collector := metrics.NewCollector()
+
 	reg, err := backend.NewRegistry(cfg.Backends)
 	if err != nil {
 		log.Error("backend registry build failed", "err", err)
 		os.Exit(1)
 	}
+	seedMetrics(collector, reg)
 
 	// The circuit breaker is both the registry's eligibility/admission gate and
 	// a round-trip observer. Installing the gate before selection begins means
@@ -77,12 +84,6 @@ func main() {
 		"backend_count", len(cfg.Backends),
 		"circuit_cooldown", *cfg.Circuit.Cooldown,
 	)
-
-	// The metrics collector owns a private Prometheus registry and is exposed on
-	// its own listener, separate from client traffic (ADR-0013 decision 8).
-	// S3.T6.1 wires it into the proxy's whole-request hook; the health and
-	// circuit gauges follow in S3.T6.2–T6.4.
-	collector := metrics.NewCollector()
 
 	srv := &http.Server{
 		Addr:              cfg.Listen,
@@ -138,6 +139,18 @@ func main() {
 		os.Exit(1)
 	}
 	log.Info("shutdown complete")
+}
+
+// seedMetrics materializes every backend's initial gauge series through the
+// collector's own setter methods, so a freshly started, never-degraded system
+// renders a complete dashboard on its first scrape — Prometheus Vec metrics
+// create no series until first written (ADR-0013 decision 9). This ticket seeds
+// the active-connections gauge to 0; the backend-healthy and circuit-state
+// gauges are seeded here by S3.T6.3/T6.4.
+func seedMetrics(c *metrics.Collector, reg *backend.Registry) {
+	for _, b := range reg.All() {
+		c.SetActiveConnections(b.Name, 0)
+	}
 }
 
 // newHandler builds the proxy, installs the whole-request metrics collector,

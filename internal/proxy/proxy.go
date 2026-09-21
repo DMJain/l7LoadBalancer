@@ -39,6 +39,13 @@ const p2cFailurePenalty = 2 * time.Second
 // ActiveConns. See ADR-0007.
 type reqState struct {
 	backend *backend.Backend
+	// metrics is the collector whose lb_active_connections gauge mirrors this
+	// request's slot. It is the same reference ServeHTTP reads off Proxy, copied
+	// here so release() can decrement the gauge next to DecActive without the
+	// release closures needing the Proxy. nil means no collector is installed
+	// and both the increment and decrement are skipped, so the gauge can never
+	// drift from Backend.ActiveConns (ADR-0013 decision 7).
+	metrics *metrics.Collector
 	status  int
 	once    sync.Once
 
@@ -53,10 +60,26 @@ type reqState struct {
 	dispatchStart time.Time
 }
 
-// release drops this request's active-connection slot exactly once.
+// activate claims this request's active-connection slot, reporting it to both
+// the backend's own counter and the lb_active_connections gauge at the same
+// call site so the two cannot drift. It is called only on the dispatch path,
+// after the circuit gate admits the request — a denied request never touches
+// either (ADR-0013 decision 7).
+func (s *reqState) activate() {
+	s.backend.IncActive()
+	if s.metrics != nil {
+		s.metrics.IncActiveConnections(s.backend.Name)
+	}
+}
+
+// release drops this request's active-connection slot exactly once, mirroring
+// activate on both the backend counter and the gauge.
 func (s *reqState) release() {
 	s.once.Do(func() {
 		s.backend.DecActive()
+		if s.metrics != nil {
+			s.metrics.DecActiveConnections(s.backend.Name)
+		}
 	})
 }
 
@@ -195,7 +218,7 @@ func (p *Proxy) observe(state *reqState, d time.Duration, success bool) {
 // also runs on the http.ErrAbortHandler panic path.
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
-	state := &reqState{}
+	state := &reqState{metrics: p.metrics}
 	defer p.completeRequest(r, state, start)
 
 	b, err := p.sel.Select(r.Context(), r)
@@ -218,7 +241,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	b.IncActive()
+	state.activate()
 
 	ctx := context.WithValue(r.Context(), reqStateKey{}, state)
 	p.rp.ServeHTTP(w, r.WithContext(ctx))
