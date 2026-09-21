@@ -1,0 +1,19 @@
+# Prometheus scrape config for the l7LoadBalancer observability demo stack
+# (S3.T7). See ../README.md.
+#
+# The load balancer is NOT a compose service here: it runs locally via
+# `make run` (S1.T9's convention), so Prometheus reaches its always-on
+# metrics endpoint through the host gateway. `metrics.listen` defaults to
+# :9090 (config.DefaultMetricsListen); change the target here if you set a
+# different port in configs/example.yaml.
+#
+# 15s scrape interval is a reasonable, undocumented-as-a-decision default
+# (ADR-0013 decision 17) — no trade-off worth recording.
+
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: l7loadbalancer
+    static_configs:
+      - targets: ["host.docker.internal:9090"]

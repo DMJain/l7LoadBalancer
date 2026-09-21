@@ -1,0 +1,16 @@
+# Grafana dashboard provider provisioning (S3.T7): loads every JSON file in
+# the mounted dashboards directory, so the committed dashboard is present the
+# moment the stack comes up.
+
+apiVersion: 1
+
+providers:
+  - name: l7loadbalancer
+    orgId: 1
+    folder: ""
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 10
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards

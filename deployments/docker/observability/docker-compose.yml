@@ -1,0 +1,41 @@
+# Observability demo stack for the load balancer (S3.T7): Prometheus scrapes
+# the load balancer's always-on metrics.listen endpoint, Grafana renders the
+# committed five-panel dashboard.
+#
+# Kept entirely separate from deployments/docker/docker-compose.yml (S1.T9,
+# dummy backends only) and Sprint 5's future bench compose, per ADR-0013
+# decision 17. The load balancer itself still runs locally via `make run`.
+#
+# Prometheus listens on host :9091 (not :9090) so it does not collide with the
+# load balancer's own metrics endpoint on :9090.
+#
+# Image tags are pinned to known-good releases; bump freely.
+
+name: l7loadbalancer-observability
+
+services:
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    ports:
+      - "9091:9090"
+    # Docker Desktop (macOS/Windows) resolves host.docker.internal natively;
+    # this mapping makes the same stack work on Linux.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    depends_on:
+      - prometheus
+    ports:
+      - "3000:3000"
+    environment:
+      # Local demo stack: allow anonymous read-only viewing so the dashboard is
+      # reachable without a login. Not a production posture (ADR-0005 scope).
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: "Viewer"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
