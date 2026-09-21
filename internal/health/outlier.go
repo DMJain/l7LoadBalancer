@@ -7,6 +7,7 @@ import (
 
 	"github.com/DMJain/l7LoadBalancer/internal/backend"
 	"github.com/DMJain/l7LoadBalancer/internal/logger"
+	"github.com/DMJain/l7LoadBalancer/internal/metrics"
 )
 
 // Passive-outlier tuning. Both are Go constants, not config fields, per
@@ -60,7 +61,8 @@ type OutlierDetector struct {
 	// default. Called with d.mu held; must not block.
 	eject func(*backend.Backend)
 
-	log *slog.Logger
+	log     *slog.Logger
+	metrics *metrics.Collector
 
 	mu      sync.Mutex
 	windows map[*backend.Backend]*outlierWindow
@@ -78,14 +80,16 @@ type outlierWindow struct {
 }
 
 // NewOutlierDetector returns a ready detector logging one structured line per
-// ejection episode through log. It owns no goroutines and takes no
-// configuration beyond the logger: every tunable here is a Go constant
-// (ADR-0011 decision 10), and the detector is a passive observer of traffic
-// rather than a scheduled subsystem.
-func NewOutlierDetector(log *slog.Logger) *OutlierDetector {
+// ejection episode through log and writing lb_backend_healthy from the same
+// ejection guard. It owns no goroutines and takes no configuration beyond the
+// logger and collector: every tunable here is a Go constant (ADR-0011 decision
+// 10), and the detector is a passive observer of traffic rather than a
+// scheduled subsystem.
+func NewOutlierDetector(log *slog.Logger, collector *metrics.Collector) *OutlierDetector {
 	return &OutlierDetector{
 		eject:   (*backend.Backend).MarkUnhealthy,
 		log:     log,
+		metrics: collector,
 		windows: make(map[*backend.Backend]*outlierWindow),
 	}
 }
@@ -116,6 +120,10 @@ func (d *OutlierDetector) ObserveRoundTrip(b *backend.Backend, _ time.Duration, 
 	if !success && !w.ejected && w.failures >= outlierFailuresBeforeEject {
 		w.ejected = true
 		d.eject(b)
+		// The gauge is written here, inside the same episode guard, so it is
+		// edge-triggered identically to the log line below and can never
+		// disagree with it (ADR-0013 decision 6).
+		d.metrics.SetBackendHealthy(b.Name, false)
 		// The ejected flag is this detector's edge trigger: it is set once per
 		// episode (and cleared when an active probe reinstates the backend), so
 		// the line lands exactly at the ejection, not on every later failure

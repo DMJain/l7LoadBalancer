@@ -102,7 +102,7 @@ func main() {
 
 	// Active health probing shares sigCtx for shutdown (ADR-0011 decision 13):
 	// one goroutine per backend, no second shutdown primitive.
-	checker := health.New(reg, *cfg.Health.ProbeInterval, *cfg.Health.ProbeTimeout, log)
+	checker := health.New(reg, *cfg.Health.ProbeInterval, *cfg.Health.ProbeTimeout, log, collector)
 	checker.Start(sigCtx)
 	log.Info("health checker started",
 		"probe_interval", *cfg.Health.ProbeInterval,
@@ -144,12 +144,14 @@ func main() {
 // seedMetrics materializes every backend's initial gauge series through the
 // collector's own setter methods, so a freshly started, never-degraded system
 // renders a complete dashboard on its first scrape — Prometheus Vec metrics
-// create no series until first written (ADR-0013 decision 9). This ticket seeds
-// the active-connections gauge to 0; the backend-healthy and circuit-state
-// gauges are seeded here by S3.T6.3/T6.4.
+// create no series until first written (ADR-0013 decision 9). It seeds the
+// active-connections gauge to 0 and lb_backend_healthy to 1 (every backend
+// starts healthy per NewRegistry), using the same Collector methods real
+// transitions use; the circuit-state gauge is seeded here by S3.T6.4.
 func seedMetrics(c *metrics.Collector, reg *backend.Registry) {
 	for _, b := range reg.All() {
 		c.SetActiveConnections(b.Name, 0)
+		c.SetBackendHealthy(b.Name, true)
 	}
 }
 
@@ -166,7 +168,7 @@ func newHandler(reg *backend.Registry, sel balancer.Selector, breaker *circuit.B
 	p := proxy.New(reg, sel)
 	p.SetMetrics(collector)
 	p.RegisterObserver(proxy.NewLatencyObserver())
-	p.RegisterObserver(health.NewOutlierDetector(log))
+	p.RegisterObserver(health.NewOutlierDetector(log, collector))
 	p.RegisterObserver(breaker)
 	return p
 }

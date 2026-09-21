@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/DMJain/l7LoadBalancer/internal/logger"
+	"github.com/DMJain/l7LoadBalancer/internal/metrics"
 )
 
 // logRecord is one parsed JSON slog line, mirroring the captureLogger seam in
@@ -72,7 +73,7 @@ func recordsWithEvent(recs []logRecord, event string) []logRecord {
 func TestCheckerLogsEjectionOncePerFailureStreak(t *testing.T) {
 	l, dump := captureLogger(t)
 	reg := newTestRegistry(t, statusServer(t, http.StatusInternalServerError).URL)
-	c := New(reg, time.Second, time.Second, l)
+	c := New(reg, time.Second, time.Second, l, metrics.NewCollector())
 	b := reg.All()[0]
 	p := c.newProber(b)
 
@@ -93,7 +94,7 @@ func TestCheckerLogsEjectionOncePerFailureStreak(t *testing.T) {
 func TestCheckerLogsReinstatementOncePerSuccessStreak(t *testing.T) {
 	l, dump := captureLogger(t)
 	reg := newTestRegistry(t, statusServer(t, http.StatusOK).URL)
-	c := New(reg, time.Second, time.Second, l)
+	c := New(reg, time.Second, time.Second, l, metrics.NewCollector())
 	b := reg.All()[0]
 	p := c.newProber(b)
 	b.MarkUnhealthy()
@@ -116,7 +117,7 @@ func TestCheckerLogsReinstatementOncePerSuccessStreak(t *testing.T) {
 func TestCheckerDoesNotLogReinstatementWhileAlreadyHealthy(t *testing.T) {
 	l, dump := captureLogger(t)
 	reg := newTestRegistry(t, statusServer(t, http.StatusOK).URL)
-	c := New(reg, time.Second, time.Second, l)
+	c := New(reg, time.Second, time.Second, l, metrics.NewCollector())
 	b := reg.All()[0]
 	p := c.newProber(b)
 	require.True(t, b.IsHealthy(), "NewRegistry starts every backend healthy")
@@ -136,7 +137,7 @@ func TestCheckerDoesNotLogReinstatementWhileAlreadyHealthy(t *testing.T) {
 func TestCheckerDoesNotLogEjectionWhileAlreadyUnhealthy(t *testing.T) {
 	l, dump := captureLogger(t)
 	reg := newTestRegistry(t, statusServer(t, http.StatusInternalServerError).URL)
-	c := New(reg, time.Second, time.Second, l)
+	c := New(reg, time.Second, time.Second, l, metrics.NewCollector())
 	b := reg.All()[0]
 	p := c.newProber(b)
 	b.MarkUnhealthy() // as passive outlier detection would
@@ -155,7 +156,7 @@ func TestCheckerDoesNotLogEjectionWhileAlreadyUnhealthy(t *testing.T) {
 func TestOutlierDetectorLogsEjectionOncePerEpisode(t *testing.T) {
 	l, dump := captureLogger(t)
 	b := outlierBackends(t, 1)[0]
-	d := NewOutlierDetector(l)
+	d := NewOutlierDetector(l, metrics.NewCollector())
 
 	for i := 0; i < outlierFailuresBeforeEject+3*outlierWindowSize; i++ {
 		d.ObserveRoundTrip(b, time.Millisecond, false)
@@ -174,7 +175,7 @@ func TestOutlierDetectorLogsEjectionOncePerEpisode(t *testing.T) {
 func TestOutlierDetectorLogsEjectionPerEpisode(t *testing.T) {
 	l, dump := captureLogger(t)
 	b := outlierBackends(t, 1)[0]
-	d := NewOutlierDetector(l)
+	d := NewOutlierDetector(l, metrics.NewCollector())
 
 	for i := 0; i < outlierFailuresBeforeEject; i++ {
 		d.ObserveRoundTrip(b, time.Millisecond, false)

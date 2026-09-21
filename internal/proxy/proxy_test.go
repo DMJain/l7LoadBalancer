@@ -25,6 +25,7 @@ import (
 	"github.com/DMJain/l7LoadBalancer/internal/circuit"
 	"github.com/DMJain/l7LoadBalancer/internal/config"
 	"github.com/DMJain/l7LoadBalancer/internal/health"
+	"github.com/DMJain/l7LoadBalancer/internal/metrics"
 )
 
 // TestMain silences the process default logger. Proxy reads slog.Default() at
@@ -506,7 +507,7 @@ func TestProxyFanOutFeedsPassiveOutlierDetectorAlongsideLatencyObserver(t *testi
 	spy := &spyObserver{}
 	p.RegisterObserver(latency)
 	p.RegisterObserver(spy)
-	p.RegisterObserver(health.NewOutlierDetector(slog.Default()))
+	p.RegisterObserver(health.NewOutlierDetector(slog.Default(), metrics.NewCollector()))
 
 	front := httptest.NewServer(p)
 	t.Cleanup(front.Close)
@@ -563,7 +564,7 @@ func TestProxyFanOutFeedsDetectorMixedResponseAndTransportFailures(t *testing.T)
 
 	reg := registryFrom(t, backendEntry{"backend-a", srv.URL})
 	p := New(reg, balancer.NewRoundRobin(reg))
-	p.RegisterObserver(health.NewOutlierDetector(slog.Default()))
+	p.RegisterObserver(health.NewOutlierDetector(slog.Default(), metrics.NewCollector()))
 
 	front := httptest.NewServer(p)
 	t.Cleanup(front.Close)

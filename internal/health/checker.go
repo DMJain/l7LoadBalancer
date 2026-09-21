@@ -16,6 +16,7 @@ import (
 
 	"github.com/DMJain/l7LoadBalancer/internal/backend"
 	"github.com/DMJain/l7LoadBalancer/internal/logger"
+	"github.com/DMJain/l7LoadBalancer/internal/metrics"
 )
 
 // Consecutive-outcome thresholds. Both are Go constants, not config fields,
@@ -51,6 +52,7 @@ type Checker struct {
 	interval time.Duration
 	client   *http.Client
 	log      *slog.Logger
+	metrics  *metrics.Collector
 }
 
 // New builds a Checker over reg that probes each backend every interval,
@@ -68,12 +70,18 @@ type Checker struct {
 //
 // interval and timeout are expected positive; config.Validate guarantees it.
 // It returns a Checker that does nothing until Start is called.
-func New(reg *backend.Registry, interval, timeout time.Duration, log *slog.Logger) *Checker {
+//
+// collector receives one lb_backend_healthy update per genuine health
+// transition, from the same edge-triggered site as the log line, so the gauge
+// and the log can never disagree about whether the transition happened
+// (ADR-0013 decision 6).
+func New(reg *backend.Registry, interval, timeout time.Duration, log *slog.Logger, collector *metrics.Collector) *Checker {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	return &Checker{
 		reg:      reg,
 		interval: interval,
 		log:      log,
+		metrics:  collector,
 		client: &http.Client{
 			Transport: transport,
 			Timeout:   timeout,
@@ -108,7 +116,9 @@ func (c *Checker) Start(ctx context.Context) {
 // already-healthy backend's success streak — every backend's first M probes at
 // startup — cannot emit a spurious health_reinstated. The guard reads the
 // backend's existing atomic health rather than adding a prober field
-// (ADR-0013 decision 11).
+// (ADR-0013 decision 11). lb_backend_healthy is written inside those same two
+// guarded blocks, so it shares this exact edge-triggered signal rather than
+// re-deriving health independently (ADR-0013 decision 6).
 func (p *prober) probeOnce(ctx context.Context) bool {
 	if p.checker.probe(ctx, p.target) {
 		p.failures = 0
@@ -119,6 +129,7 @@ func (p *prober) probeOnce(ctx context.Context) bool {
 				"event", logger.EventHealthReinstated,
 				"reason", logger.ReasonProbeRecovered,
 			)
+			p.checker.metrics.SetBackendHealthy(p.target.Name, true)
 		}
 		if p.successes >= probeSuccessesBeforeHealthy {
 			p.target.MarkHealthy()
@@ -134,6 +145,7 @@ func (p *prober) probeOnce(ctx context.Context) bool {
 			"event", logger.EventHealthEjected,
 			"reason", logger.ReasonProbeFailures,
 		)
+		p.checker.metrics.SetBackendHealthy(p.target.Name, false)
 	}
 	if p.failures >= probeFailuresBeforeUnhealthy {
 		p.target.MarkUnhealthy()

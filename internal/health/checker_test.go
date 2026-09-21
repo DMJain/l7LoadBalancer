@@ -16,6 +16,7 @@ import (
 
 	"github.com/DMJain/l7LoadBalancer/internal/backend"
 	"github.com/DMJain/l7LoadBalancer/internal/config"
+	"github.com/DMJain/l7LoadBalancer/internal/metrics"
 )
 
 // newTestRegistry builds a real *backend.Registry (every backend healthy, per
@@ -62,7 +63,7 @@ func TestProbeClassifiesResponses(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			reg := newTestRegistry(t, statusServer(t, tc.status).URL)
-			c := New(reg, time.Second, time.Second, discardLogger())
+			c := New(reg, time.Second, time.Second, discardLogger(), metrics.NewCollector())
 
 			assert.Equal(t, tc.want, c.probe(context.Background(), reg.All()[0]))
 		})
@@ -80,7 +81,7 @@ func TestProbeTreatsRedirectAsFailure(t *testing.T) {
 	t.Cleanup(redirect.Close)
 
 	reg := newTestRegistry(t, redirect.URL)
-	c := New(reg, time.Second, time.Second, discardLogger())
+	c := New(reg, time.Second, time.Second, discardLogger(), metrics.NewCollector())
 
 	assert.False(t, c.probe(context.Background(), reg.All()[0]),
 		"a redirecting backend must read as unhealthy even though its redirect target answers 2xx")
@@ -96,7 +97,7 @@ func TestProbeConnectionRefusedIsFailure(t *testing.T) {
 	srv.Close() // now nothing is listening on url
 
 	reg := newTestRegistry(t, url)
-	c := New(reg, time.Second, time.Second, discardLogger())
+	c := New(reg, time.Second, time.Second, discardLogger(), metrics.NewCollector())
 
 	assert.False(t, c.probe(context.Background(), reg.All()[0]))
 }
@@ -127,7 +128,7 @@ func TestProberMarksUnhealthyAfterConsecutiveFailures(t *testing.T) {
 	for _, fx := range fixtures {
 		t.Run(fx.name, func(t *testing.T) {
 			reg := newTestRegistry(t, fx.url(t))
-			c := New(reg, time.Second, time.Second, discardLogger())
+			c := New(reg, time.Second, time.Second, discardLogger(), metrics.NewCollector())
 			b := reg.All()[0]
 			p := c.newProber(b)
 			require.True(t, b.IsHealthy(), "NewRegistry starts every backend healthy")
@@ -149,7 +150,7 @@ func TestProberMarksUnhealthyAfterConsecutiveFailures(t *testing.T) {
 // unhealthy backend becomes healthy only once M consecutive probes succeed.
 func TestProberMarksHealthyAfterConsecutiveSuccesses(t *testing.T) {
 	reg := newTestRegistry(t, statusServer(t, http.StatusOK).URL)
-	c := New(reg, time.Second, time.Second, discardLogger())
+	c := New(reg, time.Second, time.Second, discardLogger(), metrics.NewCollector())
 	b := reg.All()[0]
 	p := c.newProber(b)
 	b.MarkUnhealthy()
@@ -186,7 +187,7 @@ func TestProberConsecutiveCountersReset(t *testing.T) {
 	}
 
 	reg := newTestRegistry(t, srv.URL)
-	c := New(reg, time.Second, time.Second, discardLogger())
+	c := New(reg, time.Second, time.Second, discardLogger(), metrics.NewCollector())
 	b := reg.All()[0]
 	p := c.newProber(b)
 
@@ -215,7 +216,7 @@ func TestProberConsecutiveCountersReset(t *testing.T) {
 // live-request transport settings (ADR-0011 decision 11).
 func TestCheckerUsesDedicatedTransport(t *testing.T) {
 	reg := newTestRegistry(t, statusServer(t, http.StatusOK).URL)
-	c := New(reg, time.Second, time.Second, discardLogger())
+	c := New(reg, time.Second, time.Second, discardLogger(), metrics.NewCollector())
 
 	require.NotNil(t, c.client.Transport)
 	assert.NotSame(t, http.DefaultTransport, c.client.Transport)
@@ -232,11 +233,11 @@ func TestProbeHonorsItsOwnClientTimeout(t *testing.T) {
 
 	reg := newTestRegistry(t, srv.URL)
 
-	short := New(reg, time.Second, 20*time.Millisecond, discardLogger())
+	short := New(reg, time.Second, 20*time.Millisecond, discardLogger(), metrics.NewCollector())
 	assert.False(t, short.probe(context.Background(), reg.All()[0]),
 		"the checker's own client timeout must bound the probe")
 
-	generous := New(reg, time.Second, time.Second, discardLogger())
+	generous := New(reg, time.Second, time.Second, discardLogger(), metrics.NewCollector())
 	assert.True(t, generous.probe(context.Background(), reg.All()[0]),
 		"with an adequate timeout the same backend probes healthy")
 }
@@ -247,7 +248,7 @@ func TestProbeHonorsItsOwnClientTimeout(t *testing.T) {
 // that guarantee is ever weakened.
 func TestProbeMalformedURLIsFailure(t *testing.T) {
 	reg := newTestRegistry(t, statusServer(t, http.StatusOK).URL)
-	c := New(reg, time.Second, time.Second, discardLogger())
+	c := New(reg, time.Second, time.Second, discardLogger(), metrics.NewCollector())
 	b := reg.All()[0]
 	b.URL = &url.URL{Scheme: "http", Host: "exa mple.com"}
 
@@ -265,7 +266,7 @@ func TestStartProbesUntilContextCancelled(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	reg := newTestRegistry(t, srv.URL, srv.URL)
-	c := New(reg, 5*time.Millisecond, time.Second, discardLogger())
+	c := New(reg, 5*time.Millisecond, time.Second, discardLogger(), metrics.NewCollector())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	c.Start(ctx)
