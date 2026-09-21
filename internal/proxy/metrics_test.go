@@ -1,9 +1,12 @@
 package proxy
 
 import (
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -185,4 +188,75 @@ func TestProxyWithoutMetricsCollectorServes(t *testing.T) {
 	p.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
 
 	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+// TestProxyActiveConnectionsGaugeTracksConcurrentInFlightRequests mirrors
+// S1.T6's ActiveConns leak-check against the metric: with requests blocked in
+// the backend, lb_active_connections must match Backend.ActiveConns() at every
+// point, and after they drain both must return to 0. Asserting the gauge
+// alongside the backend counter proves the gauge shares the IncActive/DecActive
+// call sites rather than merely counting something correlated (ADR-0013
+// decision 7).
+func TestProxyActiveConnectionsGaugeTracksConcurrentInFlightRequests(t *testing.T) {
+	const requests = 100
+
+	var inFlight atomic.Int64
+	release := make(chan struct{})
+	backendSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		inFlight.Add(1)
+		<-release
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, "ok")
+	}))
+	t.Cleanup(backendSrv.Close)
+
+	reg := registryFrom(t, backendEntry{"backend-a", backendSrv.URL})
+	c := metrics.NewCollector()
+	p := New(reg, balancer.NewLeastConnections(reg))
+	p.SetMetrics(c)
+	front := httptest.NewServer(p)
+	t.Cleanup(front.Close)
+
+	// gauge reads lb_active_connections for the one backend, returning -1 if
+	// the series does not exist yet so a missing series fails an equality
+	// assertion rather than panicking.
+	gauge := func() float64 {
+		m := labeledSeries(t, c, "lb_active_connections", map[string]string{"backend": "backend-a"})
+		if m == nil {
+			return -1
+		}
+		return m.GetGauge().GetValue()
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < requests; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			resp, err := front.Client().Get(front.URL)
+			if err != nil {
+				t.Errorf("request failed: %v", err)
+				return
+			}
+			_, _ = io.Copy(io.Discard, resp.Body)
+			_ = resp.Body.Close()
+		}()
+	}
+
+	require.Eventually(t, func() bool {
+		return inFlight.Load() == int64(requests)
+	}, 5*time.Second, 10*time.Millisecond, "all requests should reach the backend and block")
+
+	assert.Equal(t, int64(requests), reg.All()[0].ActiveConns(),
+		"all in-flight requests should be counted by the backend")
+	assert.Equal(t, float64(requests), gauge(),
+		"the gauge must match the backend's active-connection count while requests are in flight")
+
+	close(release)
+	wg.Wait()
+
+	require.Eventually(t, func() bool {
+		return reg.All()[0].ActiveConns() == 0 && gauge() == 0
+	}, 5*time.Second, 10*time.Millisecond,
+		"both the backend counter and the gauge should drain back to zero")
 }
