@@ -104,16 +104,29 @@ from the design-session record in the spec above.
 
 ### Transition logging
 
-10. **`backend.CircuitTransition` (`NoChange`/`Opened`/`Closed`/`HalfOpened`)
-    is returned by `Backend.CircuitFailure`, `CircuitSuccess`, and
-    `CircuitAllow` alongside their existing return values.** It is a plain
-    exported type in `internal/backend`, so a caller can tell whether *this*
-    call changed the circuit's state, and `internal/backend` gains no logging
-    dependency. `internal/circuit.Breaker` (`circuit.New` gains a
-    `*slog.Logger`) logs at its `ObserveRoundTrip`/`Allow` call sites whenever
-    the transition is not `NoChange`. The `backend.CircuitGate` and
-    `proxy.RoundTripObserver` interfaces `Breaker` implements are untouched —
-    those wrapper methods absorb the extra return value internally.
+10. **`backend.CircuitTransition`
+    (`NoChange`/`Opened`/`Closed`/`HalfOpened`/`Reopened`) is returned by
+    `Backend.CircuitFailure`, `CircuitSuccess`, and `CircuitAllow` alongside
+    their existing return values.** It is a plain exported type in
+    `internal/backend`, so a caller can tell whether *this* call changed the
+    circuit's state, and `internal/backend` gains no logging dependency.
+    `internal/circuit.Breaker` (`circuit.New` gains a `*slog.Logger`) logs at
+    its `ObserveRoundTrip`/`Allow` call sites whenever the transition is not
+    `NoChange`. The `backend.CircuitGate` and `proxy.RoundTripObserver`
+    interfaces `Breaker` implements are untouched — those wrapper methods
+    absorb the extra return value internally.
+
+    `Reopened` (added when this decision was implemented, see Amendment below)
+    distinguishes a Half-Open trial failure (`HalfOpen→Open`) from the
+    `Opened` (`Closed→Open`) case. Both move the circuit to Open, but they map
+    to different log reasons (`trial_failure` vs `consecutive_failures`), and a
+    four-value enum carrying only the resulting state cannot tell them apart.
+    One value per logged reason keeps the mapping bijective.
+
+    Transitions: `Opened` = `Closed→Open` (consecutive failures reached the
+    threshold), `Closed` = `HalfOpen→Closed` (trial success), `HalfOpened` =
+    `Open→HalfOpen` (cooldown elapsed), `Reopened` = `HalfOpen→Open` (trial
+    failure), `NoChange` = the call changed nothing.
 
 11. **`internal/health`'s active checker emits its transition line behind an
     equality gate (`counter == threshold`), not the `>=` gate the `Mark*` calls
@@ -130,11 +143,12 @@ from the design-session record in the spec above.
     `event` is exactly `health_ejected`, `health_reinstated`,
     `circuit_opened`, `circuit_closed`, `circuit_half_opened`; `reason` is
     exactly `probe_failures`/`probe_recovered` (active), `outlier_window`
-    (passive), and `consecutive_failures`/`trial_success`/`trial_failure`/
-    `cooldown_elapsed` (circuit). `health_ejected`, `circuit_opened`, and
-    `circuit_half_opened`-via-`trial_failure` are logged at WARN; the remaining
-    transitions at INFO, matching the existing 5xx-is-WARN convention. A
-    Half-Open trial is a routine lifecycle event, so it is INFO.
+    (passive), and     `consecutive_failures`/`trial_success`/`trial_failure`/
+    `cooldown_elapsed` (circuit). `health_ejected` and `circuit_opened` (via
+    either `consecutive_failures` or `trial_failure`) are logged at WARN;
+    `health_reinstated`, `circuit_closed`, and `circuit_half_opened` at INFO,
+    matching the existing 5xx-is-WARN convention. A Half-Open trial admission
+    is a routine lifecycle event, so it is INFO.
 
 13. **Known, permanent gap: a Half-Open promotion whose CAS is won by
     `Registry.Selectable()`'s read path is never logged.** `Backend.CircuitOpen()`
@@ -221,3 +235,26 @@ from the design-session record in the spec above.
 - **A metrics disable toggle or per-backend `metrics.listen` overrides:**
   rejected in decision 8 — always-on, global config only, consistent with
   ADR-0011 decision 10.
+
+## Amendment — 2026-09-21: `CircuitTransition` gains a fifth value
+
+**Supersedes the four-value list in decision 10.** Decision 10 originally
+named `NoChange`/`Opened`/`Closed`/`HalfOpened`, but decision 12 requires four
+distinct circuit log reasons (`consecutive_failures`, `trial_success`,
+`trial_failure`, `cooldown_elapsed`). Two of those — `consecutive_failures`
+(`Closed→Open`) and `trial_failure` (`HalfOpen→Open`) — both result in an Open
+circuit, so a four-value enum carrying only the resulting state cannot tell
+`circuit.Breaker` which reason to log. Decision 12's phrase
+"`circuit_half_opened`-via-`trial_failure`" was the symptom of this
+inconsistency: a failed trial reopens the circuit (`circuit_opened`), it does
+not half-open it.
+
+Resolved with the project owner during S3.T5.4 by adding **`Reopened`** for the
+`HalfOpen→Open` trial-failure transition, so each logged reason maps 1:1 to a
+transition value. This amends decision 10 in place (five values) and corrects
+decision 12's WARN/INFO list. The Half-Open-promotion logging gap in decision
+13 is unchanged: a promotion whose CAS is won by `Registry.Selectable()`'s
+`Backend.CircuitOpen()` read is still never logged, because only
+`CircuitAllow` — which actually takes the trial — can observe a promotion it
+performed and has a logger. `CircuitOpen` continues to return `bool`, not a
+transition.
