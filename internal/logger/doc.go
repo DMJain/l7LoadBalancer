@@ -13,8 +13,10 @@
 //	path         - request path
 //
 // Transition-scoped fields (Sprint 3; values are the closed Go-constant
-// vocabularies in vocab.go):
+// vocabularies in vocab.go). A transition line also carries the request-scoped
+// backend field, naming the backend the transition concerns:
 //
+//	backend      - backend the transition concerns (shared with request-scoped lines)
 //	event        - a state transition that occurred, one of the Event* constants
 //	reason       - why it occurred, one of the Reason* constants
 //

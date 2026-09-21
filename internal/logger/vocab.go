@@ -38,10 +38,12 @@ const (
 	EventCircuitClosed = "circuit_closed"
 
 	// EventCircuitHalfOpened is emitted when an Open circuit's cooldown has
-	// elapsed and a trial request is admitted. reason is
-	// ReasonCooldownElapsed. A Half-Open promotion whose CAS is won by a
-	// Registry.Selectable() scan is never logged — a documented, permanent gap
-	// (ADR-0013 decision 13).
+	// elapsed and a trial request is admitted; reason is ReasonCooldownElapsed.
+	// A failed trial does not half-open again — it reopens with
+	// EventCircuitOpened/ReasonTrialFailure (the circuit was Open, not
+	// Half-Open, once the trial failed). A Half-Open promotion whose CAS is won
+	// by a Registry.Selectable() scan is never logged — a documented, permanent
+	// gap (ADR-0013 decision 13).
 	EventCircuitHalfOpened = "circuit_half_opened"
 )
 

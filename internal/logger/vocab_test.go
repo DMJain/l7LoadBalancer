@@ -13,85 +13,73 @@ import (
 // (round_robin, least_conn, ...).
 var snakeCasePattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
-func TestEventVocabulary(t *testing.T) {
-	cases := []struct {
-		name    string
-		got     string
-		want    string
-		subsyst string
-	}{
-		{"health ejected", EventHealthEjected, "health_ejected", "active health / passive outlier"},
-		{"health reinstated", EventHealthReinstated, "health_reinstated", "active health"},
-		{"circuit opened", EventCircuitOpened, "circuit_opened", "circuit"},
-		{"circuit closed", EventCircuitClosed, "circuit_closed", "circuit"},
-		{"circuit half opened", EventCircuitHalfOpened, "circuit_half_opened", "circuit"},
-	}
+// vocabCase pins one constant to the exact string it must hold.
+type vocabCase struct {
+	name      string
+	value     string
+	want      string
+	subsystem string
+}
 
-	for _, tc := range cases {
+// eventCases and reasonCases are each the single listing of a vocabulary in
+// this package: every constant appears once, pinned to its exact string. The
+// per-vocabulary tests both iterate the table and derive the duplicate/
+// cardinality check from it, so a value cannot be written down in two places
+// and drift.
+var eventCases = []vocabCase{
+	{"health ejected", EventHealthEjected, "health_ejected", "active health / passive outlier"},
+	{"health reinstated", EventHealthReinstated, "health_reinstated", "active health"},
+	{"circuit opened", EventCircuitOpened, "circuit_opened", "circuit"},
+	{"circuit closed", EventCircuitClosed, "circuit_closed", "circuit"},
+	{"circuit half opened", EventCircuitHalfOpened, "circuit_half_opened", "circuit"},
+}
+
+var reasonCases = []vocabCase{
+	{"probe failures", ReasonProbeFailures, "probe_failures", "active health"},
+	{"probe recovered", ReasonProbeRecovered, "probe_recovered", "active health"},
+	{"outlier window", ReasonOutlierWindow, "outlier_window", "passive outlier"},
+	{"consecutive failures", ReasonConsecutiveFailures, "consecutive_failures", "circuit"},
+	{"trial success", ReasonTrialSuccess, "trial_success", "circuit"},
+	{"trial failure", ReasonTrialFailure, "trial_failure", "circuit"},
+	{"cooldown elapsed", ReasonCooldownElapsed, "cooldown_elapsed", "circuit"},
+}
+
+func TestEventVocabulary(t *testing.T) {
+	for _, tc := range eventCases {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, tc.got, "event value for %s", tc.subsyst)
-			assert.Regexp(t, snakeCasePattern, tc.got)
+			assert.Equal(t, tc.want, tc.value, "event value for %s", tc.subsystem)
+			assert.Regexp(t, snakeCasePattern, tc.value)
 		})
 	}
+	assertClosed(t, "event", eventCases, 5)
 }
 
 func TestReasonVocabulary(t *testing.T) {
-	cases := []struct {
-		name    string
-		got     string
-		want    string
-		subsyst string
-	}{
-		{"probe failures", ReasonProbeFailures, "probe_failures", "active health"},
-		{"probe recovered", ReasonProbeRecovered, "probe_recovered", "active health"},
-		{"outlier window", ReasonOutlierWindow, "outlier_window", "passive outlier"},
-		{"consecutive failures", ReasonConsecutiveFailures, "consecutive_failures", "circuit"},
-		{"trial success", ReasonTrialSuccess, "trial_success", "circuit"},
-		{"trial failure", ReasonTrialFailure, "trial_failure", "circuit"},
-		{"cooldown elapsed", ReasonCooldownElapsed, "cooldown_elapsed", "circuit"},
-	}
-
-	for _, tc := range cases {
+	for _, tc := range reasonCases {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, tc.got, "reason value for %s", tc.subsyst)
-			assert.Regexp(t, snakeCasePattern, tc.got)
+			assert.Equal(t, tc.want, tc.value, "reason value for %s", tc.subsystem)
+			assert.Regexp(t, snakeCasePattern, tc.value)
 		})
 	}
+	assertClosed(t, "reason", reasonCases, 7)
 }
 
-// TestVocabulariesAreClosedAndDuplicateFree guards the "closed vocabulary"
-// property: two values that collide, or a value that gains an accidental
-// near-duplicate, would silently split grep results. Each vocabulary's length
-// is asserted explicitly so adding a constant is a deliberate edit here too.
-func TestVocabulariesAreClosedAndDuplicateFree(t *testing.T) {
-	events := []string{
-		EventHealthEjected,
-		EventHealthReinstated,
-		EventCircuitOpened,
-		EventCircuitClosed,
-		EventCircuitHalfOpened,
+// assertClosed guards the "closed vocabulary" property: a value colliding with
+// another would silently split grep results. The explicit want is the intended
+// vocabulary size, restated here so adding a value fails the test until the
+// size is deliberately updated rather than slipping in unnoticed.
+func assertClosed(t *testing.T, kind string, cases []vocabCase, want int) {
+	t.Helper()
+
+	values := make([]string, 0, len(cases))
+	for _, tc := range cases {
+		values = append(values, tc.value)
 	}
-	reasons := []string{
-		ReasonProbeFailures,
-		ReasonProbeRecovered,
-		ReasonOutlierWindow,
-		ReasonConsecutiveFailures,
-		ReasonTrialSuccess,
-		ReasonTrialFailure,
-		ReasonCooldownElapsed,
-	}
+	require.Len(t, values, want, "%s vocabulary is exactly %d values", kind, want)
 
-	require.Len(t, events, 5, "event vocabulary is exactly five values")
-	require.Len(t, reasons, 7, "reason vocabulary is exactly seven values")
-
-	assert.Len(t, unique(events), len(events), "event values must be duplicate-free")
-	assert.Len(t, unique(reasons), len(reasons), "reason values must be duplicate-free")
-}
-
-func unique(values []string) map[string]struct{} {
-	set := make(map[string]struct{}, len(values))
+	seen := make(map[string]struct{}, len(values))
 	for _, v := range values {
-		set[v] = struct{}{}
+		seen[v] = struct{}{}
 	}
-	return set
+	assert.Len(t, seen, len(values), "%s values must be duplicate-free", kind)
 }
