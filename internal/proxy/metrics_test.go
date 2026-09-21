@@ -1,0 +1,182 @@
+package proxy
+
+import (
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
+
+	dto "github.com/prometheus/client_model/go"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/DMJain/l7LoadBalancer/internal/balancer"
+	"github.com/DMJain/l7LoadBalancer/internal/circuit"
+	"github.com/DMJain/l7LoadBalancer/internal/metrics"
+)
+
+// labeledSeries returns the gathered dto.Metric whose label set exactly matches
+// want for the named metric family, or nil if no such series has been written.
+// The collector's private registry is the external, observable surface the
+// spec's whole-request-hook seam asserts against (spec Testing Decisions §3).
+func labeledSeries(t *testing.T, c *metrics.Collector, name string, want map[string]string) *dto.Metric {
+	t.Helper()
+	mfs, err := c.Registry().Gather()
+	require.NoError(t, err)
+	for _, mf := range mfs {
+		if mf.GetName() != name {
+			continue
+		}
+		for _, m := range mf.GetMetric() {
+			if labelsEqual(m.GetLabel(), want) {
+				return m
+			}
+		}
+	}
+	return nil
+}
+
+func labelsEqual(pairs []*dto.LabelPair, want map[string]string) bool {
+	if len(pairs) != len(want) {
+		return false
+	}
+	for _, p := range pairs {
+		v, ok := want[p.GetName()]
+		if !ok || v != p.GetValue() {
+			return false
+		}
+	}
+	return true
+}
+
+// TestProxyObservesWholeRequestOnEveryExitPath proves the whole-request counter
+// and duration histogram fire exactly once on each of ServeHTTP's four exit
+// paths, with the label set each path requires — real backend, real HTTP
+// method, and status class derived from the response — and specifically that
+// the no-healthy-backend 503 carries backend="" while a circuit-denied 503
+// carries the real backend Select already chose.
+func TestProxyObservesWholeRequestOnEveryExitPath(t *testing.T) {
+	tests := []struct {
+		name string
+		// setup builds the proxy under test (with a fresh collector installed)
+		// and returns it alongside the collector to assert against.
+		setup func(t *testing.T) (*Proxy, *metrics.Collector)
+		// method and path are the request issued to the proxy.
+		method string
+		path   string
+		// wantStatus is the HTTP status ServeHTTP must answer with.
+		wantStatus int
+		// wantLabels is the exact expected label set on both the counter and
+		// the histogram.
+		wantLabels map[string]string
+	}{
+		{
+			name: "successful 2xx response",
+			setup: func(t *testing.T) (*Proxy, *metrics.Collector) {
+				serving := startBackend(t, "backend-a")
+				reg := registryFrom(t, backendEntry{"backend-a", serving.URL})
+				p := New(reg, balancer.NewRoundRobin(reg))
+				c := metrics.NewCollector()
+				p.SetMetrics(c)
+				return p, c
+			},
+			method:     http.MethodPost,
+			path:       "/ok",
+			wantStatus: http.StatusOK,
+			wantLabels: map[string]string{"backend": "backend-a", "method": "POST", "status_class": "2xx"},
+		},
+		{
+			name: "no healthy backend 503",
+			setup: func(t *testing.T) (*Proxy, *metrics.Collector) {
+				reg := registryFrom(t, backendEntry{"backend-a", "http://127.0.0.1:1"})
+				reg.All()[0].MarkUnhealthy()
+				p := New(reg, balancer.NewRoundRobin(reg))
+				c := metrics.NewCollector()
+				p.SetMetrics(c)
+				return p, c
+			},
+			method:     http.MethodGet,
+			path:       "/none",
+			wantStatus: http.StatusServiceUnavailable,
+			wantLabels: map[string]string{"backend": "", "method": "GET", "status_class": "5xx"},
+		},
+		{
+			name: "circuit-denied 503",
+			setup: func(t *testing.T) (*Proxy, *metrics.Collector) {
+				reg := registryFrom(t, backendEntry{"backend-a", "http://127.0.0.1:1"})
+				b := reg.All()[0]
+				br := circuit.New(time.Minute, slog.Default())
+				openCircuit(t, reg, br, b)
+				p := New(reg, fixedSelector{b: b})
+				c := metrics.NewCollector()
+				p.SetMetrics(c)
+				return p, c
+			},
+			method:     http.MethodGet,
+			path:       "/denied",
+			wantStatus: http.StatusServiceUnavailable,
+			// The real backend label, distinct from the no-healthy case above:
+			// Select identified "backend-a" before Allow denied the dispatch.
+			wantLabels: map[string]string{"backend": "backend-a", "method": "GET", "status_class": "5xx"},
+		},
+		{
+			name: "backend error via ErrorHandler 502",
+			setup: func(t *testing.T) (*Proxy, *metrics.Collector) {
+				reg := registryFrom(t, backendEntry{"backend-a", deadBackendURL(t)})
+				p := New(reg, balancer.NewRoundRobin(reg))
+				c := metrics.NewCollector()
+				p.SetMetrics(c)
+				return p, c
+			},
+			method:     http.MethodGet,
+			path:       "/dead",
+			wantStatus: http.StatusBadGateway,
+			wantLabels: map[string]string{"backend": "backend-a", "method": "GET", "status_class": "5xx"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p, c := tt.setup(t)
+
+			rec := httptest.NewRecorder()
+			p.ServeHTTP(rec, httptest.NewRequest(tt.method, tt.path, nil))
+			require.Equal(t, tt.wantStatus, rec.Code)
+
+			counter := labeledSeries(t, c, "lb_requests_total", tt.wantLabels)
+			require.NotNil(t, counter, "the request counter must have a series for the expected labels")
+			assert.Equal(t, 1.0, counter.GetCounter().GetValue(),
+				"exactly one request was served, so the counter must be 1")
+
+			hist := labeledSeries(t, c, "lb_request_duration_seconds", tt.wantLabels)
+			require.NotNil(t, hist, "the duration histogram must have a series for the expected labels")
+			assert.Equal(t, uint64(1), hist.GetHistogram().GetSampleCount(),
+				"exactly one observation must be recorded")
+			assert.Positive(t, hist.GetHistogram().GetSampleSum(),
+				"the whole-request duration must be a real positive measurement")
+
+			// No request in this table should ever land on a bare "" backend
+			// unless that case explicitly expects it.
+			if tt.wantLabels["backend"] != "" {
+				blank := labeledSeries(t, c, "lb_requests_total",
+					map[string]string{"backend": "", "method": tt.method, "status_class": tt.wantLabels["status_class"]})
+				assert.Nil(t, blank, "a request with a chosen backend must not be counted under backend=\"\"")
+			}
+		})
+	}
+}
+
+// TestProxyWithoutMetricsCollectorServes proves the metrics reference is
+// optional: a bare New(reg, sel) with no SetMetrics call records nothing and
+// does not panic, mirroring how a bare New registers no round-trip observers.
+func TestProxyWithoutMetricsCollectorServes(t *testing.T) {
+	serving := startBackend(t, "backend-a")
+	reg := registryFrom(t, backendEntry{"backend-a", serving.URL})
+	p := New(reg, balancer.NewRoundRobin(reg))
+
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+}
