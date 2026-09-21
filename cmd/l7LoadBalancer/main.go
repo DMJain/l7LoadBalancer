@@ -78,16 +78,18 @@ func main() {
 		"circuit_cooldown", *cfg.Circuit.Cooldown,
 	)
 
+	// The metrics collector owns a private Prometheus registry and is exposed on
+	// its own listener, separate from client traffic (ADR-0013 decision 8).
+	// S3.T6.1 wires it into the proxy's whole-request hook; the health and
+	// circuit gauges follow in S3.T6.2–T6.4.
+	collector := metrics.NewCollector()
+
 	srv := &http.Server{
 		Addr:              cfg.Listen,
-		Handler:           newHandler(reg, sel, breaker, log),
+		Handler:           newHandler(reg, sel, breaker, collector, log),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
-	// The metrics collector owns a private Prometheus registry and is exposed on
-	// its own listener, separate from client traffic (ADR-0013 decision 8). Only
-	// S3.T6 wires it into the request/health/circuit paths; here it is served.
-	collector := metrics.NewCollector()
 	metricsSrv := &http.Server{
 		Addr:              *cfg.Metrics.Listen,
 		Handler:           promhttp.HandlerFor(collector.Registry(), promhttp.HandlerOpts{}),
@@ -138,14 +140,18 @@ func main() {
 	log.Info("shutdown complete")
 }
 
-// newHandler builds the proxy and registers the round-trip observers that
-// record every backend round trip. Registration happens here, at construction
-// time before the server starts, so the request path can read the observer
-// slice without a lock. Latency recording, passive outlier detection, and the
-// circuit breaker are all wired (ADR-0011 decision 9). Observer registration is
-// deliberately separate from proxy.New, whose two-argument signature is frozen.
-func newHandler(reg *backend.Registry, sel balancer.Selector, breaker *circuit.Breaker, log *slog.Logger) http.Handler {
+// newHandler builds the proxy, installs the whole-request metrics collector,
+// and registers the round-trip observers that record every backend round trip.
+// All of this happens here, at construction time before the server starts, so
+// the request path can read the observer slice and the metrics reference
+// without a lock. Latency recording, passive outlier detection, and the
+// circuit breaker are all wired (ADR-0011 decision 9); the request
+// counter/histogram is wired via SetMetrics (ADR-0013 decision 14). Both
+// registrations are deliberately separate from proxy.New, whose two-argument
+// signature is frozen.
+func newHandler(reg *backend.Registry, sel balancer.Selector, breaker *circuit.Breaker, collector *metrics.Collector, log *slog.Logger) http.Handler {
 	p := proxy.New(reg, sel)
+	p.SetMetrics(collector)
 	p.RegisterObserver(proxy.NewLatencyObserver())
 	p.RegisterObserver(health.NewOutlierDetector(log))
 	p.RegisterObserver(breaker)

@@ -7,11 +7,13 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httputil"
+	"strconv"
 	"sync"
 	"time"
 
 	"github.com/DMJain/l7LoadBalancer/internal/backend"
 	"github.com/DMJain/l7LoadBalancer/internal/balancer"
+	"github.com/DMJain/l7LoadBalancer/internal/metrics"
 )
 
 // p2cFailurePenalty is the latency recorded for a round trip that failed
@@ -118,6 +120,7 @@ type Proxy struct {
 	rp        *httputil.ReverseProxy
 	logger    *slog.Logger
 	observers []RoundTripObserver
+	metrics   *metrics.Collector
 }
 
 // New constructs a Proxy over reg using sel for backend selection.
@@ -155,6 +158,19 @@ func (p *Proxy) RegisterObserver(o RoundTripObserver) {
 	p.observers = append(p.observers, o)
 }
 
+// SetMetrics installs the collector that receives one whole-request
+// observation per request. It is optional and additive, mirroring
+// RegisterObserver: a bare New(reg, sel) records no metrics, and New's frozen
+// two-argument signature is untouched. No fan-out interface is introduced —
+// metrics is this hook's only consumer (ADR-0013 decision 14).
+//
+// SetMetrics must be called before the Proxy begins serving traffic: the
+// request path reads the field without a lock, matching how observers are
+// registered at construction time in main.
+func (p *Proxy) SetMetrics(c *metrics.Collector) {
+	p.metrics = c
+}
+
 // observe fans a round trip's outcome out to every registered observer. It is
 // the single unconditional recording path for both terminal hooks. See
 // ADR-0011 decision 9.
@@ -178,7 +194,7 @@ func (p *Proxy) observe(state *reqState, d time.Duration, success bool) {
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	state := &reqState{}
-	defer p.logRequest(r, state, start)
+	defer p.recordRequest(r, state, start)
 
 	b, err := p.sel.Select(r.Context(), r)
 	if err != nil {
@@ -271,17 +287,62 @@ func (b *releaseBody) Close() error {
 	return b.ReadCloser.Close()
 }
 
+// recordRequest is the single per-request completion hook. It pushes the
+// whole-request metrics observation and emits the existing "request complete"
+// log line from one place, sharing ServeHTTP's start and state, so the two
+// observability surfaces can never disagree about a request's outcome. It runs
+// on every exit path — success, both 503 short-circuits, and ErrorHandler —
+// and on the http.ErrAbortHandler panic path, exactly where the deferred
+// logRequest call already ran.
+func (p *Proxy) recordRequest(r *http.Request, state *reqState, start time.Time) {
+	p.observeRequest(r, state, start)
+	p.logRequest(r, state, start)
+}
+
+// observeRequest feeds one whole client-facing request into the metrics
+// collector: a counter increment and a duration observation on the same
+// backend/method/status_class label set. The duration is the whole-request
+// window (the same start as latency_ms), deliberately not RoundTripObserver's
+// backend-round-trip-only measurement — there is exactly one definition of
+// "request duration" on the metrics surface (ADR-0013 decision 3).
+//
+// The backend label is "" when no backend was chosen (no healthy backend
+// found), derived exactly as logRequest derives it; a circuit-denied request
+// still carries the real backend Select already identified. It is a no-op when
+// no collector is installed (ADR-0013 decision 14).
+func (p *Proxy) observeRequest(r *http.Request, state *reqState, start time.Time) {
+	if p.metrics == nil {
+		return
+	}
+	p.metrics.ObserveRequest(backendName(state), r.Method, statusClass(state.status), time.Since(start))
+}
+
+// backendName is the canonical backend label for a request: the serving
+// backend's name, or "" when none was chosen. Shared by the metrics
+// observation and the request-complete log line so the two cannot derive
+// different labels.
+func backendName(state *reqState) string {
+	if state.backend == nil {
+		return ""
+	}
+	return state.backend.Name
+}
+
+// statusClass maps an HTTP status code to its class label ("2xx", "5xx"),
+// matching the metric's status_class vocabulary. A per-code label would make
+// Prometheus cardinality unbounded from arbitrary upstream statuses
+// (ADR-0013 decision 3).
+func statusClass(status int) string {
+	return strconv.Itoa(status/100) + "xx"
+}
+
 // logRequest emits the single per-request "request complete" line using the
 // canonical field vocabulary. 5xx responses log at WARN, everything else at
 // INFO.
 func (p *Proxy) logRequest(r *http.Request, state *reqState, start time.Time) {
-	backendName := ""
-	if state.backend != nil {
-		backendName = state.backend.Name
-	}
 	latencyMS := float64(time.Since(start).Microseconds()) / 1000.0
 	attrs := []any{
-		"backend", backendName,
+		"backend", backendName(state),
 		"method", r.Method,
 		"status", state.status,
 		"latency_ms", latencyMS,
