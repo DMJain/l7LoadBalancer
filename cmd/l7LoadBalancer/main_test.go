@@ -37,6 +37,37 @@ lb_backend_healthy{backend="backend-b"} 1
 		c.Registry(), strings.NewReader(want), "lb_backend_healthy"))
 }
 
+// TestSeedMetricsCircuitState proves main's startup seeding materializes every
+// backend's lb_circuit_state label enum with closed=1 and the other two states
+// at 0, through the collector's own setter — the same method real circuit
+// transitions use — so a freshly started, never-degraded system renders a
+// complete circuit panel on its first scrape instead of a blank one.
+// Prometheus Vec metrics materialize no series until first written
+// (ADR-0013 decision 9).
+func TestSeedMetricsCircuitState(t *testing.T) {
+	reg, err := backend.NewRegistry([]config.BackendConfig{
+		{Name: "backend-a", URL: "http://127.0.0.1:9001"},
+		{Name: "backend-b", URL: "http://127.0.0.1:9002"},
+	})
+	require.NoError(t, err)
+
+	c := metrics.NewCollector()
+	seedMetrics(c, reg)
+
+	const want = `
+# HELP lb_circuit_state Circuit breaker state per backend as a label enum; exactly one of closed/open/half_open is 1.
+# TYPE lb_circuit_state gauge
+lb_circuit_state{backend="backend-a",state="closed"} 1
+lb_circuit_state{backend="backend-a",state="half_open"} 0
+lb_circuit_state{backend="backend-a",state="open"} 0
+lb_circuit_state{backend="backend-b",state="closed"} 1
+lb_circuit_state{backend="backend-b",state="half_open"} 0
+lb_circuit_state{backend="backend-b",state="open"} 0
+`
+	require.NoError(t, testutil.GatherAndCompare(
+		c.Registry(), strings.NewReader(want), "lb_circuit_state"))
+}
+
 // TestSeedMetricsActiveConnections proves main's startup seeding materializes
 // every backend's lb_active_connections series at 0 through the collector's own
 // setter, so a freshly started, never-trafficked system renders a complete

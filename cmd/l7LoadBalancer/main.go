@@ -68,7 +68,7 @@ func main() {
 	// a round-trip observer. Installing the gate before selection begins means
 	// every selector's Registry.Selectable snapshot already excludes open
 	// circuits (ADR-0011 decision 1, ADR-0012).
-	breaker := circuit.New(*cfg.Circuit.Cooldown, log)
+	breaker := circuit.New(*cfg.Circuit.Cooldown, log, collector)
 	reg.SetCircuitGate(breaker)
 
 	sel, err := balancer.NewFromConfig(cfg, reg)
@@ -145,13 +145,15 @@ func main() {
 // collector's own setter methods, so a freshly started, never-degraded system
 // renders a complete dashboard on its first scrape — Prometheus Vec metrics
 // create no series until first written (ADR-0013 decision 9). It seeds the
-// active-connections gauge to 0 and lb_backend_healthy to 1 (every backend
-// starts healthy per NewRegistry), using the same Collector methods real
-// transitions use; the circuit-state gauge is seeded here by S3.T6.4.
+// active-connections gauge to 0, lb_backend_healthy to 1 (every backend
+// starts healthy per NewRegistry), and lb_circuit_state to closed (every
+// backend starts with a closed circuit per ADR-0011), using the same Collector
+// methods real transitions use.
 func seedMetrics(c *metrics.Collector, reg *backend.Registry) {
 	for _, b := range reg.All() {
 		c.SetActiveConnections(b.Name, 0)
 		c.SetBackendHealthy(b.Name, true)
+		c.SetCircuitState(b.Name, metrics.CircuitStateClosed)
 	}
 }
 

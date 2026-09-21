@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/DMJain/l7LoadBalancer/internal/logger"
+	"github.com/DMJain/l7LoadBalancer/internal/metrics"
 )
 
 // logRecord is one parsed JSON slog line, mirroring captureLogger in
@@ -71,7 +72,7 @@ func recordsWithEvent(recs []logRecord, event string) []logRecord {
 func TestBreakerLogsCircuitOpenedOnConsecutiveFailures(t *testing.T) {
 	l, dump := captureLogger(t)
 	reg := testRegistry(t)
-	br := New(time.Hour, l)
+	br := New(time.Hour, l, metrics.NewCollector())
 	b := reg.All()[0]
 
 	for i := 0; i < circuitFailuresBeforeOpen-1; i++ {
@@ -101,7 +102,7 @@ func TestBreakerLogsCircuitHalfOpenedOnTrialAdmission(t *testing.T) {
 	const cooldown = 50 * time.Millisecond
 	l, dump := captureLogger(t)
 	reg := testRegistry(t)
-	br := New(cooldown, l)
+	br := New(cooldown, l, metrics.NewCollector())
 	b := reg.All()[0]
 	for i := 0; i < circuitFailuresBeforeOpen; i++ {
 		br.ObserveRoundTrip(b, 0, false)
@@ -127,7 +128,7 @@ func TestBreakerLogsCircuitClosedOnTrialSuccess(t *testing.T) {
 	const cooldown = 50 * time.Millisecond
 	l, dump := captureLogger(t)
 	reg := testRegistry(t)
-	br := New(cooldown, l)
+	br := New(cooldown, l, metrics.NewCollector())
 	b := reg.All()[0]
 	for i := 0; i < circuitFailuresBeforeOpen; i++ {
 		br.ObserveRoundTrip(b, 0, false)
@@ -155,7 +156,7 @@ func TestBreakerLogsCircuitReopenedOnTrialFailure(t *testing.T) {
 	const cooldown = 50 * time.Millisecond
 	l, dump := captureLogger(t)
 	reg := testRegistry(t)
-	br := New(cooldown, l)
+	br := New(cooldown, l, metrics.NewCollector())
 	b := reg.All()[0]
 	for i := 0; i < circuitFailuresBeforeOpen; i++ {
 		br.ObserveRoundTrip(b, 0, false)
@@ -182,7 +183,7 @@ func TestBreakerDoesNotLogScanWonHalfOpenPromotion(t *testing.T) {
 	const cooldown = 50 * time.Millisecond
 	l, dump := captureLogger(t)
 	reg := testRegistry(t)
-	br := New(cooldown, l)
+	br := New(cooldown, l, metrics.NewCollector())
 	b := reg.All()[0]
 	for i := 0; i < circuitFailuresBeforeOpen; i++ {
 		br.ObserveRoundTrip(b, 0, false)

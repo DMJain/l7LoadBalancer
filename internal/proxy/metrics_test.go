@@ -115,7 +115,7 @@ func TestProxyObservesWholeRequestOnEveryExitPath(t *testing.T) {
 			setup: func(t *testing.T) (*Proxy, *metrics.Collector) {
 				reg := registryFrom(t, backendEntry{"backend-a", "http://127.0.0.1:1"})
 				b := reg.All()[0]
-				br := circuit.New(time.Minute, slog.Default())
+				br := circuit.New(time.Minute, slog.Default(), metrics.NewCollector())
 				openCircuit(t, reg, br, b)
 				p := New(reg, fixedSelector{b: b})
 				c := metrics.NewCollector()
