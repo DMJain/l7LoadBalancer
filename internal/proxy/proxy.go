@@ -113,7 +113,9 @@ func NewLatencyObserver() RoundTripObserver {
 // reqState carried in the request context and the atomics on *backend.Backend.
 // rp is built once in New and is safe for concurrent use. observers are
 // appended to at construction time via RegisterObserver and only read
-// afterwards, so the request path needs no lock — see RegisterObserver.
+// afterwards, and the metrics reference is installed via SetMetrics at
+// construction time and only read afterwards, so the request path needs no
+// lock — see RegisterObserver and SetMetrics.
 type Proxy struct {
 	reg       *backend.Registry
 	sel       balancer.Selector
@@ -194,7 +196,7 @@ func (p *Proxy) observe(state *reqState, d time.Duration, success bool) {
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	state := &reqState{}
-	defer p.recordRequest(r, state, start)
+	defer p.completeRequest(r, state, start)
 
 	b, err := p.sel.Select(r.Context(), r)
 	if err != nil {
@@ -287,14 +289,14 @@ func (b *releaseBody) Close() error {
 	return b.ReadCloser.Close()
 }
 
-// recordRequest is the single per-request completion hook. It pushes the
+// completeRequest is the single per-request completion hook. It pushes the
 // whole-request metrics observation and emits the existing "request complete"
 // log line from one place, sharing ServeHTTP's start and state, so the two
 // observability surfaces can never disagree about a request's outcome. It runs
 // on every exit path — success, both 503 short-circuits, and ErrorHandler —
 // and on the http.ErrAbortHandler panic path, exactly where the deferred
 // logRequest call already ran.
-func (p *Proxy) recordRequest(r *http.Request, state *reqState, start time.Time) {
+func (p *Proxy) completeRequest(r *http.Request, state *reqState, start time.Time) {
 	p.observeRequest(r, state, start)
 	p.logRequest(r, state, start)
 }

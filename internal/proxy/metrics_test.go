@@ -20,6 +20,12 @@ import (
 // want for the named metric family, or nil if no such series has been written.
 // The collector's private registry is the external, observable surface the
 // spec's whole-request-hook seam asserts against (spec Testing Decisions §3).
+//
+// It reads the typed dto model via Registry().Gather rather than
+// prometheus/testutil's CollectAndCompare helpers: those compare whole
+// exposition families as text, and no typed "select this series by label set"
+// helper exists. Gathering dto avoids scraped-text matching while letting the
+// table assert one series at a time.
 func labeledSeries(t *testing.T, c *metrics.Collector, name string, want map[string]string) *dto.Metric {
 	t.Helper()
 	mfs, err := c.Registry().Gather()
