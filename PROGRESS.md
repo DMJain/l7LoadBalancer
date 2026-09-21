@@ -316,6 +316,12 @@ Scoped in `.scratch/s3-t1-t3-health-passive-circuit/` as one spec plus six imple
   - Acceptance: `health.New(reg, interval, timeout, log, collector)` and `health.NewOutlierDetector(log, collector)`; the active checker sets the gauge to `0`/`1` inside the same `==`-gated, genuine-transition-guarded `if` blocks its `health_ejected`/`health_reinstated` log lines fire from; the outlier detector sets it to `0` inside its existing `ejected`-per-episode guard; `main.go` seeds every backend to `1` via `seedMetrics` using `Collector.SetBackendHealthy`; tests assert a failure-threshold crossing drives the gauge to `0` (sharing the once-per-streak signal), a success-threshold crossing after ejection drives it back to `1`, and the startup seed materializes every backend's series at `1` before any probe cycle; every existing S3.T1/S3.T2/ticket-04 test passes unchanged.
   - Test approach: the S3.T1 direct `probeOnce` seam and S3.T2 direct `ObserveRoundTrip` seam, each paired with a real `metrics.NewCollector()` read back via `prometheus/testutil` (spec seam 6); the package-`main` `seedMetrics` test extended to assert `lb_backend_healthy` at `1` via `GatherAndCompare` (spec seam 7). `testify/require` setup, `testify/assert` values; deterministic fixtures, no mocks.
 
+## Proposed tickets (awaiting owner approval)
+
+Not approved, not claimed, not implemented. Surfaced by the S3.T6.3 two-axis review; recorded per AGENTS.md Step 2.5.
+
+- [PROPOSED] S3.T6.5 — Active checker reinstatement gate misses passive-ejection recovery. The active checker's success gate is `p.successes == probeSuccessesBeforeHealthy && !p.target.IsHealthy()`, but `successes` resets only on a failed probe and is otherwise uncapped. If the passive outlier detector ejects an "up but erroring" backend whose probe still returns 2xx, the next probe satisfies `successes >= M` → `MarkHealthy()`, but never the `== M` equality, so neither the `health_reinstated` log line (S3.T5.3) nor `lb_backend_healthy`'s `1` write (S3.T6.3) fires — `Backend.IsHealthy()` reads `true` while the gauge stays `0`. Candidate fix: gate on `p.successes >= probeSuccessesBeforeHealthy && !p.target.IsHealthy()`, keeping the genuine-state guard, with a regression test for the passive-eject-then-probe-recover path. Confirmed with a throwaway test during S3.T6.3 (deleted). Deliberately not fixed inline: it is ticket 04's signal, which S3.T6.3 reuses rather than re-derives (spec story 34).
+
 ## Sprint 4, 5
 
 See `MILESTONES.md`. Tasks added per sprint.
