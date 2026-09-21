@@ -68,6 +68,21 @@ func (h *captureHandler) transitionCount(event, backend, reason string) int {
 	return n
 }
 
+// eventCount returns how many captured records carry exactly this event for
+// this backend, regardless of reason. It backs the "exactly one transition of
+// this kind" assertions that must not be satisfiable by a second line with a
+// different reason.
+func (h *captureHandler) eventCount(event, backend string) int {
+	n := 0
+	for _, r := range h.snapshot() {
+		f := recordFields(r)
+		if f["event"] == event && f["backend"] == backend {
+			n++
+		}
+	}
+	return n
+}
+
 // transitionRecords returns every captured record carrying an `event` field —
 // i.e. every health/circuit transition line, excluding the proxy's per-request
 // lines — for baseline "no transitions yet" assertions.

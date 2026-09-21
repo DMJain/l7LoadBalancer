@@ -151,5 +151,18 @@ Two deviations from the ticket's letter, both recorded in the session log:
 `assertTransitionLogged` is a transition *counter* asserting exactly one (the
 ticket's arcs all say "exactly one"), and gauge reads use
 `Registry().Gather()` rather than `testutil.ToFloat64` because the external
-test package cannot name the collector's unexported `GaugeVec` — the same
-S3.T6.3-family path `testutil` wraps.
+test package cannot name the collector's unexported `GaugeVec` (the same
+S3.T6.3-family path `testutil` wraps; `GatherAndCompare` was possible but
+compares a whole family).
+
+Post-implementation two-axis review (see session log): arc (i)'s
+"selector no longer chooses X" assertion was strengthened to require status
+200 on the whole burst (a still-selected dead backend returns 502 and would
+have satisfied a bare body check); arcs (i)/(iii) now assert exactly one
+`health_ejected` and one `circuit_opened` line for the backend via
+`eventCount`, not just the reason-specific triple. One spec-prose
+inconsistency is documented rather than papered over: arc (iii)'s "passive
+detection and active checker both eject on the same signal" cannot happen with
+the frozen constants (circuit opens at 3 failures, below passive's
+5-in-window threshold), so only the active checker logs; passive stays covered
+at unit scope (S3.T2, `internal/proxy/proxy_test.go`).

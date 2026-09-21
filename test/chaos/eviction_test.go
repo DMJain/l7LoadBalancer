@@ -1,6 +1,7 @@
 package chaos_test
 
 import (
+	"net/http"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -44,19 +45,19 @@ func TestChaosActiveOnlyEvictionAndRecovery(t *testing.T) {
 	// The process dies: real ECONNREFUSED for probes and proxy dispatch alike.
 	x.Kill()
 
-	require.Eventually(t, func() bool {
-		v, ok := gaugeValueOK(a.collector, "lb_backend_healthy", healthGaugeLabels(x.id))
-		return ok && v == 0
-	}, eventuallyDeadline, eventuallyTick,
+	requireGaugeEventually(t, a.collector, "lb_backend_healthy", healthGaugeLabels(x.id), 0,
 		"the killed backend's health gauge must flip to 0")
 
 	assertTransitionLogged(t, a.logs, logger.EventHealthEjected, x.id, logger.ReasonProbeFailures)
+	require.Equal(t, 1, a.logs.eventCount(logger.EventHealthEjected, x.id),
+		"exactly one health ejection line for the killed backend, whatever its reason")
 
 	// The selector must stop choosing the dead backend: a clean burst of
-	// requests, none of which is served by it.
+	// 200-served requests, none of which is the dead backend's 502/503.
 	require.Eventually(t, func() bool {
 		for i := 0; i < 12; i++ {
-			if _, body := doRequest(a.handler); body == x.id {
+			status, body := doRequest(a.handler)
+			if status != http.StatusOK || body == x.id {
 				return false
 			}
 		}
@@ -66,13 +67,12 @@ func TestChaosActiveOnlyEvictionAndRecovery(t *testing.T) {
 	// The process comes back on the same address.
 	x.Restart()
 
-	require.Eventually(t, func() bool {
-		v, ok := gaugeValueOK(a.collector, "lb_backend_healthy", healthGaugeLabels(x.id))
-		return ok && v == 1
-	}, eventuallyDeadline, eventuallyTick,
+	requireGaugeEventually(t, a.collector, "lb_backend_healthy", healthGaugeLabels(x.id), 1,
 		"the restarted backend's health gauge must flip back to 1")
 
 	assertTransitionLogged(t, a.logs, logger.EventHealthReinstated, x.id, logger.ReasonProbeRecovered)
+	require.Equal(t, 1, a.logs.eventCount(logger.EventHealthReinstated, x.id),
+		"exactly one reinstatement line for the restarted backend")
 
 	require.Eventually(t, func() bool {
 		for i := 0; i < 12; i++ {
@@ -99,9 +99,10 @@ func TestChaosCombined500SignalHealthOnlyRecovery(t *testing.T) {
 
 	// Drive enough requests for the circuit to open and let the active checker
 	// eject on the same 500 signal. Round-robin gives the bad backend every
-	// third selection; three proxy failures open the circuit (below passive
-	// detection's five-in-window threshold), and the active probes cross their
-	// own threshold within a probe interval or two.
+	// third selection; three proxy failures open the circuit — below passive
+	// detection's five-in-window threshold, so the circuit excludes the bad
+	// backend before passive detection can reach its own threshold — and the
+	// active probes cross their threshold within a probe interval or two.
 	require.Eventually(t, func() bool {
 		for i := 0; i < 9; i++ {
 			doRequest(a.handler)
@@ -114,15 +115,17 @@ func TestChaosCombined500SignalHealthOnlyRecovery(t *testing.T) {
 
 	assertTransitionLogged(t, a.logs, logger.EventHealthEjected, x.id, logger.ReasonProbeFailures)
 	assertTransitionLogged(t, a.logs, logger.EventCircuitOpened, x.id, logger.ReasonConsecutiveFailures)
+	require.Equal(t, 1, a.logs.eventCount(logger.EventHealthEjected, x.id),
+		"exactly one health ejection line on the combined 500 signal")
+	require.Equal(t, 1, a.logs.eventCount(logger.EventCircuitOpened, x.id),
+		"exactly one circuit-open line on the combined 500 signal")
 
 	// Flip the backend healthy again. Only the health axis may recover: the
 	// circuit has taken no successful trial, so it stays open.
 	x.Serve200()
 
-	require.Eventually(t, func() bool {
-		v, ok := gaugeValueOK(a.collector, "lb_backend_healthy", healthGaugeLabels(x.id))
-		return ok && v == 1
-	}, eventuallyDeadline, eventuallyTick, "the health gauge must recover once the backend answers 200")
+	requireGaugeEventually(t, a.collector, "lb_backend_healthy", healthGaugeLabels(x.id), 1,
+		"the health gauge must recover once the backend answers 200")
 
 	assertTransitionLogged(t, a.logs, logger.EventHealthReinstated, x.id, logger.ReasonProbeRecovered)
 

@@ -15,10 +15,12 @@ import (
 //
 // The collector's instruments are unexported (internal/metrics is a leaf
 // package), so testutil.ToFloat64 cannot name the target GaugeVec from this
-// external test package. Gathering the registry directly is the same
-// S3.T6.3-family path testutil wraps, and is the only read the collector
-// exposes. Label pairs are handled through type inference so this package
-// need not import the Prometheus client_model package directly.
+// external test package. testutil.GatherAndCompare does accept the exported
+// Registry, but it compares a whole metric family — here three seeded backends
+// by three circuit states — which makes a single-series assertion brittle;
+// gathering the registry and selecting the exact series is the minimal read
+// testutil wraps. Label pairs are handled through type inference so this
+// package need not import the Prometheus client_model package directly.
 func gaugeValueOK(c *metrics.Collector, name string, labels map[string]string) (float64, bool) {
 	families, err := c.Registry().Gather()
 	if err != nil {
@@ -60,4 +62,14 @@ func assertGauge(t *testing.T, c *metrics.Collector, name string, labels map[str
 	got, ok := gaugeValueOK(c, name, labels)
 	require.True(t, ok, "series %s%v must exist", name, labels)
 	require.Equal(t, want, got, "gauge %s%v", name, labels)
+}
+
+// requireGaugeEventually polls until one series of one gauge family reads
+// want, with the chaos tests' -race-generous deadline.
+func requireGaugeEventually(t *testing.T, c *metrics.Collector, name string, labels map[string]string, want float64, msg string, args ...any) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		got, ok := gaugeValueOK(c, name, labels)
+		return ok && got == want
+	}, eventuallyDeadline, eventuallyTick, append([]any{msg}, args...)...)
 }

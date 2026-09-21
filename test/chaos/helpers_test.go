@@ -48,7 +48,7 @@ func newFlippableBackend(t *testing.T, id string) *flippableBackend {
 	fb := &flippableBackend{t: t, id: id}
 	fb.Serve200()
 	fb.start()
-	t.Cleanup(fb.stop)
+	t.Cleanup(fb.Kill)
 	return fb
 }
 
@@ -123,9 +123,6 @@ func (fb *flippableBackend) Restart() {
 	fb.srv = srv
 	go func() { _ = srv.Serve(ln) }()
 }
-
-// stop is the test-cleanup hook; killing an already-dead backend is a no-op.
-func (fb *flippableBackend) stop() { fb.Kill() }
 
 // serve dispatches to the currently-installed handler.
 func (fb *flippableBackend) serve(w http.ResponseWriter, r *http.Request) {
