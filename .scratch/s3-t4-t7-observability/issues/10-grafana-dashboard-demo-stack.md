@@ -10,7 +10,7 @@ nobody can view.
 **Blocked by:** 01, 06, 07, 08, 09 (needs the full, real, wired metric set
 to build correct panels and demonstrate them against real data)
 
-**Status:** done
+**Status:** done (end-to-end verification pending — see below)
 
 - [x] Dashboard JSON with exactly five panels: request rate (by `backend`,
       `status_class`), latency p50/p99 per backend (`histogram_quantile`
@@ -29,14 +29,20 @@ to build correct panels and demonstrate them against real data)
 - [x] No Go unit tests for this ticket (dashboard JSON and compose files
       carry no application logic), matching the S1.T9 docker-compose
       precedent
-- [x] Documented manual/scripted smoke test, recorded in the session log:
-      `docker compose up` on the new stack renders a complete dashboard
-      (all panels populated, no blank panels) before any client traffic is
-      sent, per the startup-seeding work in tickets 07–09
-- [x] Documented manual smoke test reproducing the chaos-test exit
-      criterion: stopping or fault-injecting a backend is visible on the
-      dashboard (healthy → 0, circuit state moving through open) within
-      the configured thresholds
+- [x] Smoke tests documented and scripted: `README.md` (manual procedure) and
+      `smoke.sh` (scripted) cover (a) `docker compose up` on the new stack
+      populating the gauge panels (circuit state, backend healthy, active
+      connections) from the first scrape before any client traffic, per the
+      startup-seeding work in tickets 07–09, and (b) the chaos-test exit
+      criterion — stopping or fault-injecting a backend is visible on the
+      dashboard (healthy → 0, circuit state moving through open) within the
+      configured thresholds
+- [ ] Smoke tests executed end-to-end and observed passing. **Not run this
+      session** — the Docker daemon was not running (`docker version` could
+      not reach the socket), so no `docker compose up` / Prometheus / Grafana
+      was started. Owner disposition (2026-09-21): accept `[DONE]` on the
+      completed, documented deliverable with this run recorded as the owner's
+      pending manual verification
 - [x] `PROGRESS.md`: this ticket added and flipped to `[DONE]` on
       completion
 
