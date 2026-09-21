@@ -28,3 +28,10 @@ DEBUG/INFO/WARN/ERROR asserting the emitted record set is exactly
 has exactly `time`/`level`/`msg` while attributes land as top-level keys.
 Coverage 100.0% of `internal/logger` statements. Test-only ticket — the
 production `logger.New` implementation is unchanged.
+
+The spec's broader "JSON shape and canonical field presence for both
+request-scoped and transition-scoped log lines" line is only half covered
+here: canonical *request-scoped* field presence is represented by the
+`backend`/`status` attribute subtest, while the transition-scoped
+`event`/`reason` vocabulary does not exist yet and is covered by issues
+03–05.
