@@ -235,16 +235,22 @@ func (b *Backend) CircuitOpen(cooldown time.Duration) bool {
 // circuit becomes half-open therefore cannot both believe they are the trial
 // (ADR-0011 decision 6). cooldown is supplied by internal/circuit.
 //
-// The transition is CircuitHalfOpened only when this call both promoted the
-// circuit from Open and won the trial slot, so exactly one caller logs the
-// promotion. If a Registry.Selectable scan already promoted the circuit, this
-// call merely takes the trial and reports CircuitNoChange: the promotion has no
-// logger path and is never logged (ADR-0013 decision 13). Every other outcome
-// reports CircuitNoChange.
+// The transition is CircuitHalfOpened when this call performed the
+// Open→Half-Open promotion, and CircuitNoChange otherwise. The promotion CAS in
+// currentCircuit has exactly one winner, so exactly one concurrent caller
+// reports it; tying the report to the promotion (not to winning the trial slot
+// afterwards) is what keeps the exactly-once guarantee under a race. If a
+// Registry.Selectable scan already promoted the circuit, this call did not
+// promote and reports CircuitNoChange: the promotion has no logger path and is
+// never logged (ADR-0013 decision 13).
 func (b *Backend) CircuitAllow(cooldown time.Duration) (bool, CircuitTransition) {
 	// Promote first so an open-but-cooled circuit is treated as half-open; the
 	// promotion rule then lives in exactly one place (currentCircuit).
 	_, promoted := b.currentCircuit(cooldown)
+	transition := CircuitNoChange
+	if promoted {
+		transition = CircuitHalfOpened
+	}
 	for {
 		old := b.circuit.Load()
 		cur := circuitSnapshot{}
@@ -255,21 +261,18 @@ func (b *Backend) CircuitAllow(cooldown time.Duration) (bool, CircuitTransition)
 		case circuitOpen:
 			// Still open: the cooldown has not elapsed (or the circuit was
 			// reopened concurrently).
-			return false, CircuitNoChange
+			return false, transition
 		case circuitHalfOpen:
 			if cur.trial {
-				return false, CircuitNoChange
+				return false, transition
 			}
 			next := cur
 			next.trial = true
 			if b.circuit.CompareAndSwap(old, &next) {
-				if promoted {
-					return true, CircuitHalfOpened
-				}
-				return true, CircuitNoChange
+				return true, transition
 			}
 		default:
-			return true, CircuitNoChange
+			return true, transition
 		}
 	}
 }

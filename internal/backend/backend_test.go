@@ -383,6 +383,39 @@ func TestBackendCircuitAllowDoesNotReportScanWonPromotion(t *testing.T) {
 		"this call did not promote, so there is no transition for it to report")
 }
 
+// TestBackendCircuitAllowReportsPromotionOnceConcurrently pins the exactly-once
+// property under a race: the promotion CAS has one winner, so exactly one of
+// many concurrent admissions reports HalfOpened — even though only one of them
+// also wins the trial slot.
+func TestBackendCircuitAllowReportsPromotionOnceConcurrently(t *testing.T) {
+	const (
+		cooldown   = 50 * time.Millisecond
+		goroutines = 50
+	)
+	b := &Backend{Name: "backend-a"}
+	openCircuit(t, b, 3)
+	time.Sleep(200 * time.Millisecond)
+
+	var halfOpened atomic.Int32
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for i := 0; i < goroutines; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			if _, transition := b.CircuitAllow(cooldown); transition == CircuitHalfOpened {
+				halfOpened.Add(1)
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	assert.Equal(t, int32(1), halfOpened.Load(),
+		"exactly one caller may report the Open→Half-Open promotion")
+}
+
 func TestBackendConcurrentHealthToggling(t *testing.T) {
 	const goroutines = 100
 	b := &Backend{Name: "backend-a"}

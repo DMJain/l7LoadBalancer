@@ -143,7 +143,7 @@ from the design-session record in the spec above.
     `event` is exactly `health_ejected`, `health_reinstated`,
     `circuit_opened`, `circuit_closed`, `circuit_half_opened`; `reason` is
     exactly `probe_failures`/`probe_recovered` (active), `outlier_window`
-    (passive), and     `consecutive_failures`/`trial_success`/`trial_failure`/
+    (passive), and `consecutive_failures`/`trial_success`/`trial_failure`/
     `cooldown_elapsed` (circuit). `health_ejected` and `circuit_opened` (via
     either `consecutive_failures` or `trial_failure`) are logged at WARN;
     `health_reinstated`, `circuit_closed`, and `circuit_half_opened` at INFO,
@@ -252,9 +252,16 @@ not half-open it.
 Resolved with the project owner during S3.T5.4 by adding **`Reopened`** for the
 `HalfOpen→Open` trial-failure transition, so each logged reason maps 1:1 to a
 transition value. This amends decision 10 in place (five values) and corrects
-decision 12's WARN/INFO list. The Half-Open-promotion logging gap in decision
-13 is unchanged: a promotion whose CAS is won by `Registry.Selectable()`'s
-`Backend.CircuitOpen()` read is still never logged, because only
-`CircuitAllow` — which actually takes the trial — can observe a promotion it
-performed and has a logger. `CircuitOpen` continues to return `bool`, not a
-transition.
+decision 12's WARN/INFO list. The Go constants are exported as
+`CircuitNoChange`/`CircuitOpened`/`CircuitReopened`/`CircuitClosed`/
+`CircuitHalfOpened` — the `Circuit` prefix avoids generic names like
+`backend.Opened`; the bare names in decision 10 are shorthand.
+
+The Half-Open-promotion logging gap in decision 13 is unchanged: a promotion
+whose CAS is won by `Registry.Selectable()`'s `Backend.CircuitOpen()` read is
+still never logged, because only `CircuitAllow` can report a promotion it
+performed and has a logger. `CircuitAllow` reports `CircuitHalfOpened` when
+*it* performed the promotion (the promotion CAS has exactly one winner, so
+exactly one concurrent caller reports it — tying the report to the promotion
+rather than to winning the trial slot keeps the exactly-once guarantee under a
+race). `CircuitOpen` continues to return `bool`, not a transition.

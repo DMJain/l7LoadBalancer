@@ -27,6 +27,11 @@ const circuitFailuresBeforeOpen = 3
 // Breaker implements backend.CircuitGate (Open/Allow) as well as the observer
 // contract: main installs it as the registry's gate and registers it as a
 // proxy round-trip observer.
+//
+// Concurrency: a Breaker is immutable after construction (cooldown and log are
+// set by New and only read afterwards), so its methods are safe to call from
+// the concurrent request path and the health-check goroutines alike; all
+// mutable state lives on the *backend.Backend passed in.
 type Breaker struct {
 	cooldown time.Duration
 	log      *slog.Logger
@@ -36,7 +41,7 @@ type Breaker struct {
 // stays Open before a read may lazily promote it to Half-Open. The cooldown is
 // read from Config by main (ADR-0011 decision 10), so it is passed in rather
 // than imported here. log receives one line per genuine circuit transition
-// (ADR-0013 decision 10).
+// (ADR-0013 decision 10) and must be non-nil.
 func New(cooldown time.Duration, log *slog.Logger) *Breaker {
 	return &Breaker{cooldown: cooldown, log: log}
 }

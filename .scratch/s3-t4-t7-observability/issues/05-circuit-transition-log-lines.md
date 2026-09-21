@@ -66,12 +66,20 @@ failed trial reopens (`circuit_opened`), it does not half-open. Resolved by
 adding `Reopened` for the trial-failure case so each logged reason maps 1:1 to
 a transition; ADR-0013 decision 10 was amended in place and a dated
 "Amendment" section records the change and the corrected decision 12 WARN
-list.
+list. (The Go constants are exported with a `Circuit` prefix —
+`backend.CircuitNoChange`, `CircuitOpened`, `CircuitReopened`, `CircuitClosed`,
+`CircuitHalfOpened` — to avoid generic package-scope names like
+`backend.Opened`; the bare names above are shorthand.) ADR-0012 decision 4
+gained a pointer to the extended signatures, since it is the ADR that froze
+them.
 
 `CircuitAllow` now returns `(bool, CircuitTransition)`; `CircuitFailure` and
 `CircuitSuccess` return `CircuitTransition`. `CircuitAllow` reports
-`CircuitHalfOpened` only when *that call* promoted `Open→Half-Open` and won the
-trial, so the scan-won-promotion gap is preserved exactly: a promotion won by
+`CircuitHalfOpened` when *that call* performed the `Open→Half-Open` promotion
+(the promotion CAS has one winner, so exactly one concurrent caller reports it
+even if it then loses the trial-slot CAS — tying the report to the promotion,
+not to winning the trial, keeps the exactly-once guarantee under a race), so
+the scan-won-promotion gap is preserved exactly: a promotion won by
 `Registry.Selectable()`'s `CircuitOpen` read is never logged. `internal/backend`
 gained no import; `circuit.New(cooldown, log)` gained the logger; the
 `CircuitGate`/`RoundTripObserver` signatures are untouched (the wrapper methods

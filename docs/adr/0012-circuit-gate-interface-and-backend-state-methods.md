@@ -94,6 +94,12 @@ decision that is expensive to reverse:
    - `CircuitSuccess()`
    - `CircuitFailure(threshold int)`
 
+   S3.T5.4 later extended `CircuitAllow` to
+   `(bool, backend.CircuitTransition)`, and `CircuitSuccess`/`CircuitFailure`
+   to return a `backend.CircuitTransition`, so `circuit.Breaker` can log
+   exactly the genuine transitions; the argument lists above are otherwise
+   unchanged. See ADR-0013 decision 10 and its 2026-09-21 amendment.
+
    `cooldown` and `threshold` are supplied by `circuit.Breaker` on every call.
    This keeps ADR-0011 decision 10's split literal: `circuit` is the only
    package that reads `Config.Circuit.Cooldown` and the only place the
