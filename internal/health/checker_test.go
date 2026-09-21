@@ -197,8 +197,9 @@ func TestProberReinstatesPassivelyEjectedBackendWithAccumulatorPastThreshold(t *
 	b.MarkUnhealthy()
 	require.False(t, b.IsHealthy())
 
-	// M more successful probes must reinstate it. Under the == gate the
-	// accumulator is already past M, so neither the log line nor the gauge fires.
+	// The accumulator is already past M, so the very next successful probe must
+	// reinstate it. Under the == gate it would not, since == M can never hold
+	// again once the accumulator has advanced beyond M.
 	for i := 0; i < probeSuccessesBeforeHealthy; i++ {
 		require.True(t, p.probeOnce(context.Background()))
 	}
@@ -208,6 +209,15 @@ func TestProberReinstatesPassivelyEjectedBackendWithAccumulatorPastThreshold(t *
 	require.Len(t, reinstated, 1, "exactly one reinstatement line per genuine transition")
 	assert.Equal(t, logger.ReasonProbeRecovered, reinstated[0].str("reason"))
 	assert.Equal(t, b.Name, reinstated[0].str("backend"))
+
+	// The past-M accumulator must not stall a later episode either: a second
+	// passive ejection recovers, and logs its own reinstatement line, on the
+	// next successful probe.
+	b.MarkUnhealthy()
+	require.True(t, p.probeOnce(context.Background()))
+	assert.True(t, b.IsHealthy(), "a later ejection must recover on the next successful probe")
+	assert.Len(t, recordsWithEvent(dump(), logger.EventHealthReinstated), 2,
+		"a fresh ejection episode must log its own reinstatement line")
 }
 
 // TestProberConsecutiveCountersReset proves the counters are consecutive, not
