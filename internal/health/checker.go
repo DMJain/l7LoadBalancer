@@ -108,22 +108,26 @@ func (c *Checker) Start(ctx context.Context) {
 // can drive probe cycles directly, with no real ticker or context
 // cancellation. It returns whether this probe succeeded.
 //
-// Transition logging is edge-triggered twice over. The counter equalities
-// (failures == N, successes == M) fire only on the probe that crosses the
-// threshold, so a sustained streak logs once rather than on every subsequent
-// probe; the health-state guards (IsHealthy/!IsHealthy, read before the Mark*
-// call mutates it) make the line describe a *genuine* transition, so an
-// already-healthy backend's success streak — every backend's first M probes at
-// startup — cannot emit a spurious health_reinstated. The guard reads the
-// backend's existing atomic health rather than adding a prober field
-// (ADR-0013 decision 11). lb_backend_healthy is written inside those same two
-// guarded blocks, so it shares this exact edge-triggered signal rather than
-// re-deriving health independently (ADR-0013 decision 6).
+// Transition logging is edge-triggered twice over. The threshold checks fire
+// only on the probe that crosses the threshold (failures == N, successes >= M),
+// so a sustained streak logs once rather than on every subsequent probe; the
+// health-state guards (IsHealthy/!IsHealthy, read before the Mark* call mutates
+// it) make the line describe a *genuine* transition, so an already-healthy
+// backend's success streak — every backend's first M probes at startup — cannot
+// emit a spurious health_reinstated. The success gate is >= rather than ==
+// (S3.T6.5): passive outlier detection can eject a backend while active probes
+// keep succeeding, so its accumulator is already past M at ejection time; an
+// equality would then skip the line and gauge write forever, leaving
+// IsHealthy() true while lb_backend_healthy stayed 0. See ADR-0011's 2026-09-22
+// amendment. The guard reads the backend's existing atomic health rather than
+// adding a prober field (ADR-0013 decision 11). lb_backend_healthy is written
+// inside those same two guarded blocks, so it shares this exact edge-triggered
+// signal rather than re-deriving health independently (ADR-0013 decision 6).
 func (p *prober) probeOnce(ctx context.Context) bool {
 	if p.checker.probe(ctx, p.target) {
 		p.failures = 0
 		p.successes++
-		if p.successes == probeSuccessesBeforeHealthy && !p.target.IsHealthy() {
+		if p.successes >= probeSuccessesBeforeHealthy && !p.target.IsHealthy() {
 			p.checker.log.Info("backend reinstated",
 				"backend", p.target.Name,
 				"event", logger.EventHealthReinstated,

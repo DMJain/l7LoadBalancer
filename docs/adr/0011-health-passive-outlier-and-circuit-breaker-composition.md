@@ -315,3 +315,22 @@ below) is a ticket-boundary concern, not just an architectural one.
   refactored" risk that motivated combining them; it would only enlarge a
   single commit's blast radius and mix two independent state machines'
   tests into one Red-Green-Refactor cycle.
+
+## Amendment (2026-09-22): Reinstatement gate uses `>=`, not `==`
+
+Decision 3's stated intent — a passively-ejected backend recovers via the
+next successful active probe — was implemented with an `==` gate against
+the consecutive-successes accumulator
+(`p.successes == probeSuccessesBeforeHealthy && !p.target.IsHealthy()`).
+Passive outlier detection can eject an "up but erroring" backend while
+active probes keep returning 2xx, so the accumulator is already past M at
+ejection time; `== M` is then never true again, and while the separate
+`>=` block still called `MarkHealthy()` — so `IsHealthy()` read `true` —
+neither the `health_reinstated` log line nor the `lb_backend_healthy`
+write, both behind the equality, ever fired, leaving the gauge at `0`
+until the process restarted. The one-line fix gates on
+`p.successes >= probeSuccessesBeforeHealthy`, keeping the `!IsHealthy()`
+genuine-state guard, so the transition fires exactly once per ejection
+episode. This is a shipped-code drift correction, not a new decision —
+decision 3's intent is unchanged, exactly the in-place amendment pattern
+ADR-0006 set rather than a new ADR.

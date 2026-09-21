@@ -17,11 +17,11 @@ gauge assertion would otherwise fail on this exact scenario.
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] Active checker's reinstatement gate compares the
+- [x] Active checker's reinstatement gate compares the
       consecutive-successes accumulator with `>=` against `M`, not `==`
-- [ ] New unit test in `internal/health/checker_test.go`: seeds a
+- [x] New unit test in `internal/health/checker_test.go`: seeds a
       backend with `healthy = false` (simulating a prior passive-detection
       ejection), drives `M` consecutive successful probes through the
       checker's normal loop, asserts `Backend.IsHealthy()` reads `true`
@@ -29,25 +29,34 @@ gauge assertion would otherwise fail on this exact scenario.
       `event=health.transition` `slog` record fires with the correct
       frozen `reason` string from S3.T5.2 (structured field-allowlist
       match on `event`+`backend`+`reason`, never substring)
-- [ ] Under the current `==` gate, the test would fail; under the `>=`
+- [x] Under the current `==` gate, the test would fail; under the `>=`
       gate, it passes — the test is the mechanical verification of the
       fix, not an incidental regression check
-- [ ] ADR-0011 gains a dated "Amendment (2026-09-22): Reinstatement gate
+- [x] ADR-0011 gains a dated "Amendment (2026-09-22): Reinstatement gate
       uses `>=`, not `==`" section appended after "Alternatives
       considered," one paragraph: the scenario that exposes the bug, the
       one-line fix, no tradeoff discussion; this is a shipped-code drift
       correction, not a new decision (no new ADR)
-- [ ] No metrics collector, no observer fan-out, no proxy wiring
+- [x] No metrics collector, no observer fan-out, no proxy wiring
       touched — the fix is at the checker layer and S3.T6.3 already
       verifies the observer→gauge wiring below it
-- [ ] `make test`, `make test-race`, `go vet`, `make fmt` clean
-- [ ] `PROGRESS.md`: this ticket added, Sprint 3 status line updated to
+- [x] `make test`, `make test-race`, `go vet`, `make fmt` clean
+- [x] `PROGRESS.md`: this ticket added, Sprint 3 status line updated to
       "Sprint 3 in progress — T1–T7 done, T8–T9 chaos tests remaining,"
       this ticket flipped to `[DONE]` on completion in the same atomic
       commit
-- [ ] `AGENTS.md`'s ADR table: ADR-0011 row unchanged (an amendment
+- [x] `AGENTS.md`'s ADR table: ADR-0011 row unchanged (an amendment
       section within an existing ADR is not a new row)
-- [ ] Session log entry appended to `docs/sessions/2026-09-22-<agent>.md`
+- [x] Session log entry appended to `docs/sessions/2026-09-22-<agent>.md`
       with the drift narrative
 
 ## Comments
+
+Completed 2026-09-22 by opencode (S3.T6.5). Red-first: the new
+`TestProberReinstatesPassivelyEjectedBackendWithAccumulatorPastThreshold`
+failed against the shipped `==` gate (0 reinstatement records), passed after
+the one-line `>=` change. `internal/health/checker.go`'s `probeOnce` doc
+comment updated to explain the failure/success gate asymmetry; ADR-0011
+gained the dated 2026-09-22 amendment. No metrics/observer/proxy code
+touched. `make test`, `make test-race`, `go vet`, `make fmt` all clean.
+`failure == N` deliberately left as-is (not the reported defect).

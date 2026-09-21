@@ -16,6 +16,7 @@ import (
 
 	"github.com/DMJain/l7LoadBalancer/internal/backend"
 	"github.com/DMJain/l7LoadBalancer/internal/config"
+	"github.com/DMJain/l7LoadBalancer/internal/logger"
 	"github.com/DMJain/l7LoadBalancer/internal/metrics"
 )
 
@@ -164,6 +165,49 @@ func TestProberMarksHealthyAfterConsecutiveSuccesses(t *testing.T) {
 	assert.True(t, p.probeOnce(context.Background()))
 	assert.True(t, b.IsHealthy(),
 		"%d consecutive successes must mark the backend healthy", probeSuccessesBeforeHealthy)
+}
+
+// TestProberReinstatesPassivelyEjectedBackendWithAccumulatorPastThreshold covers
+// the S3.T6.5 drift. Passive outlier detection ejects an "up but erroring"
+// backend while active probes keep succeeding in the background, so the
+// prober's consecutive-successes accumulator is already past M at ejection
+// time. The reinstatement gate must compare with >= against M, not ==: with ==
+// the separate >= block still calls MarkHealthy (so IsHealthy reads true) but
+// the guarded health_reinstated log line and lb_backend_healthy write, which
+// live behind the equality, never fire. The log-count assertion is the
+// mechanical verification of the fix — it fails under == and passes under >=.
+func TestProberReinstatesPassivelyEjectedBackendWithAccumulatorPastThreshold(t *testing.T) {
+	l, dump := captureLogger(t)
+	reg := newTestRegistry(t, statusServer(t, http.StatusOK).URL)
+	c := New(reg, time.Second, time.Second, l, metrics.NewCollector())
+	b := reg.All()[0]
+	p := c.newProber(b)
+
+	// Background probing runs the accumulator past M while the backend is still
+	// healthy. The genuine-state guard must suppress any reinstatement line here.
+	for i := 0; i < probeSuccessesBeforeHealthy+2; i++ {
+		require.True(t, p.probeOnce(context.Background()))
+	}
+	require.Empty(t, recordsWithEvent(dump(), logger.EventHealthReinstated),
+		"an always-healthy backend emits no reinstatement line")
+	require.Greater(t, p.successes, probeSuccessesBeforeHealthy,
+		"precondition: the accumulator must already be past M at ejection time")
+
+	// Passive outlier detection ejects it mid-success-streak.
+	b.MarkUnhealthy()
+	require.False(t, b.IsHealthy())
+
+	// M more successful probes must reinstate it. Under the == gate the
+	// accumulator is already past M, so neither the log line nor the gauge fires.
+	for i := 0; i < probeSuccessesBeforeHealthy; i++ {
+		require.True(t, p.probeOnce(context.Background()))
+	}
+
+	assert.True(t, b.IsHealthy(), "a passively-ejected backend must recover via active probes")
+	reinstated := recordsWithEvent(dump(), logger.EventHealthReinstated)
+	require.Len(t, reinstated, 1, "exactly one reinstatement line per genuine transition")
+	assert.Equal(t, logger.ReasonProbeRecovered, reinstated[0].str("reason"))
+	assert.Equal(t, b.Name, reinstated[0].str("backend"))
 }
 
 // TestProberConsecutiveCountersReset proves the counters are consecutive, not
