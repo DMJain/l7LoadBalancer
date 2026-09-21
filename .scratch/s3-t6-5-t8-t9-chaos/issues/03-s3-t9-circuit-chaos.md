@@ -14,7 +14,7 @@ its circuit" wording end-to-end. Reuses S3.T8's `test/chaos/` harness
 
 **Blocked by:** 02 (S3.T8 lands the shared chaos harness)
 
-**Status:** ready-for-agent
+**Status:** done
 
 ### T9 arc (iv) — happy path: trip → cooldown → half-open success → closed
 

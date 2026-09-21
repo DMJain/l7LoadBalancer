@@ -103,3 +103,13 @@ func assertTransitionLogged(t *testing.T, h *captureHandler, event, backend, rea
 	require.Equal(t, 1, h.transitionCount(event, backend, reason),
 		"exactly one %s/%s transition line for backend %s", event, reason, backend)
 }
+
+// assertTransitionNotLogged asserts no captured record matches the frozen
+// event/backend/reason triple. It is the negative twin of
+// assertTransitionLogged, used to pin transitions that must not occur (e.g. a
+// Selectable-won Half-Open promotion, ADR-0013 decision 13).
+func assertTransitionNotLogged(t *testing.T, h *captureHandler, event, backend, reason string) {
+	t.Helper()
+	require.Equal(t, 0, h.transitionCount(event, backend, reason),
+		"no %s/%s transition line for backend %s", event, reason, backend)
+}

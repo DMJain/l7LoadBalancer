@@ -48,6 +48,16 @@ type assembly struct {
 	reg       *backend.Registry
 }
 
+// backendConfigs maps flippable backends to their config entries, preserving
+// order. Shared by every chaos config builder.
+func backendConfigs(fbs []*flippableBackend) []config.BackendConfig {
+	backends := make([]config.BackendConfig, len(fbs))
+	for i, fb := range fbs {
+		backends[i] = config.BackendConfig{Name: fb.id, URL: fb.URL()}
+	}
+	return backends
+}
+
 // chaosConfig builds the round-robin config the chaos tests assemble: the
 // flippable backends' URLs, the fast-path timing, and no listen binding (the
 // tests serve the proxy handler directly).
@@ -55,10 +65,6 @@ func chaosConfig(fbs []*flippableBackend) *config.Config {
 	probeInterval := chaosProbeInterval
 	probeTimeout := chaosProbeTimeout
 	cooldown := chaosCooldown
-	backends := make([]config.BackendConfig, len(fbs))
-	for i, fb := range fbs {
-		backends[i] = config.BackendConfig{Name: fb.id, URL: fb.URL()}
-	}
 	return &config.Config{
 		Listen:    ":0",
 		Algorithm: config.AlgorithmRoundRobin,
@@ -67,7 +73,7 @@ func chaosConfig(fbs []*flippableBackend) *config.Config {
 			ProbeTimeout:  &probeTimeout,
 		},
 		Circuit:  config.CircuitConfig{Cooldown: &cooldown},
-		Backends: backends,
+		Backends: backendConfigs(fbs),
 	}
 }
 

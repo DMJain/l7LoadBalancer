@@ -21,6 +21,13 @@ import (
 // knob, ADR-0011 decision 10). See the ticket's recorded deviations.
 const circuitIsolationProbeInterval = time.Hour
 
+// circuitChaosCooldown is the T9 cooldown, deliberately longer than the shared
+// fast-path 200ms: arc (iv) sends a request immediately after tripping and must
+// land inside the cooldown even under -race scheduling. The extra headroom
+// costs the suite a few hundred milliseconds and removes the fixed-duration
+// race the ticket's "no flake under -race" story forbids.
+const circuitChaosCooldown = 500 * time.Millisecond
+
 // circuitChaosConfig builds a single-backend, round-robin config whose active
 // checker is neutralized for the test window. A single backend makes the
 // round-robin trial deterministic: the one post-cooldown request is the trial,
@@ -28,11 +35,7 @@ const circuitIsolationProbeInterval = time.Hour
 func circuitChaosConfig(fbs []*flippableBackend) *config.Config {
 	probeInterval := circuitIsolationProbeInterval
 	probeTimeout := time.Second
-	cooldown := chaosCooldown
-	backends := make([]config.BackendConfig, len(fbs))
-	for i, fb := range fbs {
-		backends[i] = config.BackendConfig{Name: fb.id, URL: fb.URL()}
-	}
+	cooldown := circuitChaosCooldown
 	return &config.Config{
 		Listen:    ":0",
 		Algorithm: config.AlgorithmRoundRobin,
@@ -41,14 +44,23 @@ func circuitChaosConfig(fbs []*flippableBackend) *config.Config {
 			ProbeTimeout:  &probeTimeout,
 		},
 		Circuit:  config.CircuitConfig{Cooldown: &cooldown},
-		Backends: backends,
+		Backends: backendConfigs(fbs),
 	}
 }
 
-// tripCircuit drives consecutive 5xx round trips through the proxy until the
-// single backend's circuit opens, and returns once the gauge reports open. The
-// consecutive-failure threshold is an unexported compile-time constant this
-// external package cannot name, so the test blasts a small burst and polls;
+// newCircuitAssembly assembles the T9 fixture: one flippable backend, healthy
+// and serving 200, behind a proxy whose active checker is neutralized. It
+// returns the assembly and its single backend.
+func newCircuitAssembly(t *testing.T) (*assembly, *flippableBackend) {
+	t.Helper()
+	fbs := newFlippableBackends(t, 1)
+	return assemble(t, circuitChaosConfig(fbs)), fbs[0]
+}
+
+// tripCircuit drives consecutive 5xx round trips through the proxy, one per
+// poll tick, until the single backend's circuit opens, and returns once the
+// gauge reports open. The consecutive-failure threshold is an unexported
+// compile-time constant this external package cannot name, so the test polls;
 // requests sent after the circuit opens are denied 503 and never reach the
 // breaker, so the opening line fires exactly once.
 func tripCircuit(t *testing.T, a *assembly, x *flippableBackend) {
@@ -66,9 +78,7 @@ func tripCircuit(t *testing.T, a *assembly, x *flippableBackend) {
 // cooldown is admitted as the half-open trial, whose single success closes the
 // circuit.
 func TestChaosCircuitTripCooldownAndTrialSuccess(t *testing.T) {
-	fbs := newFlippableBackends(t, 1)
-	a := assemble(t, circuitChaosConfig(fbs))
-	x := fbs[0]
+	a, x := newCircuitAssembly(t)
 
 	assertGauge(t, a.collector, "lb_circuit_state", circuitStateLabels(x.id, "closed"), 1)
 	require.Empty(t, a.logs.transitionRecords(), "no transition lines before any failure")
@@ -105,8 +115,7 @@ func TestChaosCircuitTripCooldownAndTrialSuccess(t *testing.T) {
 	// Pin the documented gap (ADR-0013 decision 13): the proxy path never
 	// reports the Open→Half-Open promotion, because Registry.Selectable's
 	// CircuitOpen read wins the promotion CAS before Allow runs.
-	require.Equal(t, 0, a.logs.transitionCount(logger.EventCircuitHalfOpened, x.id, logger.ReasonCooldownElapsed),
-		"the Selectable-won half-open promotion is never logged")
+	assertTransitionNotLogged(t, a.logs, logger.EventCircuitHalfOpened, x.id, logger.ReasonCooldownElapsed)
 }
 
 // TestChaosCircuitTrialFailureReopens is S3.T9 arc (v). The circuit trips as in
@@ -115,9 +124,7 @@ func TestChaosCircuitTripCooldownAndTrialSuccess(t *testing.T) {
 // the trial_failure line — the gauge is open before and after — which is exactly
 // why the log carries the distinguishing reason.
 func TestChaosCircuitTrialFailureReopens(t *testing.T) {
-	fbs := newFlippableBackends(t, 1)
-	a := assemble(t, circuitChaosConfig(fbs))
-	x := fbs[0]
+	a, x := newCircuitAssembly(t)
 
 	x.Serve500()
 	tripCircuit(t, a, x)
@@ -130,10 +137,8 @@ func TestChaosCircuitTrialFailureReopens(t *testing.T) {
 	}, eventuallyDeadline, eventuallyTick, "a failed half-open trial must reopen the circuit")
 
 	assertGauge(t, a.collector, "lb_circuit_state", circuitStateLabels(x.id, "open"), 1)
-	require.Equal(t, 0, a.logs.transitionCount(logger.EventCircuitClosed, x.id, logger.ReasonTrialSuccess),
-		"a failed trial must not close the circuit")
-	require.Equal(t, 0, a.logs.transitionCount(logger.EventCircuitHalfOpened, x.id, logger.ReasonCooldownElapsed),
-		"the Selectable-won half-open promotion is never logged")
+	assertTransitionNotLogged(t, a.logs, logger.EventCircuitClosed, x.id, logger.ReasonTrialSuccess)
+	assertTransitionNotLogged(t, a.logs, logger.EventCircuitHalfOpened, x.id, logger.ReasonCooldownElapsed)
 }
 
 // TestChaosCircuitNoPromotionWithoutTraffic is S3.T9 arc (vi). With zero traffic
@@ -142,9 +147,7 @@ func TestChaosCircuitTrialFailureReopens(t *testing.T) {
 // the one that drives the promotion and takes the trial, mechanically proving
 // the lazy, timer-free read-time check of ADR-0011 decision 6.
 func TestChaosCircuitNoPromotionWithoutTraffic(t *testing.T) {
-	fbs := newFlippableBackends(t, 1)
-	a := assemble(t, circuitChaosConfig(fbs))
-	x := fbs[0]
+	a, x := newCircuitAssembly(t)
 
 	x.Serve500()
 	tripCircuit(t, a, x)
@@ -157,7 +160,7 @@ func TestChaosCircuitNoPromotionWithoutTraffic(t *testing.T) {
 		open, ok := gaugeValueOK(a.collector, "lb_circuit_state", circuitStateLabels(x.id, "open"))
 		return !ok || open != 1 ||
 			a.logs.transitionCount(logger.EventCircuitHalfOpened, x.id, logger.ReasonCooldownElapsed) != 0
-	}, chaosCooldown+100*time.Millisecond, eventuallyTick,
+	}, circuitChaosCooldown+100*time.Millisecond, eventuallyTick,
 		"no Half-Open promotion may fire without a request driving it")
 
 	// The first request after the cooldown drives the promotion and the trial;
@@ -166,6 +169,5 @@ func TestChaosCircuitNoPromotionWithoutTraffic(t *testing.T) {
 	require.Equal(t, http.StatusInternalServerError, status, "the first post-cooldown request is the trial")
 	require.Equal(t, 1, a.logs.transitionCount(logger.EventCircuitOpened, x.id, logger.ReasonTrialFailure),
 		"the promotion and trial must have happened on that request")
-	require.Equal(t, 0, a.logs.transitionCount(logger.EventCircuitHalfOpened, x.id, logger.ReasonCooldownElapsed),
-		"the Selectable-won half-open promotion is never logged")
+	assertTransitionNotLogged(t, a.logs, logger.EventCircuitHalfOpened, x.id, logger.ReasonCooldownElapsed)
 }
