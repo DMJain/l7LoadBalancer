@@ -24,6 +24,14 @@ func openCircuit(t *testing.T, b *Backend, threshold int) {
 	require.True(t, b.CircuitOpen(circuitTestCooldown), "setup: circuit must be open")
 }
 
+// circuitAllow adapts Backend.CircuitAllow's (bool, CircuitTransition) pair to
+// the plain admission decision the S3.T3 tests assert on, leaving their
+// expectations unchanged while the transition value is covered separately.
+func circuitAllow(b *Backend, cooldown time.Duration) bool {
+	ok, _ := b.CircuitAllow(cooldown)
+	return ok
+}
+
 func TestBackendHealthyState(t *testing.T) {
 	b := &Backend{Name: "backend-a"}
 
@@ -127,13 +135,13 @@ func TestBackendCircuitOpensAfterConsecutiveFailures(t *testing.T) {
 		b.CircuitFailure(threshold)
 		assert.False(t, b.CircuitOpen(circuitTestCooldown),
 			"after %d consecutive failures the circuit must stay closed", i)
-		assert.True(t, b.CircuitAllow(circuitTestCooldown), "a closed circuit must admit")
+		assert.True(t, circuitAllow(b, circuitTestCooldown), "a closed circuit must admit")
 	}
 
 	b.CircuitFailure(threshold)
 	assert.True(t, b.CircuitOpen(circuitTestCooldown),
 		"the %dth consecutive failure must open the circuit", threshold)
-	assert.False(t, b.CircuitAllow(circuitTestCooldown), "an open circuit must deny")
+	assert.False(t, circuitAllow(b, circuitTestCooldown), "an open circuit must deny")
 }
 
 func TestBackendCircuitSuccessResetsConsecutiveFailures(t *testing.T) {
@@ -158,14 +166,14 @@ func TestBackendCircuitLazyHalfOpenAfterCooldown(t *testing.T) {
 	openCircuit(t, b, 3)
 
 	assert.True(t, b.CircuitOpen(cooldown), "immediately after opening the circuit is still open")
-	assert.False(t, b.CircuitAllow(cooldown), "an open circuit denies before cooldown elapses")
+	assert.False(t, circuitAllow(b, cooldown), "an open circuit denies before cooldown elapses")
 
 	time.Sleep(200 * time.Millisecond)
 
 	assert.False(t, b.CircuitOpen(cooldown),
 		"after the cooldown a read must lazily promote Open to Half-Open")
-	assert.True(t, b.CircuitAllow(cooldown), "a half-open circuit admits exactly one trial")
-	assert.False(t, b.CircuitAllow(cooldown),
+	assert.True(t, circuitAllow(b, cooldown), "a half-open circuit admits exactly one trial")
+	assert.False(t, circuitAllow(b, cooldown),
 		"once the trial slot is taken, a second admission must be denied")
 }
 
@@ -177,12 +185,12 @@ func TestBackendCircuitTrialResolves(t *testing.T) {
 		openCircuit(t, b, 3)
 		time.Sleep(200 * time.Millisecond)
 
-		require.True(t, b.CircuitAllow(cooldown), "half-open must admit the trial")
+		require.True(t, circuitAllow(b, cooldown), "half-open must admit the trial")
 		b.CircuitSuccess()
 
 		assert.False(t, b.CircuitOpen(cooldown), "a successful trial must close the circuit")
-		assert.True(t, b.CircuitAllow(cooldown), "a closed circuit admits every request")
-		assert.True(t, b.CircuitAllow(cooldown))
+		assert.True(t, circuitAllow(b, cooldown), "a closed circuit admits every request")
+		assert.True(t, circuitAllow(b, cooldown))
 	})
 
 	t.Run("a failed trial reopens the circuit", func(t *testing.T) {
@@ -190,11 +198,11 @@ func TestBackendCircuitTrialResolves(t *testing.T) {
 		openCircuit(t, b, 3)
 		time.Sleep(200 * time.Millisecond)
 
-		require.True(t, b.CircuitAllow(cooldown), "half-open must admit the trial")
+		require.True(t, circuitAllow(b, cooldown), "half-open must admit the trial")
 		b.CircuitFailure(3)
 
 		assert.True(t, b.CircuitOpen(cooldown), "a failed trial must reopen the circuit")
-		assert.False(t, b.CircuitAllow(cooldown))
+		assert.False(t, circuitAllow(b, cooldown))
 	})
 }
 
@@ -215,7 +223,7 @@ func TestBackendCircuitAdmitsExactlyOneConcurrentTrial(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-start
-			if b.CircuitAllow(cooldown) {
+			if circuitAllow(b, cooldown) {
 				admitted.Add(1)
 			}
 		}()
@@ -256,13 +264,123 @@ func TestBackendCircuitConcurrentTransitions(t *testing.T) {
 			case 1:
 				b.CircuitSuccess()
 			case 2:
-				_ = b.CircuitAllow(time.Millisecond)
+				_, _ = b.CircuitAllow(time.Millisecond)
 			default:
 				_ = b.CircuitOpen(time.Millisecond)
 			}
 		}(i)
 	}
 	wg.Wait()
+}
+
+// TestBackendCircuitFailureTransition pins which CircuitFailure call changed
+// the circuit: only the threshold-crossing Closed→Open call reports Opened,
+// and a failure observed while already Open changes nothing.
+func TestBackendCircuitFailureTransition(t *testing.T) {
+	const threshold = 3
+	b := &Backend{Name: "backend-a"}
+
+	assert.Equal(t, CircuitNoChange, b.CircuitFailure(threshold),
+		"the first failure only counts; it does not open the circuit")
+	assert.Equal(t, CircuitNoChange, b.CircuitFailure(threshold))
+	assert.Equal(t, CircuitOpened, b.CircuitFailure(threshold),
+		"the threshold-crossing failure is the one that opens the circuit")
+	assert.Equal(t, CircuitNoChange, b.CircuitFailure(threshold),
+		"a stale failure observed while already Open changes nothing")
+}
+
+// TestBackendCircuitSuccessTransition pins the success-side transition: a
+// success in Closed (or while Open, which is ignored) is not a transition; a
+// success in Half-Open closes the circuit and reports Closed.
+func TestBackendCircuitSuccessTransition(t *testing.T) {
+	const threshold = 3
+	b := &Backend{Name: "backend-a"}
+
+	assert.Equal(t, CircuitNoChange, b.CircuitSuccess(),
+		"a success on an already-closed circuit changes nothing")
+
+	for i := 0; i < threshold; i++ {
+		b.CircuitFailure(threshold)
+	}
+	assert.Equal(t, CircuitNoChange, b.CircuitSuccess(),
+		"a stale success observed while Open is ignored")
+}
+
+// TestBackendCircuitAllowTransition pins the admission-side transition: only
+// the call that promotes Open→Half-Open and takes the trial reports
+// HalfOpened; a plain Closed admission and a denied second admission report
+// NoChange.
+func TestBackendCircuitAllowTransition(t *testing.T) {
+	const (
+		cooldown = 50 * time.Millisecond
+		threshold = 3
+	)
+	b := &Backend{Name: "backend-a"}
+
+	admitted, transition := b.CircuitAllow(circuitTestCooldown)
+	assert.True(t, admitted, "a closed circuit admits")
+	assert.Equal(t, CircuitNoChange, transition,
+		"admitting from a Closed circuit is not a state transition")
+
+	for i := 0; i < threshold; i++ {
+		b.CircuitFailure(threshold)
+	}
+	time.Sleep(200 * time.Millisecond)
+
+	admitted, transition = b.CircuitAllow(cooldown)
+	assert.True(t, admitted, "a half-open circuit admits exactly one trial")
+	assert.Equal(t, CircuitHalfOpened, transition,
+		"the call that promotes Open→Half-Open and takes the trial reports HalfOpened")
+
+	admitted, transition = b.CircuitAllow(cooldown)
+	assert.False(t, admitted, "the trial slot is already taken")
+	assert.Equal(t, CircuitNoChange, transition,
+		"a denied admission changes nothing")
+}
+
+// TestBackendCircuitTrialResolutionTransitions pins the two ways a half-open
+// trial resolves: success reports Closed, failure reports Reopened (distinct
+// from Closed→Open's Opened, so the breaker can log trial_failure).
+func TestBackendCircuitTrialResolutionTransitions(t *testing.T) {
+	const cooldown = 50 * time.Millisecond
+
+	t.Run("a successful trial reports Closed", func(t *testing.T) {
+		b := &Backend{Name: "backend-a"}
+		openCircuit(t, b, 3)
+		time.Sleep(200 * time.Millisecond)
+
+		require.True(t, circuitAllow(b, cooldown), "half-open must admit the trial")
+		assert.Equal(t, CircuitClosed, b.CircuitSuccess())
+	})
+
+	t.Run("a failed trial reports Reopened", func(t *testing.T) {
+		b := &Backend{Name: "backend-a"}
+		openCircuit(t, b, 3)
+		time.Sleep(200 * time.Millisecond)
+
+		require.True(t, circuitAllow(b, cooldown), "half-open must admit the trial")
+		assert.Equal(t, CircuitReopened, b.CircuitFailure(3),
+			"a half-open trial failure reopens the circuit, distinct from Closed→Open")
+	})
+}
+
+// TestBackendCircuitAllowDoesNotReportScanWonPromotion pins the documented,
+// permanent logging gap: when a Registry.Selectable() scan (Backend.CircuitOpen)
+// promotes Open→Half-Open, the later trial admission did not itself perform the
+// promotion, so it reports NoChange — the promotion has no logger path.
+func TestBackendCircuitAllowDoesNotReportScanWonPromotion(t *testing.T) {
+	const cooldown = 50 * time.Millisecond
+	b := &Backend{Name: "backend-a"}
+	openCircuit(t, b, 3)
+	time.Sleep(200 * time.Millisecond)
+
+	require.False(t, b.CircuitOpen(cooldown),
+		"a selection scan reads the circuit and promotes Open→Half-Open first")
+
+	admitted, transition := b.CircuitAllow(cooldown)
+	assert.True(t, admitted, "the promoted circuit still admits the trial")
+	assert.Equal(t, CircuitNoChange, transition,
+		"this call did not promote, so there is no transition for it to report")
 }
 
 func TestBackendConcurrentHealthToggling(t *testing.T) {

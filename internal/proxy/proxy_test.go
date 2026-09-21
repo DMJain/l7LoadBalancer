@@ -632,7 +632,7 @@ func openCircuit(t *testing.T, reg *backend.Registry, br *circuit.Breaker, b *ba
 func TestProxyCircuitDenialReturns503WithoutIncActive(t *testing.T) {
 	reg := registryFrom(t, backendEntry{"backend-a", startBackend(t, "backend-a").URL})
 	b := reg.All()[0]
-	br := circuit.New(time.Minute)
+	br := circuit.New(time.Minute, slog.Default())
 	openCircuit(t, reg, br, b)
 
 	p := New(reg, fixedSelector{b: b})
@@ -651,7 +651,7 @@ func TestProxyLogsCircuitDenial(t *testing.T) {
 
 	reg := registryFrom(t, backendEntry{"backend-a", "http://127.0.0.1:1"})
 	b := reg.All()[0]
-	br := circuit.New(time.Minute)
+	br := circuit.New(time.Minute, slog.Default())
 	openCircuit(t, reg, br, b)
 
 	p := New(reg, fixedSelector{b: b})
@@ -685,7 +685,7 @@ func TestProxyCircuitOpensOnRepeated5xxAndStopsRouting(t *testing.T) {
 		backendEntry{"good", good.URL},
 		backendEntry{"bad", bad.URL},
 	)
-	br := circuit.New(time.Minute)
+	br := circuit.New(time.Minute, slog.Default())
 	reg.SetCircuitGate(br)
 
 	p := New(reg, balancer.NewRoundRobin(reg))

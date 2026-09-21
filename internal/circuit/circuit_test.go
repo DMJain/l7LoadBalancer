@@ -38,7 +38,7 @@ func failUntilOpen(t *testing.T, br *Breaker, b *backend.Backend) {
 
 func TestBreakerOpensAfterConsecutiveFailures(t *testing.T) {
 	reg := testRegistry(t)
-	br := New(time.Hour)
+	br := New(time.Hour, discardLogger())
 	b := reg.All()[0]
 
 	for i := 1; i < circuitFailuresBeforeOpen; i++ {
@@ -54,7 +54,7 @@ func TestBreakerOpensAfterConsecutiveFailures(t *testing.T) {
 
 func TestBreakerSuccessResetsConsecutiveFailures(t *testing.T) {
 	reg := testRegistry(t)
-	br := New(time.Hour)
+	br := New(time.Hour, discardLogger())
 	b := reg.All()[0]
 
 	br.ObserveRoundTrip(b, 0, false)
@@ -72,7 +72,7 @@ func TestBreakerSuccessResetsConsecutiveFailures(t *testing.T) {
 
 func TestBreakerIgnoresOutcomesWhileOpen(t *testing.T) {
 	reg := testRegistry(t)
-	br := New(time.Hour)
+	br := New(time.Hour, discardLogger())
 	b := reg.All()[0]
 	failUntilOpen(t, br, b)
 
@@ -92,7 +92,7 @@ func TestBreakerIgnoresOutcomesWhileOpen(t *testing.T) {
 func TestRegistrySelectableExcludesOpenIncludesHalfOpen(t *testing.T) {
 	const cooldown = 50 * time.Millisecond
 	reg := testRegistry(t)
-	br := New(cooldown)
+	br := New(cooldown, discardLogger())
 	reg.SetCircuitGate(br)
 
 	b := reg.All()[0]
@@ -113,7 +113,7 @@ func TestRegistrySelectableExcludesOpenIncludesHalfOpen(t *testing.T) {
 func TestBreakerHalfOpenAdmitsExactlyOneConcurrentTrial(t *testing.T) {
 	const cooldown = 50 * time.Millisecond
 	reg := testRegistry(t)
-	br := New(cooldown)
+	br := New(cooldown, discardLogger())
 	b := reg.All()[0]
 	for i := 0; i < circuitFailuresBeforeOpen; i++ {
 		br.ObserveRoundTrip(b, 0, false)
@@ -146,7 +146,7 @@ func TestBreakerTrialResolves(t *testing.T) {
 
 	t.Run("a successful trial closes the circuit", func(t *testing.T) {
 		reg := testRegistry(t)
-		br := New(cooldown)
+		br := New(cooldown, discardLogger())
 		b := reg.All()[0]
 		for i := 0; i < circuitFailuresBeforeOpen; i++ {
 			br.ObserveRoundTrip(b, 0, false)
@@ -162,7 +162,7 @@ func TestBreakerTrialResolves(t *testing.T) {
 
 	t.Run("a failed trial reopens the circuit", func(t *testing.T) {
 		reg := testRegistry(t)
-		br := New(cooldown)
+		br := New(cooldown, discardLogger())
 		b := reg.All()[0]
 		for i := 0; i < circuitFailuresBeforeOpen; i++ {
 			br.ObserveRoundTrip(b, 0, false)
@@ -179,7 +179,7 @@ func TestBreakerTrialResolves(t *testing.T) {
 
 func TestBreakerOpenReportsStateWithoutTakingTheTrial(t *testing.T) {
 	reg := testRegistry(t)
-	br := New(50 * time.Millisecond)
+	br := New(50*time.Millisecond, discardLogger())
 	b := reg.All()[0]
 
 	assert.False(t, br.Open(b), "a fresh backend's circuit starts closed")
