@@ -2,38 +2,34 @@ package health
 
 import (
 	"context"
+	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 
 	"github.com/DMJain/l7LoadBalancer/internal/logger"
 	"github.com/DMJain/l7LoadBalancer/internal/metrics"
 )
 
-// backendHealthyGauge reads lb_backend_healthy for one backend from the
-// collector's private registry. It returns -1 when the series is absent, a
-// sentinel no real gauge value can take, so a missing series fails an equality
-// assertion rather than reading as 0.
-func backendHealthyGauge(t *testing.T, c *metrics.Collector, backendName string) float64 {
+// wantHealthyGauge renders the expected lb_backend_healthy family for a single
+// backend, for comparison via testutil.GatherAndCompare.
+func wantHealthyGauge(backendName string, value int) string {
+	return fmt.Sprintf(`# HELP lb_backend_healthy Whether a backend is healthy (1) or unhealthy (0).
+# TYPE lb_backend_healthy gauge
+lb_backend_healthy{backend=%q} %d
+`, backendName, value)
+}
+
+// assertHealthyGauge asserts one backend's lb_backend_healthy series reads
+// value, read back from the collector's private registry.
+func assertHealthyGauge(t *testing.T, c *metrics.Collector, backendName string, value int) {
 	t.Helper()
-	mfs, err := c.Registry().Gather()
-	require.NoError(t, err)
-	for _, mf := range mfs {
-		if mf.GetName() != "lb_backend_healthy" {
-			continue
-		}
-		for _, m := range mf.GetMetric() {
-			for _, lp := range m.GetLabel() {
-				if lp.GetName() == "backend" && lp.GetValue() == backendName {
-					return m.GetGauge().GetValue()
-				}
-			}
-		}
-	}
-	return -1
+	require.NoError(t, testutil.GatherAndCompare(
+		c.Registry(), strings.NewReader(wantHealthyGauge(backendName, value)), "lb_backend_healthy"))
 }
 
 // TestCheckerSetsBackendHealthyGaugeOnEjection proves the active checker's
@@ -54,7 +50,7 @@ func TestCheckerSetsBackendHealthyGaugeOnEjection(t *testing.T) {
 		require.False(t, p.probeOnce(context.Background()))
 	}
 
-	assert.Equal(t, 0.0, backendHealthyGauge(t, c, b.Name))
+	assertHealthyGauge(t, c, b.Name, 0)
 	require.Len(t, recordsWithEvent(dump(), logger.EventHealthEjected), 1,
 		"the gauge shares the once-per-streak log signal")
 }
@@ -74,7 +70,7 @@ func TestCheckerSetsBackendHealthyGaugeOnReinstatement(t *testing.T) {
 		require.True(t, p.probeOnce(context.Background()))
 	}
 
-	assert.Equal(t, 1.0, backendHealthyGauge(t, c, b.Name))
+	assertHealthyGauge(t, c, b.Name, 1)
 }
 
 // TestOutlierDetectorSetsBackendHealthyGaugeOnEjection proves the passive
@@ -91,7 +87,7 @@ func TestOutlierDetectorSetsBackendHealthyGaugeOnEjection(t *testing.T) {
 		d.ObserveRoundTrip(b, time.Millisecond, false)
 	}
 
-	assert.Equal(t, 0.0, backendHealthyGauge(t, c, b.Name))
+	assertHealthyGauge(t, c, b.Name, 0)
 	require.Len(t, recordsWithEvent(dump(), logger.EventHealthEjected), 1,
 		"the gauge shares the once-per-episode log signal")
 }
