@@ -346,7 +346,7 @@ Scoped in `.scratch/s3-t1-t3-health-passive-circuit/` as one spec plus six imple
 
 ## Proposed tickets (awaiting owner approval)
 
-Not approved, not claimed, not implemented. Surfaced by the S3.T6.3 two-axis review; recorded per AGENTS.md Step 2.5. (S3.T6.5 was approved and promoted into the `.scratch/s3-t6-5-t8-t9-chaos/` bundle; its entry now lives in the Sprint 3 list above. S3.T8–T9 are scoped in that bundle's spec and await their own tickets.)
+Not approved, not claimed, not implemented. Surfaced by the S3.T6.3 two-axis review; recorded per AGENTS.md Step 2.5. (S3.T6.5 was approved and promoted into the `.scratch/s3-t6-5-t8-t9-chaos/` bundle; S3.T8 landed from that bundle and its entry lives in the Sprint 3 list above. S3.T9 remains scoped in that bundle's spec and awaits its own ticket.)
 
 _None currently outstanding._
 
