@@ -80,7 +80,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:              cfg.Listen,
-		Handler:           newHandler(reg, sel, breaker),
+		Handler:           newHandler(reg, sel, breaker, log),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
@@ -99,7 +99,7 @@ func main() {
 
 	// Active health probing shares sigCtx for shutdown (ADR-0011 decision 13):
 	// one goroutine per backend, no second shutdown primitive.
-	checker := health.New(reg, *cfg.Health.ProbeInterval, *cfg.Health.ProbeTimeout)
+	checker := health.New(reg, *cfg.Health.ProbeInterval, *cfg.Health.ProbeTimeout, log)
 	checker.Start(sigCtx)
 	log.Info("health checker started",
 		"probe_interval", *cfg.Health.ProbeInterval,
@@ -144,10 +144,10 @@ func main() {
 // slice without a lock. Latency recording, passive outlier detection, and the
 // circuit breaker are all wired (ADR-0011 decision 9). Observer registration is
 // deliberately separate from proxy.New, whose two-argument signature is frozen.
-func newHandler(reg *backend.Registry, sel balancer.Selector, breaker *circuit.Breaker) http.Handler {
+func newHandler(reg *backend.Registry, sel balancer.Selector, breaker *circuit.Breaker, log *slog.Logger) http.Handler {
 	p := proxy.New(reg, sel)
 	p.RegisterObserver(proxy.NewLatencyObserver())
-	p.RegisterObserver(health.NewOutlierDetector())
+	p.RegisterObserver(health.NewOutlierDetector(log))
 	p.RegisterObserver(breaker)
 	return p
 }

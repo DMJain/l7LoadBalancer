@@ -10,10 +10,12 @@ package health
 import (
 	"context"
 	"io"
+	"log/slog"
 	"net/http"
 	"time"
 
 	"github.com/DMJain/l7LoadBalancer/internal/backend"
+	"github.com/DMJain/l7LoadBalancer/internal/logger"
 )
 
 // Consecutive-outcome thresholds. Both are Go constants, not config fields,
@@ -48,10 +50,12 @@ type Checker struct {
 	reg      *backend.Registry
 	interval time.Duration
 	client   *http.Client
+	log      *slog.Logger
 }
 
 // New builds a Checker over reg that probes each backend every interval,
-// bounding a single probe by timeout.
+// bounding a single probe by timeout, and logs one structured line per genuine
+// health transition (ejection/reinstatement) through log.
 //
 // The probe client is dedicated to health checking. It carries its own
 // transport — cloned from http.DefaultTransport so it keeps sensible stdlib
@@ -64,11 +68,12 @@ type Checker struct {
 //
 // interval and timeout are expected positive; config.Validate guarantees it.
 // It returns a Checker that does nothing until Start is called.
-func New(reg *backend.Registry, interval, timeout time.Duration) *Checker {
+func New(reg *backend.Registry, interval, timeout time.Duration, log *slog.Logger) *Checker {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	return &Checker{
 		reg:      reg,
 		interval: interval,
+		log:      log,
 		client: &http.Client{
 			Transport: transport,
 			Timeout:   timeout,
@@ -94,10 +99,27 @@ func (c *Checker) Start(ctx context.Context) {
 // reaches M or N. It is intentionally separate from run's ticker loop so tests
 // can drive probe cycles directly, with no real ticker or context
 // cancellation. It returns whether this probe succeeded.
+//
+// Transition logging is edge-triggered twice over. The counter equalities
+// (failures == N, successes == M) fire only on the probe that crosses the
+// threshold, so a sustained streak logs once rather than on every subsequent
+// probe; the health-state guards (IsHealthy/!IsHealthy, read before the Mark*
+// call mutates it) make the line describe a *genuine* transition, so an
+// already-healthy backend's success streak — every backend's first M probes at
+// startup — cannot emit a spurious health_reinstated. The guard reads the
+// backend's existing atomic health rather than adding a prober field
+// (ADR-0013 decision 11).
 func (p *prober) probeOnce(ctx context.Context) bool {
 	if p.checker.probe(ctx, p.target) {
 		p.failures = 0
 		p.successes++
+		if p.successes == probeSuccessesBeforeHealthy && !p.target.IsHealthy() {
+			p.checker.log.Info("backend reinstated",
+				"backend", p.target.Name,
+				"event", logger.EventHealthReinstated,
+				"reason", logger.ReasonProbeRecovered,
+			)
+		}
 		if p.successes >= probeSuccessesBeforeHealthy {
 			p.target.MarkHealthy()
 		}
@@ -106,6 +128,13 @@ func (p *prober) probeOnce(ctx context.Context) bool {
 
 	p.successes = 0
 	p.failures++
+	if p.failures == probeFailuresBeforeUnhealthy && p.target.IsHealthy() {
+		p.checker.log.Warn("backend ejected",
+			"backend", p.target.Name,
+			"event", logger.EventHealthEjected,
+			"reason", logger.ReasonProbeFailures,
+		)
+	}
 	if p.failures >= probeFailuresBeforeUnhealthy {
 		p.target.MarkUnhealthy()
 	}
