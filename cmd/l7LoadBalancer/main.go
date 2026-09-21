@@ -61,7 +61,7 @@ func main() {
 	// a round-trip observer. Installing the gate before selection begins means
 	// every selector's Registry.Selectable snapshot already excludes open
 	// circuits (ADR-0011 decision 1, ADR-0012).
-	breaker := circuit.New(*cfg.Circuit.Cooldown)
+	breaker := circuit.New(*cfg.Circuit.Cooldown, log)
 	reg.SetCircuitGate(breaker)
 
 	sel, err := balancer.NewFromConfig(cfg, reg)

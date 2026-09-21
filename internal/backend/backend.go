@@ -39,6 +39,41 @@ type circuitSnapshot struct {
 	openedAt time.Time
 }
 
+// CircuitTransition reports what one call to a Backend circuit method did to
+// the circuit's state, so a caller (internal/circuit.Breaker) can log exactly
+// the genuine transitions and nothing else. Returning a plain value keeps
+// internal/backend free of any logging dependency (ADR-0013 decision 10).
+//
+// The values map 1:1 onto the circuit's loggable transitions:
+//
+//	CircuitOpened     Closed → Open (consecutive failures reached the threshold)
+//	CircuitReopened   Half-Open → Open (the trial request failed)
+//	CircuitClosed     Half-Open → Closed (the trial request succeeded)
+//	CircuitHalfOpened Open → Half-Open (the cooldown elapsed; a trial is admitted)
+//	CircuitNoChange   the call changed nothing
+//
+// CircuitOpened and CircuitReopened are distinct even though both leave the
+// circuit Open, because they carry different reasons (consecutive_failures vs
+// trial_failure) into the log line; a four-value enum reporting only the
+// resulting state could not tell them apart. See ADR-0013's 2026-09-21
+// amendment.
+type CircuitTransition int
+
+const (
+	// CircuitNoChange means the call did not change the circuit's state.
+	CircuitNoChange CircuitTransition = iota
+	// CircuitOpened means the consecutive-failure threshold was reached while
+	// Closed, opening the circuit.
+	CircuitOpened
+	// CircuitReopened means a Half-Open trial failed, reopening the circuit.
+	CircuitReopened
+	// CircuitClosed means a Half-Open trial succeeded, closing the circuit.
+	CircuitClosed
+	// CircuitHalfOpened means an Open circuit's cooldown elapsed and the call
+	// admitted the trial.
+	CircuitHalfOpened
+)
+
 // Backend represents one upstream server the load balancer can route to.
 //
 // Concurrency: healthy is written by the health checker (active probes and
@@ -152,12 +187,18 @@ func (b *Backend) EWMALatency() time.Duration {
 }
 
 // currentCircuit returns the backend's circuit state, lazily promoting an Open
-// circuit whose cooldown has elapsed to Half-Open on the spot. There is no
-// timer or goroutine: the promotion happens inside this read, so
+// circuit whose cooldown has elapsed to Half-Open on the spot. The second
+// return reports whether this call performed that promotion. There is no timer
+// or goroutine: the promotion happens inside this read, so
 // Registry.Selectable and the per-request admission gate observe the same
 // transition (ADR-0011 decision 6). cooldown is passed in by internal/circuit
 // so the tuning value stays in that package (ADR-0012 decision 4).
-func (b *Backend) currentCircuit(cooldown time.Duration) circuitSnapshot {
+//
+// The promotion flag exists so CircuitAllow can report CircuitHalfOpened when
+// it is the call that promoted. A promotion won by CircuitOpen (the
+// Registry.Selectable read path) is never logged — a documented, permanent gap
+// (ADR-0013 decision 13).
+func (b *Backend) currentCircuit(cooldown time.Duration) (circuitSnapshot, bool) {
 	for {
 		old := b.circuit.Load()
 		cur := circuitSnapshot{}
@@ -165,11 +206,11 @@ func (b *Backend) currentCircuit(cooldown time.Duration) circuitSnapshot {
 			cur = *old
 		}
 		if cur.state != circuitOpen || time.Since(cur.openedAt) < cooldown {
-			return cur
+			return cur, false
 		}
 		next := circuitSnapshot{state: circuitHalfOpen}
 		if b.circuit.CompareAndSwap(old, &next) {
-			return next
+			return next, true
 		}
 	}
 }
@@ -178,8 +219,14 @@ func (b *Backend) currentCircuit(cooldown time.Duration) circuitSnapshot {
 // lazy Open→Half-Open promotion described on currentCircuit. A half-open
 // circuit is not open, so a backend whose cooldown has elapsed is selectable
 // again (ADR-0011 decision 1).
+//
+// This is the Registry.Selectable read path. It returns no transition and has
+// no logger reachable from it, so an Open→Half-Open promotion it performs is
+// never logged (ADR-0013 decision 13) — see CircuitAllow, which reports
+// CircuitHalfOpened only when it is itself the call that promoted.
 func (b *Backend) CircuitOpen(cooldown time.Duration) bool {
-	return b.currentCircuit(cooldown).state == circuitOpen
+	cur, _ := b.currentCircuit(cooldown)
+	return cur.state == circuitOpen
 }
 
 // CircuitAllow reports whether b may dispatch a request now: Closed admits,
@@ -187,10 +234,17 @@ func (b *Backend) CircuitOpen(cooldown time.Duration) bool {
 // CompareAndSwap-ing the trial flag. Two requests landing in the same instant a
 // circuit becomes half-open therefore cannot both believe they are the trial
 // (ADR-0011 decision 6). cooldown is supplied by internal/circuit.
-func (b *Backend) CircuitAllow(cooldown time.Duration) bool {
+//
+// The transition is CircuitHalfOpened only when this call both promoted the
+// circuit from Open and won the trial slot, so exactly one caller logs the
+// promotion. If a Registry.Selectable scan already promoted the circuit, this
+// call merely takes the trial and reports CircuitNoChange: the promotion has no
+// logger path and is never logged (ADR-0013 decision 13). Every other outcome
+// reports CircuitNoChange.
+func (b *Backend) CircuitAllow(cooldown time.Duration) (bool, CircuitTransition) {
 	// Promote first so an open-but-cooled circuit is treated as half-open; the
 	// promotion rule then lives in exactly one place (currentCircuit).
-	b.currentCircuit(cooldown)
+	_, promoted := b.currentCircuit(cooldown)
 	for {
 		old := b.circuit.Load()
 		cur := circuitSnapshot{}
@@ -201,18 +255,21 @@ func (b *Backend) CircuitAllow(cooldown time.Duration) bool {
 		case circuitOpen:
 			// Still open: the cooldown has not elapsed (or the circuit was
 			// reopened concurrently).
-			return false
+			return false, CircuitNoChange
 		case circuitHalfOpen:
 			if cur.trial {
-				return false
+				return false, CircuitNoChange
 			}
 			next := cur
 			next.trial = true
 			if b.circuit.CompareAndSwap(old, &next) {
-				return true
+				if promoted {
+					return true, CircuitHalfOpened
+				}
+				return true, CircuitNoChange
 			}
 		default:
-			return true
+			return true, CircuitNoChange
 		}
 	}
 }
@@ -224,19 +281,26 @@ func (b *Backend) CircuitAllow(cooldown time.Duration) bool {
 // a request admitted before the circuit opened can still be in flight, and
 // letting its stale success close the circuit would bypass the cooldown.
 //
+// It returns CircuitClosed only for the Half-Open→Closed resolution; every
+// other case (already Closed, or ignored while Open) is CircuitNoChange.
+//
 // Known limitation (ADR-0012 consequences): a request admitted while Closed
 // whose response arrives while the circuit is Half-Open cannot be told apart
 // from the trial, because the frozen three-argument RoundTripObserver carries
 // no per-request trial marker; it may therefore resolve the trial early.
-func (b *Backend) CircuitSuccess() {
+func (b *Backend) CircuitSuccess() CircuitTransition {
 	for {
 		old := b.circuit.Load()
 		if old != nil && old.state == circuitOpen {
-			return
+			return CircuitNoChange
 		}
+		closedFromTrial := old != nil && old.state == circuitHalfOpen
 		next := circuitSnapshot{state: circuitClosed}
 		if b.circuit.CompareAndSwap(old, &next) {
-			return
+			if closedFromTrial {
+				return CircuitClosed
+			}
+			return CircuitNoChange
 		}
 	}
 }
@@ -248,7 +312,12 @@ func (b *Backend) CircuitSuccess() {
 // (ADR-0011 decisions 6 and 8). An outcome observed while Open is ignored, so a
 // stale in-flight failure cannot move the opened-at timestamp. The same
 // stale-while-Half-Open limitation noted on CircuitSuccess applies here.
-func (b *Backend) CircuitFailure(threshold int) {
+//
+// It returns CircuitOpened for the Closed→Open threshold crossing and
+// CircuitReopened for the Half-Open→Open trial failure — two transitions that
+// both leave the circuit Open but carry different log reasons — and
+// CircuitNoChange otherwise.
+func (b *Backend) CircuitFailure(threshold int) CircuitTransition {
 	for {
 		old := b.circuit.Load()
 		cur := circuitSnapshot{}
@@ -257,24 +326,24 @@ func (b *Backend) CircuitFailure(threshold int) {
 		}
 		switch cur.state {
 		case circuitOpen:
-			return
+			return CircuitNoChange
 		case circuitHalfOpen:
 			next := circuitSnapshot{state: circuitOpen, openedAt: time.Now()}
 			if b.circuit.CompareAndSwap(old, &next) {
-				return
+				return CircuitReopened
 			}
 		default:
 			if int(cur.failures)+1 >= threshold {
 				next := circuitSnapshot{state: circuitOpen, openedAt: time.Now()}
 				if b.circuit.CompareAndSwap(old, &next) {
-					return
+					return CircuitOpened
 				}
 				continue
 			}
 			next := cur
 			next.failures++
 			if b.circuit.CompareAndSwap(old, &next) {
-				return
+				return CircuitNoChange
 			}
 		}
 	}

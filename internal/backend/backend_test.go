@@ -312,7 +312,7 @@ func TestBackendCircuitSuccessTransition(t *testing.T) {
 // NoChange.
 func TestBackendCircuitAllowTransition(t *testing.T) {
 	const (
-		cooldown = 50 * time.Millisecond
+		cooldown  = 50 * time.Millisecond
 		threshold = 3
 	)
 	b := &Backend{Name: "backend-a"}

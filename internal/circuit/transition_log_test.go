@@ -116,7 +116,7 @@ func TestBreakerLogsCircuitHalfOpenedOnTrialAdmission(t *testing.T) {
 	assert.Equal(t, logger.ReasonCooldownElapsed, half[0].str("reason"))
 	assert.Equal(t, b.Name, half[0].str("backend"))
 
-	assert.True(t, br.Allow(b) == false, "the trial slot is now taken")
+	assert.False(t, br.Allow(b), "the trial slot is now taken")
 	assert.Len(t, recordsWithEvent(dump(), logger.EventCircuitHalfOpened), 1,
 		"a denied admission reaches no new transition")
 }
@@ -142,7 +142,10 @@ func TestBreakerLogsCircuitClosedOnTrialSuccess(t *testing.T) {
 	assert.Equal(t, "INFO", closed[0].str("level"))
 	assert.Equal(t, logger.ReasonTrialSuccess, closed[0].str("reason"))
 	assert.Equal(t, b.Name, closed[0].str("backend"))
-	assert.Empty(t, recordsWithEvent(dump(), logger.EventCircuitOpened))
+
+	opened := recordsWithEvent(dump(), logger.EventCircuitOpened)
+	require.Len(t, opened, 1, "only the initial opening is logged; a successful trial does not reopen")
+	assert.Equal(t, logger.ReasonConsecutiveFailures, opened[0].str("reason"))
 }
 
 // TestBreakerLogsCircuitReopenedOnTrialFailure proves a failed half-open trial

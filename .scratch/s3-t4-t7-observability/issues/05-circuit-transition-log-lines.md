@@ -9,45 +9,80 @@ involvement. Includes the accepted, documented limitation around
 
 **Blocked by:** 03 (needs the `event`/`reason` vocabulary)
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] New exported `backend.CircuitTransition` type (`NoChange`, `Opened`,
-      `Closed`, `HalfOpened`)
-- [ ] `Backend.CircuitFailure`, `Backend.CircuitSuccess`, and
+- [x] New exported `backend.CircuitTransition` type (`NoChange`, `Opened`,
+      `Closed`, `HalfOpened`, **plus `Reopened`** — see Comments)
+- [x] `Backend.CircuitFailure`, `Backend.CircuitSuccess`, and
       `Backend.CircuitAllow` each return a `CircuitTransition` value
       alongside their existing return value, reflecting whether *this*
       call was the one that changed state
-- [ ] `internal/backend` gains **no** new import — `CircuitTransition` is a
+- [x] `internal/backend` gains **no** new import — `CircuitTransition` is a
       plain type, not a logging call
-- [ ] `circuit.New` gains a `*slog.Logger` parameter; `circuit.Breaker`
+- [x] `circuit.New` gains a `*slog.Logger` parameter; `circuit.Breaker`
       logs at its own `ObserveRoundTrip`/`Allow` call sites whenever the
       returned `CircuitTransition` is not `NoChange`
-- [ ] The `backend.CircuitGate` and `proxy.RoundTripObserver` interface
+- [x] The `backend.CircuitGate` and `proxy.RoundTripObserver` interface
       signatures `Breaker` implements are unchanged — `Breaker`'s wrapper
       methods absorb the extra return value internally
-- [ ] Logs `event=circuit_opened, reason=consecutive_failures` at WARN;
+- [x] Logs `event=circuit_opened, reason=consecutive_failures` at WARN;
       `event=circuit_closed, reason=trial_success` at INFO;
       `event=circuit_half_opened, reason=cooldown_elapsed` at INFO;
       `event=circuit_opened, reason=trial_failure` at WARN — each
       including the `backend` field
-- [ ] Documented (code comment plus a note carried into this batch's
+- [x] Documented (code comment plus a note carried into this batch's
       eventual ADR): a Half-Open promotion whose CAS is won by a
       `Registry.Selectable()` scan is **never** logged — permanently, not
       delayed — because `Backend.CircuitOpen()` (the method `Selectable()`
       calls) has no path to a logger without a cross-package plumbing
       change out of scope here
-- [ ] Test: `CircuitTransition` return values match the actual state
+- [x] Test: `CircuitTransition` return values match the actual state
       change for each of `CircuitFailure`/`CircuitSuccess`/`CircuitAllow`,
       and are `NoChange` when the call doesn't change anything (e.g. a
       second consecutive failure while already `Open`)
-- [ ] Test: a run of failures while already `Open` produces **no**
+- [x] Test: a run of failures while already `Open` produces **no**
       additional `circuit_opened` log line (exactly once, not once per
       failure) — mirroring the outlier detector's exactly-once property
-- [ ] Test: the full closed→open→half-open→closed (and →open) cycle each
+- [x] Test: the full closed→open→half-open→closed (and →open) cycle each
       produces exactly one log line at the correct transition, with the
       correct `event`/`reason` pair
-- [ ] Test: every existing S3.T3 test continues to pass unchanged
-- [ ] `PROGRESS.md`: this ticket added and flipped to `[DONE]` on
+- [x] Test: every existing S3.T3 test continues to pass unchanged
+- [x] `PROGRESS.md`: this ticket added and flipped to `[DONE]` on
       completion
 
 ## Comments
+
+Completed 2026-09-21 by opencode (S3.T5.4).
+
+**`CircuitTransition` gained a fifth value, `Reopened`, approved by the owner
+during this session.** The ticket (and ADR-0013 decision 10) named four values
+(`NoChange`/`Opened`/`Closed`/`HalfOpened`), but the ticket's own log
+requirement has four distinct circuit reasons, two of which — `consecutive_
+failures` (`Closed→Open`) and `trial_failure` (`HalfOpen→Open`) — both leave
+the circuit `Open`. A four-value enum reporting only the resulting state cannot
+tell `circuit.Breaker` which reason to log. ADR-0013's phrase
+"`circuit_half_opened`-via-`trial_failure`" was the same inconsistency: a
+failed trial reopens (`circuit_opened`), it does not half-open. Resolved by
+adding `Reopened` for the trial-failure case so each logged reason maps 1:1 to
+a transition; ADR-0013 decision 10 was amended in place and a dated
+"Amendment" section records the change and the corrected decision 12 WARN
+list.
+
+`CircuitAllow` now returns `(bool, CircuitTransition)`; `CircuitFailure` and
+`CircuitSuccess` return `CircuitTransition`. `CircuitAllow` reports
+`CircuitHalfOpened` only when *that call* promoted `Open→Half-Open` and won the
+trial, so the scan-won-promotion gap is preserved exactly: a promotion won by
+`Registry.Selectable()`'s `CircuitOpen` read is never logged. `internal/backend`
+gained no import; `circuit.New(cooldown, log)` gained the logger; the
+`CircuitGate`/`RoundTripObserver` signatures are untouched (the wrapper methods
+absorb the transition).
+
+Tests: five new `Backend` tests for the transition returns (including the
+scan-won-promotion case) and five new `circuit` buffered-`slog.JSONHandler`
+tests asserting exactly-once logging per cycle, no re-log for a sustained
+failure run while `Open`, the WARN/INFO levels, the `event`/`reason` pairs, and
+the documented gap. Existing S3.T3 assertions are unchanged — only the
+`CircuitAllow` and `circuit.New` call sites were updated mechanically for the
+new arity (`circuitAllow` test helper; `discardLogger()`/`slog.Default()`).
+`go test -cover` → circuit 100.0%, backend 98.9%. No new ADR number: ADR-0013
+decision 10/12 covers this work and was amended in place.
