@@ -50,7 +50,7 @@ func (r *ejectRecorder) count(b *backend.Backend) int {
 }
 
 func newRecordingDetector() (*OutlierDetector, *ejectRecorder) {
-	d := NewOutlierDetector()
+	d := NewOutlierDetector(discardLogger())
 	rec := newEjectRecorder()
 	d.eject = rec.eject
 	return d, rec
@@ -175,7 +175,7 @@ func TestOutlierDetectorEjectsExactlyOncePerEpisode(t *testing.T) {
 // breach.
 func TestOutlierDetectorDefaultEjectsViaMarkUnhealthy(t *testing.T) {
 	b := outlierBackends(t, 1)[0]
-	d := NewOutlierDetector()
+	d := NewOutlierDetector(discardLogger())
 
 	require.True(t, b.IsHealthy())
 	for i := 0; i < outlierFailuresBeforeEject; i++ {
