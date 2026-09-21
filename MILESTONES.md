@@ -47,11 +47,18 @@ Strategic plan. Each sprint = one weekend of focused work. Tasks under each spri
 - Prometheus metrics: request counter (labels: backend, method, status_class), latency histogram per backend, circuit breaker state gauge, active connections gauge. Bucket choices deliberate, no defaults.
 - Structured logging via `log/slog`.
 - Grafana dashboard JSON committed in `deployments/`.
+- Multi-stage LB Dockerfile: build with `CGO_ENABLED=0` in a Debian Go image, ship the static binary in a distroless non-root runtime, expose all three listeners, and self-probe via a `probe` subcommand in a native `HEALTHCHECK`.
+- Repo-root `docker-compose.yml` composing the LB image with the three dummy backends, Prometheus, and Grafana — the whole demonstrable system from one `docker compose up`.
+- Orchestrator-probe-shaped health endpoint contract: `/livez`, `/readyz`, and `/startupz` on their own listener, returning structured JSON with liveness and readiness semantics and their own `lb_health_probe_total{endpoint, status}` counter.
+- Sprint 3 retrospective (`docs/sprint-3-retro.md`).
 
 **Exit criteria**:
 - `docker stop` a backend → ejected within health threshold, circuit trips, recovers on restart.
 - Grafana shows per-backend latency histograms and circuit state.
 - Chaos test: injecting 500s on one backend eventually opens its circuit.
+- The LB runs as a container via `docker compose up` at the repository root alongside backends, Prometheus, and Grafana.
+- The health endpoint returns structured JSON with liveness and readiness semantics.
+- Sprint 3 retrospective is written.
 
 ## Sprint 4 — Hard Subsystems
 
