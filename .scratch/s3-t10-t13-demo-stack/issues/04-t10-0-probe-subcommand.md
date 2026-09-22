@@ -31,29 +31,29 @@ distroless base that ships no shell and no `curl`.
 subcommand can point at a real ADR-0014 file, and so the target URL
 (`/livez`) exists in the running process the subcommand is testing.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] Tests written first: table-driven test that stubs `os.Args`, runs the
+- [x] Tests written first: table-driven test that stubs `os.Args`, runs the
       probe branch against a `httptest`-hosted server returning a matrix of
       status codes (200, 204, 301, 404, 500, 503), asserts the process exits
       0 on 2xx and non-zero otherwise. A second test asserts a connection
       refusal (`http://127.0.0.1:0`) exits non-zero within the small timeout.
-- [ ] The probe branch does not consume `flag`-parsed globals — invoking
+- [x] The probe branch does not consume `flag`-parsed globals — invoking
       `l7lb probe <url>` never triggers `-config`'s default file lookup or
       any other flag side-effect.
-- [ ] `main.version` and `main.commit` exist as package-level `var`s with
+- [x] `main.version` and `main.commit` exist as package-level `var`s with
       defaults `"dev"` and `"unknown"`, injectable via ldflags. A separate
       test invokes `go build -ldflags "-X main.version=x.y.z -X main.commit=abc123"`
       in a `t.TempDir()`, runs the produced binary with a stubbed no-op
       subcommand, and asserts the emitted JSON log line contains the
       injected values.
-- [ ] A `l7lb`-invocation without arguments still runs the load balancer
+- [x] A `l7lb`-invocation without arguments still runs the load balancer
       exactly as before this ticket — the probe branch does not intercept
       the empty-args case.
-- [ ] `make test`, `make test-race`, `go vet ./...`, `make fmt` pass.
-- [ ] Manual verification recorded in the session log: `go build -o /tmp/l7lb ./cmd/l7LoadBalancer`;
+- [x] `make test`, `make test-race`, `go vet ./...`, `make fmt` pass.
+- [x] Manual verification recorded in the session log: `go build -o /tmp/l7lb ./cmd/l7LoadBalancer`;
       then `make run` in one shell and `/tmp/l7lb probe http://127.0.0.1:8081/livez`
       in another; assert exit 0. Also `/tmp/l7lb probe http://127.0.0.1:1/nope`
       → non-zero exit.
-- [ ] `PROGRESS.md` entry for this ticket links back to spec decisions
+- [x] `PROGRESS.md` entry for this ticket links back to spec decisions
       D16 and D17 for provenance.
