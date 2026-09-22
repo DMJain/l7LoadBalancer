@@ -189,8 +189,8 @@ from the design-session record in the spec above.
     `backend`/`status_class`, latency p50/p99 by `backend`, circuit state (the
     label-enum read directly), backend healthy, and active connections.
     Prometheus scrapes the load balancer's `metrics.listen` port at a
-     reasonable default interval (15s). No alerting rules, no TLS/auth on the
-     endpoint (the latter out of scope per ADR-0005).
+    reasonable default interval (15s). No alerting rules, no TLS/auth on the
+    endpoint (the latter out of scope per ADR-0005).
 
 ### Repo-root demo stack (`docker-compose.yml`)
 
