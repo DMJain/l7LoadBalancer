@@ -1,0 +1,12 @@
+# Strict allowlist build context for the LB image (S3.T10, spec D21).
+#
+# The leading `*` excludes everything by default, so adding a new top-level
+# directory never accidentally slips secrets, docs, or gigabytes into the
+# build context. Only what `go build ./cmd/l7LoadBalancer` and the config COPY
+# actually need is re-included.
+*
+!go.mod
+!go.sum
+!cmd/
+!internal/
+!configs/

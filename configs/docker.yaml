@@ -1,0 +1,41 @@
+# Container default configuration for l7LoadBalancer (S3.T10).
+#
+# Baked into the image at /etc/l7lb/config.yaml and also bind-mounted over at
+# the same path by the repo-root docker-compose.yml (S3.T11), so editing this
+# file on disk plus `docker compose restart l7lb` takes effect without a
+# rebuild.
+#
+# Unlike configs/example.yaml (the host-process default), backend URLs use
+# compose service names: containers on the default bridge network resolve each
+# other by service name, and 127.0.0.1 inside the LB container is the LB
+# container itself.
+
+# Address the load balancer listens on.
+listen: ":8080"
+
+# Backend selection algorithm. One of:
+#   round_robin      - rotate across healthy backends (S1.T4)
+#   least_conn       - pick the healthy backend with fewest active connections (S1.T5)
+#   consistent_hash  - bounded-load consistent hashing (Sprint 2)
+#   p2c_ewma         - power-of-two-choices with EWMA latency (Sprint 2)
+# Defaults to round_robin if omitted.
+algorithm: "round_robin"
+
+# Prometheus exposition endpoint. Always-on; `listen` is optional and defaults
+# to ":9090".
+metrics:
+  listen: ":9090"
+
+# Health endpoint. Always-on; serves orchestrator probe paths on this address.
+# `listen` is optional and defaults to ":8081".
+health_endpoint:
+  listen: ":8081"
+
+# Upstream backends. At least one required. Names must be unique.
+backends:
+  - name: "backend-a"
+    url: "http://backend-a:8080"
+  - name: "backend-b"
+    url: "http://backend-b:8080"
+  - name: "backend-c"
+    url: "http://backend-c:8080"

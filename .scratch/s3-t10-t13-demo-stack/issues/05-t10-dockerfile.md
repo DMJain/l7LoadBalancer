@@ -75,39 +75,51 @@ comments.
 subcommand from ticket 04; the ldflags target the `main.version`/`main.commit`
 vars added there. Ticket 04 transitively depends on tickets 01–03.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] `docker build -t l7lb:test .` succeeds from a clean checkout in under
-      ~2 minutes on a typical developer laptop.
-- [ ] `docker run --rm l7lb:test` starts the load balancer with the baked
+- [x] `docker build -t l7lb:test .` succeeds from a clean checkout in under
+      ~2 minutes on a typical developer laptop. (Built with
+      `--build-arg VERSION=1.2.3 --build-arg COMMIT=deadbeef`; full build well
+      under 2 minutes, context ~4 KB.)
+- [x] `docker run --rm l7lb:test` starts the load balancer with the baked
       `configs/docker.yaml` and produces a JSON log line containing
       `"version": "<injected value>"` and `"commit": "<injected value>"`.
-- [ ] `docker inspect l7lb:test` shows the four OCI labels
+- [x] `docker inspect l7lb:test` shows the four OCI labels
       (`source`, `version`, `revision`, `licenses`) populated from the ARG
-      values passed at build time. If `source` is omitted per the `go.mod`-
-      resolution rule, the `# TODO` comment is present in the Dockerfile.
-- [ ] The runtime stage's base image is pinned by digest, with the human-
-      readable tag preserved as a same-line comment.
-- [ ] `docker run` produces a running container whose
+      values passed at build time. `source` resolved from `go.mod`'s module
+      path (`https://github.com/DMJain/l7LoadBalancer`), so no `# TODO` was
+      needed.
+- [x] The runtime stage's base image is pinned by digest, with the
+      human-readable tag preserved adjacent to it. **Deviation:** the tag is on
+      the line directly above the digest, not a same-line comment — BuildKit
+      rejects a trailing comment on `FROM` ("FROM requires either one or three
+      arguments"). Documented in `PROGRESS.md` and the session log.
+- [x] `docker run` produces a running container whose
       `docker inspect --format '{{.State.Health.Status}}' <id>` transitions
       from `starting` to `healthy` within the HEALTHCHECK's advertised
-      interval-plus-tolerance window. (Manual smoke, recorded in session
-      log; not a Go test.)
-- [ ] The final image's user is `nonroot` (uid 65532), verified via
+      interval-plus-tolerance window. (Manual smoke, recorded in session log;
+      observed `healthy` after ~12s.)
+- [x] The final image's user is `nonroot` (uid 65532), verified via
       `docker inspect --format '{{.Config.User}}' l7lb:test`.
-- [ ] The `.dockerignore` allowlist takes effect: `docker build`'s "Sending
+- [x] The `.dockerignore` allowlist takes effect: `docker build`'s "Sending
       build context" line reports a size measured in tens of KB, not the
-      whole repo tree. Verified by inspecting build output.
-- [ ] `configs/docker.yaml` parses cleanly through `config.Load` +
-      `config.Validate` in a small unit test; its backend URLs use compose
+      whole repo tree. Verified by inspecting build output (~4 KB).
+- [x] `configs/docker.yaml` parses cleanly through `config.Load` +
+      `config.Validate` in a small unit test (`TestDockerConfig` in
+      `internal/config/docker_config_test.go`); its backend URLs use compose
       service names, not `127.0.0.1`.
-- [ ] `docs/adr/0005-scope-of-production-grade.md` gains the one-paragraph
-      amendment; the amendment is in a dedicated `## Amendment (2026-…) —
+- [x] `docs/adr/0005-scope-of-production-grade.md` gains the one-paragraph
+      amendment; the amendment is in a dedicated `## Amendment (2026-09-22) —
       demo-stack containerization does not settle deployment target` section
       so future readers see the delta cleanly.
-- [ ] `configs/example.yaml` is not touched by this ticket.
-- [ ] `make test`, `make test-race`, `go vet ./...`, `make fmt` pass — the
+- [x] `configs/example.yaml` is not touched by this ticket.
+- [x] `make test`, `make test-race`, `go vet ./...`, `make fmt` pass — the
       only Go change in this ticket is the `configs/docker.yaml` parsing
       test.
-- [ ] `PROGRESS.md` entry for this ticket links back to spec decisions
+- [x] `PROGRESS.md` entry for this ticket links back to spec decisions
       D13–D15, D18–D25 for provenance.
+
+**Deviation from the Dockerfile-contents note (above):** the builder image is
+`golang:1.25.1-bookworm`, not `golang:1.23-bookworm`, because `go.mod` declares
+`go 1.25.1` and a 1.23 toolchain refuses the build. Debian-based as intended;
+the patch-exact tag avoids a mid-build toolchain download.

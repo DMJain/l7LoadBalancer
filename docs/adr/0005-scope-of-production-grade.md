@@ -86,3 +86,15 @@ It explicitly does **not** mean:
 - **Define it narrowly as "passes Sprint 1–5 exit criteria"**: rejected —
   too mechanical; it doesn't capture the "defensible decisions" framing
   that AGENTS.md is actually going for.
+
+## Amendment (2026-09-22) — demo-stack containerization does not settle deployment target
+
+The LB Dockerfile and root `docker-compose.yml` (S3.T10, S3.T11) are
+demo/dev-stack artifacts. They do not constitute a deployment-target
+decision; that remains deferred to Sprint 4/5 per the original ADR. The
+image exists so a reviewer can bring the whole demonstrable system up with
+one command and so the shipped binary can self-probe via a container-native
+`HEALTHCHECK` — not to commit this project to containers as its production
+packaging, registry strategy, or orchestration target. The reload,
+connection-lifecycle, and connection-pool work of Sprint 4 still informs
+that choice rather than the other way around.
