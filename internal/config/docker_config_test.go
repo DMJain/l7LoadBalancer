@@ -34,6 +34,6 @@ func TestDockerConfig(t *testing.T) {
 		assert.NotContainsf(t, b.URL, "127.0.0.1", "backend %q must not point at the container itself", b.Name)
 	}
 
-	assert.Equal(t, DefaultMetricsListen, *cfg.Metrics.Listen)
-	assert.Equal(t, DefaultHealthEndpointListen, *cfg.HealthEndpoint.Listen)
+	assert.Equal(t, ":9090", *cfg.Metrics.Listen)
+	assert.Equal(t, ":8081", *cfg.HealthEndpoint.Listen)
 }
