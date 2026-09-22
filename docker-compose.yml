@@ -1,0 +1,104 @@
+# Repo-root demo stack (S3.T11): the whole demonstrable system in one command.
+#
+# `docker compose up -d --build` at the repository root brings up the load
+# balancer image (S3.T10), the three dummy backends, Prometheus, and Grafana on
+# a single default bridge network. This file is ADDITIVE to the two composes
+# under deployments/docker/ — deployments/docker/docker-compose.yml (backends
+# only, for the host-process `make run` flow and the chaos scripts) and
+# deployments/docker/observability/docker-compose.yml (Prometheus + Grafana
+# against a host-process LB). Neither is modified or superseded here; see
+# ADR-0013 decision 18.
+#
+# Published host ports are the tight demo surface (ADR-0013 decision 18):
+#   :8080  LB client traffic
+#   :8081  LB health endpoint — curl /readyz during the demo
+#   :3000  Grafana
+# Prometheus, the LB metrics endpoint (:9090), and the backends stay internal
+# to the compose network.
+#
+# Start order is health-gated where it matters: backends start immediately, the
+# LB advertises healthy via its own `probe` HEALTHCHECK, Prometheus waits for
+# that (never scraping a not-yet-listening metrics port), and Grafana waits
+# only for Prometheus to start (it retries datasources gracefully).
+#
+# `restart: unless-stopped` on every service keeps the
+# `docker stop backend-a` / `docker start backend-a` circuit-recovery demo
+# working instead of the container vanishing.
+
+name: l7loadbalancer
+
+services:
+  backend-a:
+    build:
+      context: deployments/docker/dummy-backend
+    command: ["-name", "backend-a"]
+    restart: unless-stopped
+
+  backend-b:
+    build:
+      context: deployments/docker/dummy-backend
+    command: ["-name", "backend-b"]
+    restart: unless-stopped
+
+  backend-c:
+    build:
+      context: deployments/docker/dummy-backend
+    command: ["-name", "backend-c"]
+    restart: unless-stopped
+
+  l7lb:
+    build:
+      context: .
+    depends_on:
+      backend-a:
+        condition: service_started
+      backend-b:
+        condition: service_started
+      backend-c:
+        condition: service_started
+    ports:
+      - "8080:8080"
+      - "8081:8081"
+    # Explicit here as well as baked into the image (S3.T10): the LB self-probes
+    # its own /livez with the `probe` subcommand, so Prometheus' `service_healthy`
+    # gate below has something real to wait for.
+    healthcheck:
+      test: ["CMD", "/l7lb", "probe", "http://127.0.0.1:8081/livez"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+    volumes:
+      # Same file the image bakes, bind-mounted over it so config can be edited
+      # on disk and picked up with `docker compose restart l7lb` (no rebuild).
+      - ./configs/docker.yaml:/etc/l7lb/config.yaml:ro
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    depends_on:
+      l7lb:
+        condition: service_healthy
+    volumes:
+      # Container-network scrape config (`l7lb:9090`); the host-network sibling
+      # deployments/docker/observability/prometheus/prometheus.yml is untouched.
+      - ./deployments/docker/observability/prometheus/prometheus-stack.yml:/etc/prometheus/prometheus.yml:ro
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    depends_on:
+      prometheus:
+        condition: service_started
+    ports:
+      - "3000:3000"
+    environment:
+      # Local demo stack: anonymous read-only viewing, matching the
+      # observability compose. Not a production posture (ADR-0005 scope).
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: "Viewer"
+    volumes:
+      # Single source of truth for dashboard JSON and datasource provisioning,
+      # shared with deployments/docker/observability/ (ADR-0013 decision 18).
+      - ./deployments/docker/observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./deployments/docker/observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    restart: unless-stopped

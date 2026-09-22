@@ -189,8 +189,62 @@ from the design-session record in the spec above.
     `backend`/`status_class`, latency p50/p99 by `backend`, circuit state (the
     label-enum read directly), backend healthy, and active connections.
     Prometheus scrapes the load balancer's `metrics.listen` port at a
-    reasonable default interval (15s). No alerting rules, no TLS/auth on the
-    endpoint (the latter out of scope per ADR-0005).
+     reasonable default interval (15s). No alerting rules, no TLS/auth on the
+     endpoint (the latter out of scope per ADR-0005).
+
+### Repo-root demo stack (`docker-compose.yml`)
+
+18. **A single `docker-compose.yml` at the repository root composes the whole
+    demonstrable system — the LB image (S3.T10), the three dummy backends,
+    Prometheus, and Grafana — up under one command.** It is **additive**: the
+    two composes under `deployments/docker/` (`docker-compose.yml`, backends
+    only, for the host-process `make run` and chaos flow; `observability/`,
+    Prometheus + Grafana against a host-process LB) remain canonical and
+    untouched for the flows they were built for, and the chaos scripts
+    (`chaos/eviction.sh`, `chaos/circuit.sh`) keep targeting the host-process
+    LB. The root compose does not replace or supersede them.
+
+    - **Per-stack Prometheus config.** A new
+      `deployments/docker/observability/prometheus/prometheus-stack.yml` sits
+      alongside the existing `prometheus.yml`; the only delta is
+      `targets: ["l7lb:9090"]` (service name over the compose network) instead
+      of `targets: ["host.docker.internal:9090"]`. `prometheus.yml` is
+      otherwise unchanged (it gains only a header cross-reference comment), so
+      neither stack's scrape target is fragile to the other.
+
+    - **Single-source Grafana provisioning.** The root compose bind-mounts the
+      existing `deployments/docker/observability/grafana/provisioning` and
+      `.../grafana/dashboards` trees read-only, so the dashboard JSON and
+      datasource config have one source of truth across both stacks. The
+      Prometheus service is named exactly `prometheus`, so the provisioning
+      YAML's hardcoded `http://prometheus:9090` datasource resolves in either
+      stack.
+
+    - **Published host ports.** Exactly `8080` (LB client traffic), `8081` (LB
+      health endpoint — published so a reviewer can `curl /readyz` during the
+      demo), and `3000` (Grafana). Prometheus, the LB metrics endpoint
+      (`:9090`), and the backends stay internal to the compose network.
+
+    - **Mixed health-gating dependency chain.** Backends start immediately
+      (they stay on the `scratch` base and have no shell to run a probe with,
+      so adding one to `dummy-backend` was rejected as unrelated scope creep);
+      the LB waits only for the backends to start and advertises health via its
+      own `probe` `HEALTHCHECK`; Prometheus waits for the LB's
+      `condition: service_healthy` so it never scrapes a not-yet-listening
+      metrics port; Grafana waits only for Prometheus to start, since it
+      retries datasource connections gracefully. Every service carries
+      `restart: unless-stopped`, so the
+      `docker stop backend-a` / `docker start backend-a` circuit-recovery demo
+      works without the container vanishing.
+
+    - **Config bind-mount.** `./configs/docker.yaml` is bind-mounted over the
+      image's baked `/etc/l7lb/config.yaml`, a no-op override at first, so a
+      reviewer can edit config on disk and `docker compose restart l7lb`
+      without rebuilding.
+
+    No network split (single default bridge), no image push, no multi-arch
+    build, and no deployment-target commitment — all deferred/out of scope per
+    ADR-0005 (see also its 2026-09-22 amendment).
 
 ## Consequences
 

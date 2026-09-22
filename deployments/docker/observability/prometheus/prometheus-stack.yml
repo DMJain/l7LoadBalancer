@@ -1,0 +1,23 @@
+# Prometheus scrape config for the repo-root demo stack (S3.T11).
+#
+# Sibling of prometheus.yml in this directory. The only difference is the
+# scrape target: the load balancer runs as the `l7lb` compose service here
+# (docker-compose.yml at the repository root), so Prometheus reaches its
+# always-on metrics.listen endpoint by service name over the compose network
+# rather than through the host gateway. Neither file is valid for the other
+# stack as-is; keeping them separate keeps each stack's target non-fragile.
+#
+# prometheus.yml is the host-process sibling (used by
+# deployments/docker/observability/docker-compose.yml, where the LB runs via
+# `make run`). See ADR-0013 decision 18.
+#
+# 15s scrape interval matches the host-process config — a reasonable,
+# undocumented-as-a-decision default (ADR-0013 decision 17).
+
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: l7loadbalancer
+    static_configs:
+      - targets: ["l7lb:9090"]

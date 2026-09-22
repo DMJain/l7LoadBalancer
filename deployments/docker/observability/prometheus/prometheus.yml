@@ -9,6 +9,10 @@
 #
 # 15s scrape interval is a reasonable, undocumented-as-a-decision default
 # (ADR-0013 decision 17) — no trade-off worth recording.
+#
+# Sibling: prometheus-stack.yml is the container-network variant used by the
+# repo-root docker-compose.yml (S3.T11), scraping `l7lb:9090` by service name
+# instead of this file's host-gateway target. See ADR-0013 decision 18.
 
 global:
   scrape_interval: 15s

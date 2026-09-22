@@ -81,51 +81,51 @@ for. Any future unification is its own ticket.
 
 **Blocked by:** 05.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] `docker compose -f docker-compose.yml config` at the repo root parses
+- [x] `docker compose -f docker-compose.yml config` at the repo root parses
       cleanly, listing five services.
-- [ ] `docker compose up -d --build` from a clean state converges within
+- [x] `docker compose up -d --build` from a clean state converges within
       ~60 seconds: `docker compose ps` shows `l7lb` as `Up (healthy)` and
       the other four as `Up`.
-- [ ] `curl -sS http://localhost:8080/` returns 200 through the proxy
+- [x] `curl -sS http://localhost:8080/` returns 200 through the proxy
       (routes to a live backend).
-- [ ] `curl -sS http://localhost:8081/readyz` returns 200 with
+- [x] `curl -sS http://localhost:8081/readyz` returns 200 with
       `"selectable_backends": 3` in the JSON body.
-- [ ] `curl -sS http://localhost:8081/livez` returns 200 with
+- [x] `curl -sS http://localhost:8081/livez` returns 200 with
       `{"status":"alive"}`.
-- [ ] `curl -sS http://localhost:8081/startupz` returns 200 with
+- [x] `curl -sS http://localhost:8081/startupz` returns 200 with
       `"initial_probe_complete": true` in the body once the LB has been
       up for one probe interval.
-- [ ] Grafana at `http://localhost:3000` renders the provisioned
+- [x] Grafana at `http://localhost:3000` renders the provisioned
       `l7LoadBalancer` dashboard with anonymous Viewer access; the three
       gauge panels (Circuit state, Backend healthy, Active connections) are
       populated from the first scrape thanks to `main.go`'s startup seeding
       (ADR-0013 decision 9); the two traffic-derived panels fill after
       `curl` traffic.
-- [ ] Prometheus is *not* accessible from the host directly (unpublished
+- [x] Prometheus is *not* accessible from the host directly (unpublished
       port); it is reachable from Grafana as `http://prometheus:9090` via
       the internal network.
-- [ ] `docker stop backend-a`; wait; `curl http://localhost:8081/readyz`
+- [x] `docker stop backend-a`; wait; `curl http://localhost:8081/readyz`
       still returns 200 (two backends still selectable);
       `curl http://localhost:8080/` still succeeds; Grafana's `Backend
       healthy` panel eventually shows `backend-a` unhealthy.
-- [ ] `docker stop backend-a backend-b backend-c`; wait one health-check
+- [x] `docker stop backend-a backend-b backend-c`; wait one health-check
       interval; `curl -sS -o /dev/null -w "%{http_code}" http://localhost:8081/readyz`
       returns `503`; body shows `"selectable_backends": 0`.
-- [ ] `docker start backend-a`; `/readyz` transitions back to 200 within
+- [x] `docker start backend-a`; `/readyz` transitions back to 200 within
       the health-checker's recovery threshold.
-- [ ] `deployments/docker/observability/prometheus/prometheus-stack.yml`
+- [x] `deployments/docker/observability/prometheus/prometheus-stack.yml`
       exists; its `targets` names `l7lb:9090`; the existing `prometheus.yml`
       is unmodified except for the added header cross-reference comment.
-- [ ] `deployments/docker/docker-compose.yml` and
+- [x] `deployments/docker/docker-compose.yml` and
       `deployments/docker/observability/docker-compose.yml` are both
       untouched. `deployments/docker/chaos/eviction.sh` and `circuit.sh`
       are untouched.
-- [ ] `docs/adr/0013-observability-metrics-logging-and-integration.md`
+- [x] `docs/adr/0013-observability-metrics-logging-and-integration.md`
       gains decision 18 as documented above; existing decisions 1–17 are
       unchanged.
-- [ ] Manual smoke recorded in the session log covering the full up →
+- [x] Manual smoke recorded in the session log covering the full up →
       dashboard → chaos → recovery → down flow.
-- [ ] `PROGRESS.md` entry for this ticket links back to spec decisions
+- [x] `PROGRESS.md` entry for this ticket links back to spec decisions
       D26–D38 for provenance.
