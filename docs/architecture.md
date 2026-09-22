@@ -1,12 +1,10 @@
 # Architecture
 
 _This document describes the as-built architecture, sprint by sprint. See
-`MILESTONES.md` for the plan, `PROGRESS.md` for live task state, and
+`MILESTONES.md` for the plan, `PROGRESS.md` for live task state,
+`docs/sprint-3-retro.md` for the Sprint 3 close-out, and
 `docs/design/sprint-1-contracts.md` for the frozen Sprint 1 contracts.
-Sprints 1 and 2 are complete, and Sprint 3 is in progress (active health
-checks built; passive outlier detection, circuit breaking, and metrics
-pending). This document is the Sprint 1–2 reference plus the as-built
-Sprint 3 pieces as they land._
+Sprints 1–3 are complete. This document is the Sprint 1–3 reference._
 
 ## Overview
 
@@ -156,15 +154,15 @@ As-built package status:
 
 | Package | Status | Responsibility |
 |---|---|---|
-| `cmd/l7LoadBalancer` | Sprint 1, extended Sprint 3 | Thin wiring layer: `config.Load`/`Validate` → `backend.NewRegistry` → `balancer.NewFromConfig` → `proxy.New` → `health.New`/`Start` → `http.Server`, plus a second `http.Server` exposing `/metrics` from `metrics.NewCollector()`'s private registry on `metrics.listen` (ADR-0013 decision 8); SIGINT/SIGTERM graceful shutdown (the health-checker goroutines and both servers share its `signal.NotifyContext`). Fatal + exit 1 on any startup failure (no silent fallback). |
-| `internal/proxy` | Sprint 1 | Wraps `httputil.ReverseProxy`; owns the request lifecycle, 503/502 short-circuits, active-connection accounting, and the per-request log line. |
+| `cmd/l7LoadBalancer` | Sprint 1, extended Sprint 3 | Thin wiring layer: `config.Load`/`Validate` → `backend.NewRegistry` → `balancer.NewFromConfig` → `proxy.New` → observers (`health.NewOutlierDetector`, `circuit.New`) → `health.New`/`Start` → three `http.Server`s — client traffic, `/metrics` (`metrics.listen`, ADR-0013 decision 8), and the health endpoint (`health_endpoint.listen`, ADR-0014 decision 1). Seeds every backend's gauges after `NewRegistry`, registers the `probe` subcommand and the `version`/`commit` startup line, and shares one `signal.NotifyContext` across the checker goroutines and all three servers for SIGINT/SIGTERM graceful shutdown. Fatal + exit 1 on any startup failure (no silent fallback). |
+| `internal/proxy` | Sprint 1 | Wraps `httputil.ReverseProxy`; owns the request lifecycle, 503/502 short-circuits, active-connection accounting, the per-request log line, and the optional whole-request metrics push. |
 | `internal/balancer` | Sprint 1–2 | `Selector` interface + `ErrNoHealthyBackends` (the only exported sentinel), `RoundRobin`, `LeastConnections`, `ConsistentHashBoundedLoads` over an unexported ring, and `PowerOfTwoChoicesEWMA` over per-backend EWMA latency, plus the `NewFromConfig` factory. |
 | `internal/backend` | Sprint 1–3 | `Backend` (identity + unexported `atomic` health/active/EWMA-latency state and a CAS-guarded circuit snapshot, methods-only access) and `Registry` (ordered, immutable until Sprint 4's hot-reload; `Selectable()` plus the `CircuitGate`/`Allow` admission seam). |
-| `internal/config` | Sprint 1, extended Sprint 3 | Strict YAML loading (`KnownFields(true)`) and fail-fast validation; algorithm identifier constants. Sprint 3 adds optional global `health:` (probe interval/timeout) and `circuit:` (cooldown) duration sections, defaulted in `Validate` and rejected when explicitly non-positive (ADR-0011 decision 10), plus an always-on `metrics:` section whose `listen` (default `:9090`) is validated as host:port (ADR-0013 decision 8). Immutable after init in Sprint 1. |
-| `internal/logger` | Sprint 1 | `log/slog` JSON setup and the frozen canonical field vocabulary. Leaf. |
-| `internal/metrics` | Sprint 3 | The `Collector` over a private `prometheus.Registry`: request counter and whole-request latency histogram (`backend`/`method`/`status_class`), backend-healthy and active-connections gauges, and a `lb_circuit_state` label-enum gauge whose setter unconditionally zeroes the non-target states. Push-only and leaf — it imports no other internal package (ADR-0013). |
-| `internal/health` | Sprint 3 | Active health checking: `Checker` owns one probe goroutine per backend (started by `main` on the shared `sigCtx`), probes each backend's configured URL with a dedicated `http.Client` (its own timeout, no redirect following), and drives `Backend.MarkHealthy`/`MarkUnhealthy` through an N-consecutive-failure / M-consecutive-success state machine whose thresholds are Go constants (ADR-0011 decisions 2, 10, 11, 13). Passive outlier detection: `OutlierDetector` implements `proxy.RoundTripObserver` (structurally, without importing `proxy`), keeps a count-based sliding window of recent outcomes per backend, and ejects via `MarkUnhealthy` after N failures within the window — recovering only when a later active probe is observed to have reinstated the backend (ADR-0011 decisions 3, 8, 9, 12). |
-| `internal/circuit` | Sprint 3 | `Breaker`: the circuit policy (consecutive-failure-to-open constant, config cooldown). Drives `Backend`'s circuit-state methods, implements `backend.CircuitGate` and `proxy.RoundTripObserver` structurally, and is installed by `main` as both the registry gate and an observer. |
+| `internal/config` | Sprint 1, extended Sprint 3 | Strict YAML loading (`KnownFields(true)`) and fail-fast validation; algorithm identifier constants. Sprint 3 adds optional global `health:` (probe interval/timeout) and `circuit:` (cooldown) duration sections, defaulted in `Validate` and rejected when explicitly non-positive (ADR-0011 decision 10), plus always-on `metrics:` (default `:9090`, ADR-0013 decision 8) and `health_endpoint:` (default `:8081`, ADR-0014 decision 9) listen blocks. Immutable after init in Sprint 1. |
+| `internal/logger` | Sprint 1, extended Sprint 3 | `log/slog` JSON setup and the frozen canonical field vocabulary (the six request-scoped fields plus the transition-scoped `event`/`reason` closed vocabularies, ADR-0013 decision 12). Leaf. |
+| `internal/metrics` | Sprint 3 | The `Collector` over a private `prometheus.Registry`: request counter and whole-request latency histogram (`backend`/`method`/`status_class`), backend-healthy and active-connections gauges, a `lb_circuit_state` label-enum gauge whose setter unconditionally zeroes the non-target states, and the `lb_health_probe_total{endpoint,status}` probe counter. Push-only and leaf — it imports no other internal package (ADR-0013, ADR-0014). |
+| `internal/health` | Sprint 3 | Active health checking: `Checker` owns one probe goroutine per backend (started by `main` on the shared `sigCtx`), probes each backend's configured URL with a dedicated `http.Client` (its own timeout, no redirect following), drives `Backend.MarkHealthy`/`MarkUnhealthy` through an N-consecutive-failure / M-consecutive-success state machine whose thresholds are Go constants, and exposes `ProbeRoundComplete()` (ADR-0011 decisions 2, 10, 11, 13; ADR-0014 decision 10). Passive outlier detection: `OutlierDetector` implements `proxy.RoundTripObserver` (structurally, without importing `proxy`), keeps a count-based sliding window of recent outcomes per backend, and ejects via `MarkUnhealthy` after N failures within the window — recovering only when a later active probe is observed to have reinstated the backend (ADR-0011 decisions 3, 8, 9, 12). Health endpoint: `NewHandler` serves `/livez`, `/readyz`, `/startupz` (ADR-0014). |
+| `internal/circuit` | Sprint 3 | `Breaker`: the circuit policy (consecutive-failure-to-open constant, config cooldown). Drives `Backend`'s circuit-state methods, implements `backend.CircuitGate` and `proxy.RoundTripObserver` structurally, and is installed by `main` as both the registry gate and an observer. Logs and writes `lb_circuit_state` from the shared `CircuitTransition` (ADR-0013 decision 10). |
 
 **Dependency rule**: `internal/backend` does **not** import `internal/balancer`.
 A `Backend` has no notion of how it is selected; adding that import is a sign
@@ -237,15 +235,60 @@ are Go constants, not config. `internal/health` depends only on
 [ADR-0011](adr/0011-health-passive-outlier-and-circuit-breaker-composition.md)
 decisions 2, 10, 11, and 13.
 
+The reinstatement gate compares `successes >= probeSuccessesBeforeHealthy`
+(not `==`), because passive outlier detection can eject a backend whose
+accumulator has already crossed M — an `==` gate then never fires again and
+the gauge stays pinned at `0` while `IsHealthy()` reads `true`. This was a
+shipped-code drift fixed in S3.T6.5 and recorded as the
+[ADR-0011 2026-09-22 amendment](adr/0011-health-passive-outlier-and-circuit-breaker-composition.md#amendment-2026-09-22-reinstatement-gate-uses--not-).
+
+The checker's transitions are observable: an equality-gated
+(`counter == threshold`) genuine-state guard emits exactly one
+`event=health_ejected`/`reason=probe_failures` (WARN) or
+`event=health_reinstated`/`reason=probe_recovered` (INFO) `slog` line and
+writes `lb_backend_healthy` to `0`/`1` from the same signal, so the log line
+and the gauge cannot disagree (ADR-0013 decisions 11 and 15). `Checker`
+also exposes `ProbeRoundComplete() bool` — a one-shot `atomic.Bool` latch
+flipped after the first sweep in which every configured backend has answered
+at least one probe — which the health endpoint's startup/readiness gates
+consume (ADR-0014 decision 10).
+
+### Passive outlier detection (Sprint 3)
+
+`health.NewOutlierDetector(log, collector)` builds an `OutlierDetector` that
+implements `proxy.RoundTripObserver` structurally — `internal/health` never
+imports `internal/proxy`; the interface is satisfied by method shape. It
+keeps a count-based (not time-based) sliding window of the last
+`outlierWindowSize` (10) round-trip outcomes per backend under a single
+mutex, and ejects via `MarkUnhealthy()` when `outlierFailuresBeforeEject`
+(5) failures fall within the window — both unexported Go constants. The
+failure signal is the union of 5xx responses and `errorHandler` transport
+failures, and the two mix freely in one window. Ejection fires exactly once
+per episode (an `ejected` guard), emitting one
+`event=health_ejected`/`reason=outlier_window` (WARN) line and one
+`lb_backend_healthy=0` write from that same guard.
+
+Recovery has no timer of its own: the detector never calls `MarkHealthy`.
+An ejected backend observed healthy again (by the next successful active
+probe) resets the episode, keeping the state machine single-path — one way
+in via either subsystem, one way out via active checks only. `main`
+registers the detector as a second `RoundTripObserver` alongside
+`NewLatencyObserver` and the circuit breaker. See
+[ADR-0011](adr/0011-health-passive-outlier-and-circuit-breaker-composition.md)
+decisions 3, 8, 9, and 12, and
+[ADR-0013](adr/0013-observability-metrics-logging-and-integration.md)
+decision 15.
+
 ### Circuit breaker (Sprint 3)
 
-`circuit.New(cooldown)` builds a `Breaker` holding only policy: the unexported
-`circuitFailuresBeforeOpen` (3) constant and the configured cooldown. Circuit
-*state* — the closed/open/half-open enum, consecutive-failure count, half-open
-trial flag, and opened-at timestamp — lives on `Backend` as one immutable
-`atomic.Pointer[circuitSnapshot]` replaced by `CompareAndSwap`, so every
-compound transition is a single atomic step and `internal/backend` needs no
-import from `internal/circuit` (ADR-0012 decisions 3–4).
+`circuit.New(cooldown, log, collector)` builds a `Breaker` holding only
+policy: the unexported `circuitFailuresBeforeOpen` (3) constant and the
+configured cooldown. Circuit *state* — the closed/open/half-open enum,
+consecutive-failure count, half-open trial flag, and opened-at timestamp —
+lives on `Backend` as one immutable `atomic.Pointer[circuitSnapshot]`
+replaced by `CompareAndSwap`, so every compound transition is a single
+atomic step and `internal/backend` needs no import from `internal/circuit`
+(ADR-0012 decisions 3–4).
 
 `Breaker` plays two roles, both wired in `main`: it is the registry's
 `CircuitGate` (ADR-0012 decision 1) and a registered `RoundTripObserver`.
@@ -259,6 +302,100 @@ in-flight response cannot bypass the cooldown; a single half-open success
 closes the circuit and a single failure reopens it, with no inner threshold.
 The consecutive-failure counter is reset by any success, distinct from passive
 detection's sliding window (ADR-0011 decision 8). See ADR-0011 and ADR-0012.
+
+Every genuine transition is reported once by `Backend.CircuitFailure`,
+`CircuitSuccess`, and `CircuitAllow`, which return a
+`backend.CircuitTransition` (`NoChange`/`Opened`/`Reopened`/`Closed`/
+`HalfOpened`). `circuit.Breaker` logs and writes `lb_circuit_state` from
+that same value at its `ObserveRoundTrip`/`Allow` call sites — a sustained
+failure run while already `Open` produces `NoChange` and neither logs nor
+re-writes — so the line and the gauge cannot disagree
+([ADR-0013](adr/0013-observability-metrics-logging-and-integration.md)
+decisions 10, 15, and its 2026-09-21 amendment). A promotion whose CAS is
+won by the `Registry.Selectable()` read path is never logged and leaves the
+gauge at `open`: the accepted, permanent gap ADR-0013 decision 13 records.
+
+### Observability pipeline (Sprint 3)
+
+`internal/metrics` is a leaf-only, push-only `Collector` over its own private
+`prometheus.NewRegistry()` (never the default registerer), so tests build
+independent instances and run `t.Parallel()`. It holds the whole-request
+counter and histogram (`backend`/`method`/`status_class`, never a raw
+`status_code`; provisional `doc.go` buckets), the `lb_backend_healthy` and
+`lb_active_connections` gauges, the label-enum `lb_circuit_state` gauge whose
+setter unconditionally zeroes the two non-target states, and the
+health-endpoint counter `lb_health_probe_total{endpoint,status}`. `main`
+serves `/metrics` via `promhttp.HandlerFor` on a dedicated `http.Server` on
+`metrics.listen` (default `:9090`, always-on), sharing `sigCtx`.
+
+Traffic and state push into the collector rather than it reading anything:
+the whole-request hook in `proxy.ServeHTTP` counts and times every exit path
+(no-healthy 503 with `backend=""`, circuit-denied 503 and `ErrorHandler` 502
+with the real backend label); the transition subsystems write their gauges
+at the exact edge-triggered sites their log lines fire from; and `main` seeds
+every backend's series (`healthy=1`, `circuit_state=closed`,
+`active_connections=0`) immediately after `backend.NewRegistry` succeeds, so
+a never-trafficked system renders a complete dashboard on first scrape. The
+two new canonical log fields, `event` and `reason`, are closed snake_case
+Go-constant vocabularies in `internal/logger`. `internal/balancer` is
+untouched and imports nothing new. See
+[ADR-0013](adr/0013-observability-metrics-logging-and-integration.md)
+decisions 1–16, and
+[`docs/sprint-3-retro.md`](sprint-3-retro.md).
+
+### Health endpoint (Sprint 3)
+
+A third always-on `http.Server` on `health_endpoint.listen` (default
+`:8081`) serves orchestrator-native probes, mirroring `metricsSrv`: started
+in `main` on the shared `sigCtx` and joined to the graceful-shutdown
+sequence. `health.NewHandler(checker, reg, configLoaded, collector)` returns
+a `ServeMux` with three paths, all structured JSON and all recorded via
+`lb_health_probe_total`:
+
+- `/livez` — unconditional 200 `{"status":"alive"}`; a deadlock shows up as
+  a probe timeout, not a special response.
+- `/readyz` — 200 only while `config_loaded` ∧
+  `Checker.ProbeRoundComplete()` ∧ live `Registry.Selectable() >= 1`; else
+  503 with the failing check visible. Served live per request, so a
+  full-fleet eviction reports not-ready and an upstream LB or K8s Service
+  can route around the instance.
+- `/startupz` — 503 until the first two hold, then permanently 200
+  (one-way; it does not gate on the selectable set).
+
+Because the endpoint is a distinct listener, probes never enter the proxy
+path and never touch `lb_requests_total` or the latency histogram. The
+orchestrator mapping: Docker `HEALTHCHECK` → `/livez`, Fly.io HTTP check →
+`/readyz`, Kubernetes → all three. See
+[ADR-0014](adr/0014-health-endpoint-contract-and-probe-semantics.md).
+
+### Container demo stack (Sprint 3)
+
+The demo stack is additive and does not settle the deployment target
+([ADR-0005](adr/0005-scope-of-production-grade.md) and its 2026-09-22
+amendment).
+
+- **`Dockerfile`** — multi-stage: `go build` with `CGO_ENABLED=0` in a
+  Debian Go image, the static binary copied into a digest-pinned
+  `gcr.io/distroless/static-debian12:nonroot`. It exposes `8080`, `8081`,
+  and `9090`, carries OCI labels, bakes `configs/docker.yaml` to
+  `/etc/l7lb/config.yaml`, and self-probes via a native
+  `HEALTHCHECK … CMD ["/l7lb", "probe", "http://127.0.0.1:8081/livez"]` —
+  no shell or `curl` in the runtime image, which is why the `probe`
+  subcommand exists ([ADR-0014](adr/0014-health-endpoint-contract-and-probe-semantics.md)
+  decision 2). A strict `.dockerignore` allowlist keeps the build context
+  minimal.
+- **Repo-root `docker-compose.yml`** — one command brings up the LB image,
+  the three dummy backends, Prometheus, and Grafana. It is additive: the two
+  composes under `deployments/docker/` (backends-only for the host-process
+  chaos flow; observability-only) remain canonical and untouched, and the
+  chaos scripts keep targeting the host-process LB. Scrape config lives in a
+  separate `prometheus-stack.yml` (`l7lb:9090`); Grafana provisioning is
+  bind-mounted from the existing observability tree so there is one source
+  of truth. Only `8080`, `8081`, and `3000` are published; the dependency
+  chain is mixed (backends started, LB healthy via its own `HEALTHCHECK`,
+  Prometheus waiting on `service_healthy`, Grafana on `service_started`).
+  See
+  [ADR-0013 decision 18](adr/0013-observability-metrics-logging-and-integration.md#repo-root-demo-stack-docker-composeyml).
 
 ## Decision index
 
@@ -278,6 +415,8 @@ All non-trivial decisions are recorded in `docs/adr/`. Accepted:
 | [0010](adr/0010-p2c-ewma-backend-latency-state-cold-start-and-failure-penalty.md) | P2C-EWMA: Backend-owned latency state, cold-start semantics, and the failure penalty | Accepted |
 | [0011](adr/0011-health-passive-outlier-and-circuit-breaker-composition.md) | Health, passive-outlier, and circuit-breaker composition | Accepted |
 | [0012](adr/0012-circuit-gate-interface-and-backend-state-methods.md) | Circuit breaker gate interface, Registry-mediated admission, and Backend state API | Accepted |
+| [0013](adr/0013-observability-metrics-logging-and-integration.md) | Observability: metrics collector, transition logging, and their integration | Accepted |
+| [0014](adr/0014-health-endpoint-contract-and-probe-semantics.md) | Health endpoint contract and probe semantics | Accepted |
 
 Tracked but not yet written (each decides in the sprint that delivers the
 feature):
@@ -426,8 +565,6 @@ Read those four ADRs alongside the contracts doc's
 A future agent should not assume any of the following exist. Each names its
 owning sprint:
 
-- **Circuit breaking** — Sprint 3.
-- **Prometheus metrics** — Sprint 3.
 - **Hot-reload (SIGHUP, `atomic.Pointer[Config]`)** — Sprint 4.
 - **Connection-lifecycle hardening** (client cancellation, backend death
   mid-response, slow-loris timeouts) — Sprint 4.

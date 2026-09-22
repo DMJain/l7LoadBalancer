@@ -78,38 +78,38 @@ Cross-references to ADR-0011 through ADR-0014 and to the two amendments.
 (they gate 03 and 05 respectively) and are not listed here to keep the
 direct-blocker list minimal.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] `docs/sprint-3-retro.md` exists with the five sections in the order
+- [x] `docs/sprint-3-retro.md` exists with the five sections in the order
       above.
-- [ ] The Deliverables Shipped section covers every task ID from S3.T0.1
+- [x] The Deliverables Shipped section covers every task ID from S3.T0.1
       through S3.T9 plus S3.T6.5, and the four new tickets (T10, T11, T12,
       T13), each with a one-line summary and a commit or PR link.
-- [ ] The Deviations section contains exactly the five paragraphs listed
+- [x] The Deviations section contains exactly the five paragraphs listed
       above. Item 4 explicitly names the amendment-first precedent using
       language a future retro can cite verbatim.
-- [ ] The ADR-sweep table lists every Sprint 3 ADR (0004–0014) plus the
+- [x] The ADR-sweep table lists every Sprint 3 ADR (0004–0014) plus the
       two amendments; every row is either "code exists and matches" or
       carries an explicitly justified deferral. No blank cells; no
       undeferred gaps.
-- [ ] The ADR-sweep table also verifies inverse coverage: every non-trivial
+- [x] The ADR-sweep table also verifies inverse coverage: every non-trivial
       Sprint 3 decision (this bundle's D-list plus each earlier bundle's
       D-list from `.scratch/s3-*/spec.md`) is either backed by an ADR or
       by a documented `AGENTS.md` or inline-comment reference.
-- [ ] The Architectural Gaps section names the Half-Open scan-promotion
+- [x] The Architectural Gaps section names the Half-Open scan-promotion
       log gap, the deferred deployment-target ADR, and the two manual-
       verification-pending shell smokes.
-- [ ] The Sprint 4 Handoff section enumerates every item in the
+- [x] The Sprint 4 Handoff section enumerates every item in the
       "Handoff" bullet list of the spec, worded so Sprint 4's kickoff
       prompt can quote it verbatim as its starting debt inventory.
-- [ ] `docs/architecture.md` gains six new/refreshed sections covering
+- [x] `docs/architecture.md` gains six new/refreshed sections covering
       the Sprint 3 subsystems above, with cross-references to ADR-0011
       through ADR-0014 and the two amendments.
-- [ ] `docs/architecture.md`'s Sprint 1 and Sprint 2 sections are unchanged
+- [x] `docs/architecture.md`'s Sprint 1 and Sprint 2 sections are unchanged
       by this ticket (a `git diff` restricted to those sections shows no
       hunks).
-- [ ] No new ADR is created by this ticket.
-- [ ] No code files touched.
-- [ ] `PROGRESS.md` gets the standard closeout: this ticket marked `[DONE]`,
+- [x] No new ADR is created by this ticket.
+- [x] No code files touched.
+- [x] `PROGRESS.md` gets the standard closeout: this ticket marked `[DONE]`,
       Sprint 3 declared complete, links back to spec decisions D39–D44 for
       provenance.
