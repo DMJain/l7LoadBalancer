@@ -110,6 +110,17 @@ func main() {
 		"backend_count", len(cfg.Backends),
 	)
 
+	// The health endpoint is a third always-on listener mirroring metricsSrv:
+	// it serves /livez, /readyz, and /startupz on health_endpoint.listen so
+	// probes never enter the proxy path (ADR-0014 decision 1). configLoaded is
+	// true by construction here — the process exits above if load or validation
+	// failed — and the checker supplies the startup gate.
+	healthSrv := &http.Server{
+		Addr:              *cfg.HealthEndpoint.Listen,
+		Handler:           health.NewHandler(checker, reg, true, collector),
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Error("server error", "err", err)
@@ -125,6 +136,14 @@ func main() {
 		}
 	}()
 
+	log.Info("health endpoint started", "listen", *cfg.HealthEndpoint.Listen)
+	go func() {
+		if err := healthSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Error("health server error", "err", err)
+			os.Exit(1)
+		}
+	}()
+
 	<-sigCtx.Done()
 	log.Info("shutdown signal received")
 
@@ -136,6 +155,10 @@ func main() {
 	}
 	if err := metricsSrv.Shutdown(shutdownCtx); err != nil {
 		log.Error("metrics server shutdown failed", "err", err)
+		os.Exit(1)
+	}
+	if err := healthSrv.Shutdown(shutdownCtx); err != nil {
+		log.Error("health server shutdown failed", "err", err)
 		os.Exit(1)
 	}
 	log.Info("shutdown complete")

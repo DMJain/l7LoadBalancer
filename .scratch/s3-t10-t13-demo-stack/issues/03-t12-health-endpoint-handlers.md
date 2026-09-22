@@ -59,41 +59,41 @@ all three to distinct probe fields).
 
 **Blocked by:** 02.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] Tests written first (Red phase): table-driven `httptest`-based tests for
+- [x] Tests written first (Red phase): table-driven `httptest`-based tests for
       each of the three handlers, driving the underlying `HealthChecker` and
       `Registry` into known states and asserting exact status codes and JSON
       bodies for every combination the response envelope spec calls out.
-- [ ] `/livez` returns 200 and `{"status":"alive"}` under every state,
+- [x] `/livez` returns 200 and `{"status":"alive"}` under every state,
       including "no backends selectable" and "checker just started."
-- [ ] `/startupz` returns 503 with `{"config_loaded": true, "initial_probe_complete": false}`
+- [x] `/startupz` returns 503 with `{"config_loaded": true, "initial_probe_complete": false}`
       before the first probe round completes, 200 after it completes, and
       stays 200 permanently under further state changes (including full
       backend eviction).
-- [ ] `/readyz` returns 200 iff all three conditions hold; returns 503 with
+- [x] `/readyz` returns 200 iff all three conditions hold; returns 503 with
       the failing check(s) visible in the JSON body for each of: pre-probe-
       round, empty selectable set, and both simultaneously.
-- [ ] `/readyz` transitions 200 → 503 → 200 when a running instance loses
+- [x] `/readyz` transitions 200 → 503 → 200 when a running instance loses
       every backend and then regains one (drives via `Backend.MarkUnhealthy` /
       `MarkHealthy` in the test).
-- [ ] Every probe hit against a `httptest`-hosted mux increments the
+- [x] Every probe hit against a `httptest`-hosted mux increments the
       appropriate `lb_health_probe_total{endpoint, status}` cell, asserted
       via `promtestutil.ToFloat64`.
-- [ ] `main.go` constructs a third `http.Server` on `cfg.HealthEndpoint.Listen`,
+- [x] `main.go` constructs a third `http.Server` on `cfg.HealthEndpoint.Listen`,
       shares `sigCtx`, logs `"health endpoint started"` at Info level (mirroring
       the metrics-server startup log line), and shuts down cleanly in the same
       `Shutdown` sequence as the client and metrics servers.
-- [ ] `docs/adr/0014-health-endpoint-contract-and-probe-semantics.md` (or the
+- [x] `docs/adr/0014-health-endpoint-contract-and-probe-semantics.md` (or the
       accepted-numbering-of-the-day) is committed as part of this ticket, in
       the Accepted state, listing the ten decisions.
-- [ ] Any doc-comments in ticket 02 that forward-referenced ADR-0014 are now
+- [x] Any doc-comments in ticket 02 that forward-referenced ADR-0014 are now
       pointing at a real file.
-- [ ] `make test`, `make test-race`, `go vet ./...`, `make fmt` pass.
-- [ ] Manual verification recorded in the session log: `make run`; then
+- [x] `make test`, `make test-race`, `go vet ./...`, `make fmt` pass.
+- [x] Manual verification recorded in the session log: `make run`; then
       `curl -sS http://127.0.0.1:8081/livez`, `.../readyz`, `.../startupz` and
       paste the responses. Simulate empty selectable set (stop the three
       dummy backends) and assert `/readyz` transitions to 503 with
       `selectable_backends: 0` visible in the body.
-- [ ] `PROGRESS.md` entry for this ticket links back to spec decisions
+- [x] `PROGRESS.md` entry for this ticket links back to spec decisions
       D2–D12 for provenance.

@@ -1,14 +1,126 @@
 package health
 
 import (
+	"encoding/json"
 	"net/http"
 
 	"github.com/DMJain/l7LoadBalancer/internal/backend"
 	"github.com/DMJain/l7LoadBalancer/internal/metrics"
 )
 
-// NewHandler returns the orchestrator probe handler — a mux serving /livez,
-// /readyz, and /startupz — over checker, reg, and collector. ADR-0014 (S3.T12).
+// Probe paths. K8s-native names, so every orchestrator's probe field maps 1:1:
+// Docker HEALTHCHECK targets /livez, Fly.io's HTTP check targets /readyz, and
+// Kubernetes maps all three to distinct probe configs (ADR-0014 decisions 2 and
+// 3).
+const (
+	pathLivez    = "/livez"
+	pathReadyz   = "/readyz"
+	pathStartupz = "/startupz"
+)
+
+// liveBody is /livez's unadorned response. It carries no checks: liveness is
+// unconditional 200, and a deadlocked handler would not answer at all, so the
+// probe timeout is the failure signal (ADR-0014 decision 3).
+type liveBody struct {
+	Status string `json:"status"`
+}
+
+// statusBody is the shared /readyz and /startupz envelope: a top-level status
+// plus a per-check breakdown, so an operator can see *which* condition failed
+// without correlating logs and metrics (ADR-0014 decision 7).
+type statusBody struct {
+	Status string     `json:"status"`
+	Checks checksBody `json:"checks"`
+}
+
+// checksBody is the per-check breakdown. SelectableBackends is a pointer so
+// /startupz can omit it (it does not gate on the selectable set) while /readyz
+// always includes it, even at zero — an omitted field and a zero count must not
+// look the same to the orchestrator.
+type checksBody struct {
+	ConfigLoaded         bool `json:"config_loaded"`
+	InitialProbeComplete bool `json:"initial_probe_complete"`
+	SelectableBackends   *int `json:"selectable_backends,omitempty"`
+}
+
+// endpoint serves the three orchestrator probe paths. It is immutable after
+// construction and holds only references to goroutine-safe collaborators (the
+// checker's atomic latch, the registry's snapshot reads, the collector's
+// instruments), so all three handlers are safe for concurrent use.
+type endpoint struct {
+	checker      *Checker
+	reg          *backend.Registry
+	collector    *metrics.Collector
+	configLoaded bool
+}
+
+// NewHandler returns the orchestrator probe handler for the load balancer's own
+// health listener: a mux serving /livez, /readyz, and /startupz (ADR-0014
+// decision 1). Each hit is recorded on lb_health_probe_total, and no hit enters
+// the proxy path, so probe traffic never reaches lb_requests_total or the
+// request-latency histogram (decisions 1 and 8).
+//
+// configLoaded is the fact that config.Load and config.Validate succeeded. The
+// process exits before serving if they did not, so this is true in production;
+// it is a parameter rather than a constant so the contract can be exercised and
+// so a future reload path can report it honestly.
 func NewHandler(checker *Checker, reg *backend.Registry, configLoaded bool, collector *metrics.Collector) http.Handler {
-	panic("not implemented: S3.T12")
+	e := &endpoint{checker: checker, reg: reg, collector: collector, configLoaded: configLoaded}
+	mux := http.NewServeMux()
+	mux.HandleFunc(pathLivez, e.livez)
+	mux.HandleFunc(pathReadyz, e.readyz)
+	mux.HandleFunc(pathStartupz, e.startupz)
+	return mux
+}
+
+// livez always answers 200 {"status":"alive"} (ADR-0014 decision 3).
+func (e *endpoint) livez(w http.ResponseWriter, _ *http.Request) {
+	e.writeJSON(w, pathLivez, http.StatusOK, liveBody{Status: "alive"})
+}
+
+// startupz is a one-shot gate: 503 until config is loaded and the first active
+// probe round is complete, then permanently 200. It deliberately does not gate
+// on the selectable set — startup is a one-way transition, readiness is
+// continuous (ADR-0014 decisions 4 and 6).
+func (e *endpoint) startupz(w http.ResponseWriter, _ *http.Request) {
+	initial := e.checker.ProbeRoundComplete()
+	e.writeStatus(w, pathStartupz, e.configLoaded && initial, checksBody{
+		ConfigLoaded:         e.configLoaded,
+		InitialProbeComplete: initial,
+	})
+}
+
+// readyz gates on the startup conditions plus a live selectable-set check, so
+// 200 means this instance can actually serve client traffic right now. An empty
+// selectable set is 503, which lets a fronting LB or K8s Service route around a
+// fully-evicted instance (ADR-0014 decisions 5 and 6).
+func (e *endpoint) readyz(w http.ResponseWriter, _ *http.Request) {
+	initial := e.checker.ProbeRoundComplete()
+	count := len(e.reg.Selectable())
+	e.writeStatus(w, pathReadyz, e.configLoaded && initial && count >= 1, checksBody{
+		ConfigLoaded:         e.configLoaded,
+		InitialProbeComplete: initial,
+		SelectableBackends:   &count,
+	})
+}
+
+// writeStatus writes the shared ready/not_ready envelope and records the probe.
+func (e *endpoint) writeStatus(w http.ResponseWriter, probe string, ready bool, checks checksBody) {
+	code := http.StatusServiceUnavailable
+	status := "not_ready"
+	if ready {
+		code = http.StatusOK
+		status = "ready"
+	}
+	e.writeJSON(w, probe, code, statusBody{Status: status, Checks: checks})
+}
+
+// writeJSON writes body as JSON with the given status code and records the
+// probe response. The encode error can only be a write failure after the status
+// line is already committed, so there is nothing left to do but drop it.
+func (e *endpoint) writeJSON(w http.ResponseWriter, probe string, code int, body any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	_ = json.NewEncoder(w).Encode(body)
+	e.collector.RecordProbe(probe, code)
 }
