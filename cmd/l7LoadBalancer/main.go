@@ -52,18 +52,18 @@ func probeCommand(args []string) (code int, handled bool) {
 	if len(args) < 2 || args[1] != "probe" {
 		return 0, false
 	}
-	return runProbe(args[2:]), true
+	if len(args) < 3 {
+		fmt.Fprintln(os.Stderr, "usage: l7lb probe <url>")
+		return 2, true
+	}
+	return runProbe(args[2]), true
 }
 
-// runProbe GETs the probe URL and maps the outcome to a process exit code: 0
-// for any 2xx, non-zero for any non-2xx response or transport error
-// (connection refused, timeout, DNS failure). It deliberately does not follow
-// redirects — a 3xx is a failure, matching the active health checker's policy.
-func runProbe(args []string) int {
-	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: l7lb probe <url>")
-		return 2
-	}
+// runProbe GETs url and maps the outcome to a process exit code: 0 for any
+// 2xx, non-zero for any non-2xx response or transport error (connection
+// refused, timeout, DNS failure). It deliberately does not follow redirects —
+// a 3xx is a failure, matching the active health checker's policy.
+func runProbe(url string) int {
 	client := &http.Client{
 		Timeout: probeTimeout,
 		// Observe a redirect rather than chase it, so a 3xx is a non-2xx
@@ -73,14 +73,14 @@ func runProbe(args []string) int {
 			return http.ErrUseLastResponse
 		},
 	}
-	resp, err := client.Get(args[0])
+	resp, err := client.Get(url)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "probe %s: %v\n", args[0], err)
+		fmt.Fprintf(os.Stderr, "probe %s: %v\n", url, err)
 		return 1
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		fmt.Fprintf(os.Stderr, "probe %s: status %d\n", args[0], resp.StatusCode)
+		fmt.Fprintf(os.Stderr, "probe %s: status %d\n", url, resp.StatusCode)
 		return 1
 	}
 	return 0

@@ -76,6 +76,15 @@ func TestProbeCommandConnectionRefused(t *testing.T) {
 	assert.Less(t, elapsed, probeTimeout, "refusal must return before the probe timeout")
 }
 
+// TestProbeCommandRejectsMissingURL pins the usage-error exit code: `l7lb
+// probe` with no URL is handled (it is a probe invocation) but reports the
+// malformed invocation as a distinct non-2xx-style failure.
+func TestProbeCommandRejectsMissingURL(t *testing.T) {
+	code, handled := probeCommand([]string{"l7lb", "probe"})
+	require.True(t, handled, "`l7lb probe` is a probe invocation")
+	assert.Equal(t, 2, code)
+}
+
 // TestProbeCommandDoesNotInterceptLoadBalancer proves the branch is a
 // subcommand, not a catch-all: an ordinary invocation (no args, or flag-led)
 // falls through to the load-balancer startup path untouched.
