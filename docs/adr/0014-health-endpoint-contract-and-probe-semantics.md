@@ -58,7 +58,11 @@ design-session record in the spec above (spec decisions D2–D12).
    `config_loaded` is the fact that `config.Load`+`Validate` succeeded, which
    the handler carries as a construction-time boolean (the process exits before
    serving if it did not). `initial_probe_complete` is
-   `Checker.ProbeRoundComplete()`.
+   `Checker.ProbeRoundComplete()`. The handler re-evaluates the conjunction per
+   request; its permanence is supplied by both inputs being monotone —
+   `ProbeRoundComplete()` is a one-shot latch, and `configLoaded` is fixed at
+   construction. A future reload path that makes config state dynamic must latch
+   it at the source, or `/startupz` would regress 200→503 against this decision.
 
 5. **`/readyz` gates on the startup conditions plus a live selectable-set
    check.** 200 only when all of `{config_loaded, initial_probe_complete,

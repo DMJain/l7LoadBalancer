@@ -81,12 +81,16 @@ func (e *endpoint) livez(w http.ResponseWriter, _ *http.Request) {
 // startupz is a one-shot gate: 503 until config is loaded and the first active
 // probe round is complete, then permanently 200. It deliberately does not gate
 // on the selectable set — startup is a one-way transition, readiness is
-// continuous (ADR-0014 decisions 4 and 6).
+// continuous (ADR-0014 decisions 4 and 6). Permanence follows from both inputs
+// being monotone: ProbeRoundComplete latches true for the checker's lifetime,
+// and configLoaded is fixed at construction. If a future reload path ever makes
+// config state dynamic, it must be latched at the source, or this gate would
+// regress 200→503 against decision 4's intent.
 func (e *endpoint) startupz(w http.ResponseWriter, _ *http.Request) {
-	initial := e.checker.ProbeRoundComplete()
-	e.writeStatus(w, pathStartupz, e.configLoaded && initial, checksBody{
+	initialProbeComplete := e.checker.ProbeRoundComplete()
+	e.writeStatus(w, pathStartupz, e.configLoaded && initialProbeComplete, checksBody{
 		ConfigLoaded:         e.configLoaded,
-		InitialProbeComplete: initial,
+		InitialProbeComplete: initialProbeComplete,
 	})
 }
 
@@ -95,32 +99,32 @@ func (e *endpoint) startupz(w http.ResponseWriter, _ *http.Request) {
 // selectable set is 503, which lets a fronting LB or K8s Service route around a
 // fully-evicted instance (ADR-0014 decisions 5 and 6).
 func (e *endpoint) readyz(w http.ResponseWriter, _ *http.Request) {
-	initial := e.checker.ProbeRoundComplete()
+	initialProbeComplete := e.checker.ProbeRoundComplete()
 	count := len(e.reg.Selectable())
-	e.writeStatus(w, pathReadyz, e.configLoaded && initial && count >= 1, checksBody{
+	e.writeStatus(w, pathReadyz, e.configLoaded && initialProbeComplete && count >= 1, checksBody{
 		ConfigLoaded:         e.configLoaded,
-		InitialProbeComplete: initial,
+		InitialProbeComplete: initialProbeComplete,
 		SelectableBackends:   &count,
 	})
 }
 
 // writeStatus writes the shared ready/not_ready envelope and records the probe.
-func (e *endpoint) writeStatus(w http.ResponseWriter, probe string, ready bool, checks checksBody) {
+func (e *endpoint) writeStatus(w http.ResponseWriter, endpoint string, ready bool, checks checksBody) {
 	code := http.StatusServiceUnavailable
 	status := "not_ready"
 	if ready {
 		code = http.StatusOK
 		status = "ready"
 	}
-	e.writeJSON(w, probe, code, statusBody{Status: status, Checks: checks})
+	e.writeJSON(w, endpoint, code, statusBody{Status: status, Checks: checks})
 }
 
 // writeJSON writes body as JSON with the given status code and records the
 // probe response. The encode error can only be a write failure after the status
 // line is already committed, so there is nothing left to do but drop it.
-func (e *endpoint) writeJSON(w http.ResponseWriter, probe string, code int, body any) {
+func (e *endpoint) writeJSON(w http.ResponseWriter, endpoint string, code int, body any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(body)
-	e.collector.RecordProbe(probe, code)
+	e.collector.RecordProbe(endpoint, code)
 }
