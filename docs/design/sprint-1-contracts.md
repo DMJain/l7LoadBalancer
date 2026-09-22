@@ -146,11 +146,17 @@ From `internal/metrics/doc.go`:
 
 - Metric name prefixes: `lb_requests_total`, `lb_request_duration_seconds`,
   `lb_backend_healthy`, `lb_circuit_state`, `lb_active_connections`
-  (added in S3.T4, amending this reservation — ADR-0013 decision 7).
+  (added in S3.T4, amending this reservation — ADR-0013 decision 7),
+  `lb_health_probe_total` (added in S3.T12, amending this reservation —
+  ADR-0014).
 - Labels: `backend`, `method`, `status_class` — deliberately **not**
   `status_code`, to avoid unbounded cardinality from arbitrary upstream
   status codes. `lb_circuit_state` additionally carries `state`
-  (`closed`/`open`/`half_open`) as a label enum.
+  (`closed`/`open`/`half_open`) as a label enum. `lb_health_probe_total` is
+  probe-scoped: it carries `endpoint` (`/livez`/`/readyz`/`/startupz`) and
+  `status` (the same status-class vocabulary as `status_class`), and does not
+  carry `backend`/`method` — so the request and probe counters never share a
+  label set.
 
 Proposed latency histogram bucket boundaries (seconds), to be overridden
 with real measured data once Sprint 1's benchmark/manual-smoke numbers

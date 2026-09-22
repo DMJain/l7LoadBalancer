@@ -68,7 +68,7 @@ const (
 	DefaultMetricsListen = ":9090"
 	// DefaultHealthEndpointListen is the address the orchestrator probe
 	// endpoint (livez/readyz/startupz) binds when health_endpoint.listen is
-	// omitted. Always-on, mirroring DefaultMetricsListen.
+	// omitted. Always-on, mirroring DefaultMetricsListen. ADR-0014 (S3.T12).
 	DefaultHealthEndpointListen = ":8081"
 )
 
@@ -126,7 +126,7 @@ type MetricsConfig struct {
 
 // HealthEndpointConfig holds the orchestrator probe endpoint's tunables. Like
 // MetricsConfig it is always-on with a single listen address; Listen follows
-// the same nil-means-omitted convention.
+// the same nil-means-omitted convention. ADR-0014 (S3.T12).
 type HealthEndpointConfig struct {
 	// Listen is the host:port the /livez, /readyz, and /startupz endpoints
 	// bind. Omitted → DefaultHealthEndpointListen.
@@ -286,8 +286,9 @@ func validateListen(listen string) error {
 // resolves, or checks availability — those depend on runtime state and belong
 // to http.Server.ListenAndServe. net.SplitHostPort rejects strings with no
 // port ("foobar", "1.2.3.4"); the uint16 parse rejects out-of-range ports
-// like 99999. field is the config key being validated ("listen" or
-// "metrics listen"), used only to build an attributable error message.
+// like 99999. field is the config key being validated ("listen",
+// "metrics listen", or "health_endpoint listen"), used only to build an
+// attributable error message.
 func validateHostPort(field, addr string) error {
 	_, port, err := net.SplitHostPort(addr)
 	if err != nil {

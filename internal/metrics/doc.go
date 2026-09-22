@@ -7,6 +7,10 @@
 //	backend       - backend name
 //	method        - HTTP method
 //	status_class  - "2xx" / "4xx" / "5xx" etc. (NOT status_code — cardinality)
+//	endpoint      - health-probe path (lb_health_probe_total only)
+//	status        - health-probe status class, "2xx"/"5xx" etc.
+//	                (lb_health_probe_total only; deliberately its own name,
+//	                not status_class, since a probe has no method/backend)
 //
 // Metric name prefix reservations:
 //
