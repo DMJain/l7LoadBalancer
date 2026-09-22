@@ -25,37 +25,37 @@ Three surfaces land in this ticket:
 
 **Blocked by:** 01.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] `HealthChecker.ProbeRoundComplete() bool` exists, is race-safe under
+- [x] `HealthChecker.ProbeRoundComplete() bool` exists, is race-safe under
       `-race`, and returns `false` before any probe round completes, `true`
       after every configured backend has been probed at least once, and stays
       `true` under further probe rounds. Table-driven test with a fake probe
       transport, N backends, and enforced probe ordering.
-- [ ] `Collector.RecordProbe(endpoint string, statusCode int)` exists and
+- [x] `Collector.RecordProbe(endpoint string, statusCode int)` exists and
       increments `lb_health_probe_total{endpoint, status}` on a private
       Prometheus registry. Verified via `promtestutil.CollectAndCount` /
       `.ToFloat64`, exactly the pattern the existing `internal/metrics` tests
       use.
-- [ ] The `status` label uses status-class values (`2xx`, `5xx`, …) matching
+- [x] The `status` label uses status-class values (`2xx`, `5xx`, …) matching
       the ADR-0013 convention for `lb_requests_total`, not raw status codes —
       keeps label cardinality bounded and the two counters visually
       consistent on a Grafana panel.
-- [ ] Config schema gains the `health_endpoint: { listen: ":8081" }` block.
+- [x] Config schema gains the `health_endpoint: { listen: ":8081" }` block.
       Unknown fields under `health_endpoint` are rejected by `KnownFields(true)`;
       an unparseable `listen` fails `Validate()` with a wrapped error naming
       the field.
-- [ ] `configs/example.yaml` gains the new block as an inline-commented
+- [x] `configs/example.yaml` gains the new block as an inline-commented
       example with the default value, matching the way `metrics.listen` was
       documented in S3.T4.
-- [ ] Nothing in `internal/proxy`, `internal/circuit`, or `cmd/l7LoadBalancer`
+- [x] Nothing in `internal/proxy`, `internal/circuit`, or `cmd/l7LoadBalancer`
       needs to change for this ticket. If a change to any of them is tempting,
       it belongs to ticket 03.
-- [ ] All new code carries the standard Sprint 3 doc-comment convention:
+- [x] All new code carries the standard Sprint 3 doc-comment convention:
       one line pointing at ADR-0014 (which ticket 03 writes) as a
       forward-reference — comment can be added as `// ADR-0014 (S3.T12).`
       even before the ADR file exists in the repo, so ticket 03's diff is
       only the new file.
-- [ ] `make test`, `make test-race`, `go vet ./...`, and `make fmt` all pass.
-- [ ] `PROGRESS.md` entry for this ticket links back to spec decisions
+- [x] `make test`, `make test-race`, `go vet ./...`, and `make fmt` all pass.
+- [x] `PROGRESS.md` entry for this ticket links back to spec decisions
       D8, D9, D11 for provenance.

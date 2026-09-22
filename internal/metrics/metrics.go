@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"strconv"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -56,6 +57,7 @@ type Collector struct {
 	healthy  *prometheus.GaugeVec
 	circuit  *prometheus.GaugeVec
 	active   *prometheus.GaugeVec
+	probes   *prometheus.CounterVec
 }
 
 // NewCollector returns a Collector over its own private registry. Nothing is
@@ -90,8 +92,12 @@ func NewCollector() *Collector {
 			Name: "lb_active_connections",
 			Help: "In-flight requests currently being served by a backend.",
 		}, []string{"backend"}),
+		probes: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "lb_health_probe_total",
+			Help: "Total health-endpoint probe responses, by probe endpoint and response status class.",
+		}, []string{"endpoint", "status"}),
 	}
-	reg.MustRegister(c.requests, c.duration, c.healthy, c.circuit, c.active)
+	reg.MustRegister(c.requests, c.duration, c.healthy, c.circuit, c.active, c.probes)
 	return c
 }
 
@@ -156,4 +162,22 @@ func (c *Collector) DecActiveConnections(backend string) {
 // any request has been served (ADR-0013 decision 9).
 func (c *Collector) SetActiveConnections(backend string, n int64) {
 	c.active.WithLabelValues(backend).Set(float64(n))
+}
+
+// RecordProbe records one health-endpoint probe response against the
+// lb_health_probe_total counter. The status label is the same status-class
+// vocabulary ObserveRequest uses ("2xx", "5xx", …), not the raw code, so the
+// new counter stays visually consistent with lb_requests_total and its
+// cardinality stays bounded (3 endpoints × ~2 classes) (ADR-0013 decision 3,
+// ADR-0014 (S3.T12)).
+func (c *Collector) RecordProbe(endpoint string, statusCode int) {
+	c.probes.WithLabelValues(endpoint, statusClass(statusCode)).Inc()
+}
+
+// statusClass maps an HTTP status code to its class label ("2xx", "5xx"),
+// matching the status_class vocabulary. It is a deliberate one-line duplicate
+// of internal/proxy's unexported helper: this package is a leaf and may not
+// import internal/proxy (ADR-0013 decision 1).
+func statusClass(status int) string {
+	return strconv.Itoa(status/100) + "xx"
 }

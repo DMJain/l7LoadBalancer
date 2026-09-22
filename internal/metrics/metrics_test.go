@@ -85,6 +85,35 @@ func TestCollectorObserveRequestHistogram(t *testing.T) {
 		"provisional bucket set from doc.go, pending Sprint 5 benchmark data")
 }
 
+func TestCollectorRecordProbe(t *testing.T) {
+	t.Parallel()
+	c := NewCollector()
+
+	assert.Nil(t, findMetric(t, c, "lb_health_probe_total", map[string]string{"endpoint": "/livez", "status": "2xx"}),
+		"no series before the first probe")
+
+	c.RecordProbe("/livez", http.StatusOK)
+	c.RecordProbe("/livez", http.StatusOK)
+	c.RecordProbe("/readyz", http.StatusServiceUnavailable)
+	c.RecordProbe("/startupz", http.StatusOK)
+
+	m := findMetric(t, c, "lb_health_probe_total", map[string]string{"endpoint": "/livez", "status": "2xx"})
+	require.NotNil(t, m)
+	assert.Equal(t, 2.0, m.GetCounter().GetValue())
+
+	// The label is a status *class*, not the raw code: a 503 lands in "5xx".
+	fail := findMetric(t, c, "lb_health_probe_total", map[string]string{"endpoint": "/readyz", "status": "5xx"})
+	require.NotNil(t, fail)
+	assert.Equal(t, 1.0, fail.GetCounter().GetValue())
+	assert.Nil(t, findMetric(t, c, "lb_health_probe_total", map[string]string{"endpoint": "/readyz", "status": "503"}),
+		"raw status codes must never become a label value")
+
+	// Distinct endpoints are distinct series.
+	other := findMetric(t, c, "lb_health_probe_total", map[string]string{"endpoint": "/startupz", "status": "2xx"})
+	require.NotNil(t, other)
+	assert.Equal(t, 1.0, other.GetCounter().GetValue())
+}
+
 func TestCollectorSetBackendHealthy(t *testing.T) {
 	t.Parallel()
 	c := NewCollector()
@@ -177,6 +206,7 @@ func TestCollectorExpositionEndpoint(t *testing.T) {
 	c.SetBackendHealthy("backend-a", true)
 	c.SetCircuitState("backend-a", CircuitStateOpen)
 	c.SetActiveConnections("backend-a", 1)
+	c.RecordProbe("/livez", http.StatusOK)
 
 	srv := httptest.NewServer(promhttp.HandlerFor(c.Registry(), promhttp.HandlerOpts{}))
 	defer srv.Close()
@@ -200,6 +230,7 @@ func TestCollectorExpositionEndpoint(t *testing.T) {
 		`lb_circuit_state{backend="backend-a",state="open"} 1`,
 		`lb_circuit_state{backend="backend-a",state="half_open"} 0`,
 		`lb_active_connections{backend="backend-a"} 1`,
+		`lb_health_probe_total{endpoint="/livez",status="2xx"} 1`,
 	}
 	for _, want := range wants {
 		assert.Contains(t, text, want)

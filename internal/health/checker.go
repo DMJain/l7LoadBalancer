@@ -12,6 +12,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/DMJain/l7LoadBalancer/internal/backend"
@@ -42,17 +43,28 @@ const (
 // Checker periodically probes every backend in a Registry and reflects the
 // outcome into Backend health state.
 //
-// Concurrency: the Checker itself is immutable after New; each backend's
-// mutable state lives in that backend's own prober, touched by exactly one
-// goroutine (see Start), so the consecutive counters need no synchronization.
-// Backend health is read/written only through Backend's atomic-backed methods.
-// See ADR-0011 decisions 2, 10, and 11.
+// Concurrency: the Checker itself is immutable after New except for the
+// first-probe-round latch (probed/probeRoundComplete), which is atomic; each
+// backend's mutable state lives in that backend's own prober, touched by
+// exactly one goroutine (see Start), so the consecutive counters need no
+// synchronization. Backend health is read/written only through Backend's
+// atomic-backed methods. See ADR-0011 decisions 2, 10, and 11.
 type Checker struct {
 	reg      *backend.Registry
 	interval time.Duration
 	client   *http.Client
 	log      *slog.Logger
 	metrics  *metrics.Collector
+
+	// backendCount is len(reg.All()) at construction and is fixed for the
+	// checker's lifetime.
+	backendCount int
+	// probed counts how many distinct backends have completed at least one
+	// probe. It is only compared against backendCount, never reset.
+	probed atomic.Int32
+	// probeRoundComplete latches true once probed reaches backendCount — the
+	// first full sweep — and is never cleared (ADR-0014 (S3.T12)).
+	probeRoundComplete atomic.Bool
 }
 
 // New builds a Checker over reg that probes each backend every interval,
@@ -78,10 +90,11 @@ type Checker struct {
 func New(reg *backend.Registry, interval, timeout time.Duration, log *slog.Logger, collector *metrics.Collector) *Checker {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	return &Checker{
-		reg:      reg,
-		interval: interval,
-		log:      log,
-		metrics:  collector,
+		reg:          reg,
+		interval:     interval,
+		log:          log,
+		metrics:      collector,
+		backendCount: len(reg.All()),
 		client: &http.Client{
 			Transport: transport,
 			Timeout:   timeout,
@@ -100,6 +113,14 @@ func (c *Checker) Start(ctx context.Context) {
 	for _, b := range c.reg.All() {
 		go c.newProber(b).run(ctx)
 	}
+}
+
+// ProbeRoundComplete reports whether every configured backend has answered at
+// least one active probe. It is false until the first full sweep finishes, then
+// latches true for the checker's lifetime — the one-shot condition behind the
+// /startupz gate (ADR-0014 (S3.T12)).
+func (c *Checker) ProbeRoundComplete() bool {
+	return c.probeRoundComplete.Load()
 }
 
 // probeOnce issues one probe against b and folds the outcome into the state
@@ -124,7 +145,8 @@ func (c *Checker) Start(ctx context.Context) {
 // inside those same two guarded blocks, so it shares this exact edge-triggered
 // signal rather than re-deriving health independently (ADR-0013 decision 6).
 func (p *prober) probeOnce(ctx context.Context) bool {
-	if p.checker.probe(ctx, p.target) {
+	ok := p.checker.probe(ctx, p.target)
+	if ok {
 		p.failures = 0
 		p.successes++
 		if p.successes >= probeSuccessesBeforeHealthy && !p.target.IsHealthy() {
@@ -138,23 +160,40 @@ func (p *prober) probeOnce(ctx context.Context) bool {
 		if p.successes >= probeSuccessesBeforeHealthy {
 			p.target.MarkHealthy()
 		}
-		return true
+	} else {
+		p.successes = 0
+		p.failures++
+		if p.failures == probeFailuresBeforeUnhealthy && p.target.IsHealthy() {
+			p.checker.log.Warn("backend ejected",
+				"backend", p.target.Name,
+				"event", logger.EventHealthEjected,
+				"reason", logger.ReasonProbeFailures,
+			)
+			p.checker.metrics.SetBackendHealthy(p.target.Name, false)
+		}
+		if p.failures >= probeFailuresBeforeUnhealthy {
+			p.target.MarkUnhealthy()
+		}
 	}
 
-	p.successes = 0
-	p.failures++
-	if p.failures == probeFailuresBeforeUnhealthy && p.target.IsHealthy() {
-		p.checker.log.Warn("backend ejected",
-			"backend", p.target.Name,
-			"event", logger.EventHealthEjected,
-			"reason", logger.ReasonProbeFailures,
-		)
-		p.checker.metrics.SetBackendHealthy(p.target.Name, false)
+	// Every probe — success or failure — counts as this backend having been
+	// reached, which is what closes the first probe round.
+	p.markProbed()
+	return ok
+}
+
+// markProbed folds this prober's backend into the checker's first-round count,
+// exactly once. The latch is set by whichever prober's first probe is the last
+// of the set, so a subsequent round can never "re-complete" it
+// (ADR-0014 (S3.T12)).
+func (p *prober) markProbed() {
+	if p.counted {
+		return
 	}
-	if p.failures >= probeFailuresBeforeUnhealthy {
-		p.target.MarkUnhealthy()
+	p.counted = true
+	if int(p.checker.probed.Add(1)) == p.checker.backendCount {
+		p.checker.probeRoundComplete.Store(true)
 	}
-	return false
 }
 
 // prober carries one backend's consecutive-outcome state. It is created and
@@ -166,6 +205,11 @@ type prober struct {
 
 	successes int
 	failures  int
+
+	// counted records whether this prober's first probe has already been folded
+	// into the checker's first-round count. Owned by the same single goroutine
+	// as the counters.
+	counted bool
 }
 
 func (c *Checker) newProber(b *backend.Backend) *prober {

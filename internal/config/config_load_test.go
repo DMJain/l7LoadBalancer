@@ -152,6 +152,29 @@ backends:
 			wantErr:   true,
 			errSubstr: "listn",
 		},
+		{
+			name:     "health_endpoint listen decodes from YAML without defaulting",
+			contents: "listen: \":8080\"\nhealth_endpoint:\n  listen: \":18081\"\n",
+			check: func(t *testing.T, cfg *Config) {
+				t.Helper()
+				require.NotNil(t, cfg.HealthEndpoint.Listen)
+				assert.Equal(t, ":18081", *cfg.HealthEndpoint.Listen)
+			},
+		},
+		{
+			name:     "omitted health_endpoint listen is left nil by Load",
+			contents: "listen: \":8080\"\n",
+			check: func(t *testing.T, cfg *Config) {
+				t.Helper()
+				assert.Nil(t, cfg.HealthEndpoint.Listen)
+			},
+		},
+		{
+			name:      "unknown field inside health_endpoint section is rejected",
+			contents:  "listen: \":8080\"\nhealth_endpoint:\n  listn: \":8081\"\n",
+			wantErr:   true,
+			errSubstr: "listn",
+		},
 	}
 
 	for _, tc := range cases {

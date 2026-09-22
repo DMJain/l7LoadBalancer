@@ -11,6 +11,11 @@ listen: ":8080"
 # Defaults to round_robin if omitted.
 algorithm: "round_robin"
 
+# Health endpoint. Always-on; serves orchestrator probe paths on this address.
+# `listen` is optional and defaults to ":8081".
+health_endpoint:
+  listen: ":8081"
+
 # Upstream backends. At least one required. Names must be unique.
 backends:
   - name: "backend-a"

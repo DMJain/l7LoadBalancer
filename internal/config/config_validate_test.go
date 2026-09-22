@@ -39,6 +39,14 @@ func configWithMetricsYAML(metrics string) string {
 		"backends:\n" + backendYAML("backend-a", "http://127.0.0.1:9001")
 }
 
+// configWithHealthEndpointYAML builds a minimal otherwise-valid config with the
+// supplied health_endpoint YAML block (which may be empty) spliced in before
+// the backends section.
+func configWithHealthEndpointYAML(healthEndpoint string) string {
+	return "listen: \":8080\"\n" + healthEndpoint +
+		"backends:\n" + backendYAML("backend-a", "http://127.0.0.1:9001")
+}
+
 // loadAndValidate is the end-to-end seam under test: YAML -> Load -> Validate.
 func loadAndValidate(t *testing.T, contents string) (*Config, error) {
 	t.Helper()
@@ -317,6 +325,42 @@ func TestValidate(t *testing.T) {
 			yaml:      configWithMetricsYAML("metrics:\n  listen: \":99999\"\n"),
 			wantErr:   true,
 			errSubstr: "metrics",
+		},
+		{
+			name: "health_endpoint listen omitted defaults to :8081",
+			yaml: threeBackendYAML(),
+			check: func(t *testing.T, cfg *Config) {
+				t.Helper()
+				require.NotNil(t, cfg.HealthEndpoint.Listen)
+				assert.Equal(t, DefaultHealthEndpointListen, *cfg.HealthEndpoint.Listen)
+			},
+		},
+		{
+			name: "health_endpoint listen set explicitly is kept",
+			yaml: configWithHealthEndpointYAML("health_endpoint:\n  listen: \":18081\"\n"),
+			check: func(t *testing.T, cfg *Config) {
+				t.Helper()
+				require.NotNil(t, cfg.HealthEndpoint.Listen)
+				assert.Equal(t, ":18081", *cfg.HealthEndpoint.Listen)
+			},
+		},
+		{
+			name:      "health_endpoint listen without port is rejected",
+			yaml:      configWithHealthEndpointYAML("health_endpoint:\n  listen: \"foobar\"\n"),
+			wantErr:   true,
+			errSubstr: "health_endpoint",
+		},
+		{
+			name:      "health_endpoint listen with empty value is rejected",
+			yaml:      configWithHealthEndpointYAML("health_endpoint:\n  listen: \"\"\n"),
+			wantErr:   true,
+			errSubstr: "health_endpoint",
+		},
+		{
+			name:      "health_endpoint listen with out-of-range port is rejected",
+			yaml:      configWithHealthEndpointYAML("health_endpoint:\n  listen: \":99999\"\n"),
+			wantErr:   true,
+			errSubstr: "health_endpoint",
 		},
 	}
 

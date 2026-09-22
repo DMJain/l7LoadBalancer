@@ -309,6 +309,69 @@ func TestProbeMalformedURLIsFailure(t *testing.T) {
 	assert.False(t, c.probe(context.Background(), b))
 }
 
+// TestProbeRoundCompleteLatchesAfterEveryBackendProbed pins the one-shot latch
+// the /startupz probe consumes: ProbeRoundComplete is false until every
+// configured backend has answered at least one probe, then true forever. The
+// per-backend probe order is enforced by driving probers one at a time, so the
+// assertion is not a race between timers (ADR-0014 (S3.T12)).
+func TestProbeRoundCompleteLatchesAfterEveryBackendProbed(t *testing.T) {
+	for _, n := range []int{1, 2, 3} {
+		t.Run(fmt.Sprintf("%d backends", n), func(t *testing.T) {
+			srv := statusServer(t, http.StatusOK)
+			urls := make([]string, n)
+			for i := range urls {
+				urls[i] = srv.URL
+			}
+			reg := newTestRegistry(t, urls...)
+			c := New(reg, time.Second, time.Second, discardLogger(), metrics.NewCollector())
+
+			require.False(t, c.ProbeRoundComplete(), "the latch starts closed")
+
+			probers := make([]*prober, 0, n)
+			for _, b := range reg.All() {
+				probers = append(probers, c.newProber(b))
+			}
+
+			for i, p := range probers[:len(probers)-1] {
+				require.True(t, p.probeOnce(context.Background()))
+				assert.Falsef(t, c.ProbeRoundComplete(),
+					"backend %d of %d probed; the round is not yet complete", i+1, len(probers))
+			}
+
+			require.True(t, probers[len(probers)-1].probeOnce(context.Background()))
+			assert.True(t, c.ProbeRoundComplete(), "the last backend's first probe completes the round")
+
+			// Further rounds must not un-latch it.
+			for _, p := range probers {
+				require.True(t, p.probeOnce(context.Background()))
+			}
+			assert.True(t, c.ProbeRoundComplete(), "the latch is one-shot and stays set")
+		})
+	}
+}
+
+// TestProbeRoundCompleteConcurrent probes every backend from its own goroutine
+// at once. The latch must still end up set — the -race teeth check for the
+// shared probed counter and single latch.
+func TestProbeRoundCompleteConcurrent(t *testing.T) {
+	srv := statusServer(t, http.StatusOK)
+	reg := newTestRegistry(t, srv.URL, srv.URL, srv.URL, srv.URL)
+	c := New(reg, time.Second, time.Second, discardLogger(), metrics.NewCollector())
+
+	var wg sync.WaitGroup
+	for _, b := range reg.All() {
+		p := c.newProber(b)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			p.probeOnce(context.Background())
+		}()
+	}
+	wg.Wait()
+
+	assert.True(t, c.ProbeRoundComplete(), "concurrent first probes must still complete the round")
+}
+
 // TestStartProbesUntilContextCancelled covers the goroutine wiring: Start
 // launches one probe loop per backend, and cancellation stops them.
 func TestStartProbesUntilContextCancelled(t *testing.T) {

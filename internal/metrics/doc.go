@@ -15,6 +15,7 @@
 //	lb_backend_healthy
 //	lb_circuit_state
 //	lb_active_connections   - added in S3.T4 (ADR-0013 decision 7)
+//	lb_health_probe_total   - added in S3.T12 (ADR-0014)
 //
 // See docs/design/sprint-1-contracts.md "Metric name and label
 // reservations" for latency bucket boundaries. Implemented in Sprint 3;

@@ -66,6 +66,10 @@ const (
 	// DefaultMetricsListen is the address the Prometheus exposition endpoint
 	// binds when metrics.listen is omitted. Always-on; no disable toggle.
 	DefaultMetricsListen = ":9090"
+	// DefaultHealthEndpointListen is the address the orchestrator probe
+	// endpoint (livez/readyz/startupz) binds when health_endpoint.listen is
+	// omitted. Always-on, mirroring DefaultMetricsListen.
+	DefaultHealthEndpointListen = ":8081"
 )
 
 // Config is the top-level load balancer configuration, loaded from YAML.
@@ -74,12 +78,13 @@ const (
 // rather than flat top-level keys, so each subsystem's settings stay grouped
 // and the schema remains legible as it grows. See ADR-0011 decision 10.
 type Config struct {
-	Listen    string          `yaml:"listen"`
-	Algorithm string          `yaml:"algorithm"`
-	Health    HealthConfig    `yaml:"health"`
-	Circuit   CircuitConfig   `yaml:"circuit"`
-	Metrics   MetricsConfig   `yaml:"metrics"`
-	Backends  []BackendConfig `yaml:"backends"`
+	Listen         string               `yaml:"listen"`
+	Algorithm      string               `yaml:"algorithm"`
+	Health         HealthConfig         `yaml:"health"`
+	Circuit        CircuitConfig        `yaml:"circuit"`
+	Metrics        MetricsConfig        `yaml:"metrics"`
+	HealthEndpoint HealthEndpointConfig `yaml:"health_endpoint"`
+	Backends       []BackendConfig      `yaml:"backends"`
 }
 
 // HealthConfig holds the active-health-check tunables shared by every backend.
@@ -119,6 +124,15 @@ type MetricsConfig struct {
 	Listen *string `yaml:"listen"`
 }
 
+// HealthEndpointConfig holds the orchestrator probe endpoint's tunables. Like
+// MetricsConfig it is always-on with a single listen address; Listen follows
+// the same nil-means-omitted convention.
+type HealthEndpointConfig struct {
+	// Listen is the host:port the /livez, /readyz, and /startupz endpoints
+	// bind. Omitted → DefaultHealthEndpointListen.
+	Listen *string `yaml:"listen"`
+}
+
 // BackendConfig describes one backend entry in the YAML config.
 type BackendConfig struct {
 	Name string `yaml:"name"`
@@ -154,18 +168,19 @@ func Load(path string) (*Config, error) {
 
 // Validate checks the config for correctness: non-empty Listen, at least
 // one backend, each backend URL parseable with a host, unique backend
-// names, a recognized Algorithm value, and positive Sprint 3 durations.
+// names, a recognized Algorithm value, positive Sprint 3 durations, and
+// host:port-valid metrics/health-endpoint listen addresses.
 //
 // Validate normalizes before it validates: an empty Algorithm is set to
-// AlgorithmRoundRobin, and each omitted Sprint 3 duration is set to its
-// exported default. After Validate returns nil, every field is populated
-// and valid, so downstream consumers never re-check or re-default. This is
-// why Validate mutates; splitting Normalize() out isn't justified by these
-// mutations (revisit if defaults grow further).
+// AlgorithmRoundRobin, and each omitted Sprint 3 duration or listen address is
+// set to its exported default. After Validate returns nil, every field is
+// populated and valid, so downstream consumers never re-check or re-default.
+// This is why Validate mutates; splitting Normalize() out isn't justified by
+// these mutations (revisit if defaults grow further).
 //
 // Validation is fail-fast: the first problem is returned. The order is
 // Listen → backends count → per-backend name/URL → name uniqueness →
-// algorithm → health/circuit durations.
+// algorithm → health/circuit durations → metrics/health_endpoint listen.
 func (c *Config) Validate() error {
 	if c.Algorithm == "" {
 		c.Algorithm = AlgorithmRoundRobin
@@ -208,7 +223,10 @@ func (c *Config) Validate() error {
 	if err := c.normalizeAndValidateDurations(); err != nil {
 		return err
 	}
-	return c.normalizeAndValidateMetrics()
+	if err := normalizeListen("metrics listen", &c.Metrics.Listen, DefaultMetricsListen); err != nil {
+		return err
+	}
+	return normalizeListen("health_endpoint listen", &c.HealthEndpoint.Listen, DefaultHealthEndpointListen)
 }
 
 // normalizeAndValidateDurations applies the Sprint 3 defaults to every omitted
@@ -224,22 +242,24 @@ func (c *Config) normalizeAndValidateDurations() error {
 	return normalizeDuration("circuit cooldown", &c.Circuit.Cooldown, DefaultCircuitCooldown)
 }
 
-// normalizeAndValidateMetrics defaults an omitted metrics.listen to
-// DefaultMetricsListen and rejects an explicitly-set value that is not a valid
-// host:port. Metrics exposition is always-on (ADR-0013 decision 8): there is no
-// disable toggle, so an explicit empty string is an error rather than a way to
-// switch it off. The pointer's nil-ness distinguishes "key absent" from "key
-// set to empty", mirroring normalizeDuration.
-func (c *Config) normalizeAndValidateMetrics() error {
-	if c.Metrics.Listen == nil {
-		listen := DefaultMetricsListen
-		c.Metrics.Listen = &listen
+// normalizeListen defaults an omitted listen address to def and rejects an
+// explicitly-set value that is empty or not a valid host:port. The pointer's
+// nil-ness distinguishes "key absent" from "key set to empty", mirroring
+// normalizeDuration. field is the config key being validated, used only to
+// build an attributable error message. Both the metrics and health-endpoint
+// listeners share this: they are always-on (ADR-0013 decision 8, ADR-0014
+// (S3.T12)), so an explicit empty string is an error rather than a way to
+// switch either off.
+func normalizeListen(field string, value **string, def string) error {
+	if *value == nil {
+		v := def
+		*value = &v
 		return nil
 	}
-	if *c.Metrics.Listen == "" {
-		return errors.New("config: metrics listen must not be empty")
+	if **value == "" {
+		return fmt.Errorf("config: %s must not be empty", field)
 	}
-	return validateHostPort("metrics listen", *c.Metrics.Listen)
+	return validateHostPort(field, **value)
 }
 
 // normalizeDuration replaces an omitted duration (nil) with def and rejects an
