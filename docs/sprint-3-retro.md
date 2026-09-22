@@ -48,7 +48,7 @@ the implementation and its close-out.
 | S3.T10.0 | `l7lb probe <url>` subcommand + `main.version`/`main.commit` ldflags injection (spec D16, D17). | `010fc85`, tests `7f43cf0`, review `e3be04c` |
 | S3.T10 | Multi-stage distroless LB Dockerfile, `.dockerignore` allowlist, baked `configs/docker.yaml`, OCI labels, ADR-0005 amendment (spec D13–D25). | `4a0917b`, review `f539249` |
 | S3.T11 | Repo-root `docker-compose.yml`, `prometheus-stack.yml`, ADR-0013 decision 18 (spec D26–D38). | `c984aa2`, review `17020a4` |
-| S3.T13 | This retro + additive `docs/architecture.md` update (spec D39–D44). | claim `fd7bb85`; the completion commit carries this file |
+| S3.T13 | This retro + additive `docs/architecture.md` update (spec D39–D44). | `cf21b22` (claim `fd7bb85`) |
 
 ## 2. Deviations from MILESTONES/spec
 
@@ -111,7 +111,9 @@ to amend `MILESTONES.md`'s Sprint 3 deliverables and exit criteria before
 any of their code landed. That ordering is the precedent this retrospective
 records for future sprints, verbatim: *"mid-sprint scope additions require
 a `MILESTONES.md` amendment commit before any code lands, per S3.T10–T13's
-amendment-first ordering (spec D0)."* The amendment landed as `6a85c36`
+amendment-first ordering (ticket 01 of this bundle)."* (Spec D40 phrases the
+same precedent as `(D0)`; ticket 01 is the amendment commit it names.) The
+amendment landed as `6a85c36`
 (`docs(milestones): add S3.T10–T13 deliverables and exit criteria`) before
 S3.T12.0, the first code ticket of the bundle.
 
