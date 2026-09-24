@@ -65,6 +65,7 @@ Strategic plan. Each sprint = one weekend of focused work. Tasks under each spri
 **Goal**: The subsystems that separate a toy LB from a defensible one.
 
 **Deliverables**:
+- Programmatic application seam: the whole wiring graph (metrics collector, backend registry with seeded series, circuit breaker, selector, proxy with its observers, active health checker, and the client/metrics/health-endpoint servers) behind an importable `internal/app` build/run API, with the reload operation added in place — so production, tests, and the chaos harness assemble the system the same way (Sprint 3 retro handoff).
 - Zero-downtime SIGHUP reload: `atomic.Pointer[Config]` swap, diff-based backend add/remove, draining state for removed backends with configurable drain window.
 - Connection lifecycle correctness: context propagation client→backend, clean handling of client cancellation mid-stream, backend death mid-response, slow-loris timeouts. `pprof` audit — no goroutine leaks under sustained load.
 - Backend connection pool tuning via `http.Transport`: `MaxIdleConnsPerHost`, `IdleConnTimeout`, `DialContext` with timeout, `ResponseHeaderTimeout`.
