@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func bc(name, url string) BackendConfig {
+func backendCfg(name, url string) BackendConfig {
 	return BackendConfig{Name: name, URL: url}
 }
 
@@ -35,12 +35,12 @@ func mustConfig(t *testing.T, yaml string) *Config {
 }
 
 func TestDiffBackends(t *testing.T) {
-	a1 := bc("backend-a", "http://127.0.0.1:9001")
-	a2 := bc("backend-a", "http://127.0.0.1:9003")
-	b := bc("backend-b", "http://127.0.0.1:9002")
-	c := bc("backend-c", "http://127.0.0.1:9004")
-	c2 := bc("backend-c", "http://127.0.0.1:9006")
-	d := bc("backend-d", "http://127.0.0.1:9005")
+	a1 := backendCfg("backend-a", "http://127.0.0.1:9001")
+	a2 := backendCfg("backend-a", "http://127.0.0.1:9003")
+	b := backendCfg("backend-b", "http://127.0.0.1:9002")
+	c := backendCfg("backend-c", "http://127.0.0.1:9004")
+	c2 := backendCfg("backend-c", "http://127.0.0.1:9006")
+	d := backendCfg("backend-d", "http://127.0.0.1:9005")
 
 	cases := []struct {
 		name          string
@@ -174,11 +174,11 @@ func TestNonBackendChanges(t *testing.T) {
 			name: "omitted fields equal explicit defaults",
 			old:  oneBackendConfigYAML(base),
 			new: oneBackendConfigYAML(base +
-				"algorithm: \"round_robin\"\n" +
-				"health:\n  probe_interval: \"5s\"\n  probe_timeout: \"2s\"\n" +
-				"circuit:\n  cooldown: \"30s\"\n" +
-				"metrics:\n  listen: \":9090\"\n" +
-				"health_endpoint:\n  listen: \":8081\"\n"),
+				"algorithm: \"" + AlgorithmRoundRobin + "\"\n" +
+				"health:\n  probe_interval: \"" + DefaultProbeInterval.String() + "\"\n  probe_timeout: \"" + DefaultProbeTimeout.String() + "\"\n" +
+				"circuit:\n  cooldown: \"" + DefaultCircuitCooldown.String() + "\"\n" +
+				"metrics:\n  listen: \"" + DefaultMetricsListen + "\"\n" +
+				"health_endpoint:\n  listen: \"" + DefaultHealthEndpointListen + "\"\n"),
 		},
 		{
 			name: "multiple fields come back in fixed order",
