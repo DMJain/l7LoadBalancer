@@ -55,6 +55,14 @@ func backendConfigs(fbs []*flippableBackend) []config.BackendConfig {
 	return backends
 }
 
+// zeroListen is a fresh ":0" pointer for the metrics and health-endpoint
+// listeners: Run serves all three servers, and the chaos tests address the
+// proxy handler directly, so neither auxiliary listener wants a fixed port.
+func zeroListen() *string {
+	addr := ":0"
+	return &addr
+}
+
 // chaosConfig builds the round-robin config the chaos tests assemble: the
 // flippable backends' URLs, the fast-path timing, and no listen binding (the
 // tests serve the proxy handler directly).
@@ -69,28 +77,19 @@ func chaosConfig(fbs []*flippableBackend) *config.Config {
 			ProbeInterval: &probeInterval,
 			ProbeTimeout:  &probeTimeout,
 		},
-		Circuit:  config.CircuitConfig{Cooldown: &cooldown},
-		Backends: backendConfigs(fbs),
+		Circuit:        config.CircuitConfig{Cooldown: &cooldown},
+		Metrics:        config.MetricsConfig{Listen: zeroListen()},
+		HealthEndpoint: config.HealthEndpointConfig{Listen: zeroListen()},
+		Backends:       backendConfigs(fbs),
 	}
 }
 
 // assemble builds the system through internal/app's Build seam — production
 // and test wiring now converge, closing the Sprint 3 retro's assemble debt —
-// and starts it with Run on a context cancelled at test cleanup. The client,
-// metrics, and health-endpoint listeners all bind :0 (the tests drive the
-// handler directly). The returned handle keeps the same shape the chaos
-// assertions read before the swap.
+// and starts it with Run on a context cancelled at test cleanup. The returned
+// handle keeps the same shape the chaos assertions read before the swap.
 func assemble(t *testing.T, cfg *config.Config) *assembly {
 	t.Helper()
-
-	// Run serves all three servers; the tests never want a fixed port.
-	zero := ":0"
-	if cfg.Metrics.Listen == nil {
-		cfg.Metrics.Listen = &zero
-	}
-	if cfg.HealthEndpoint.Listen == nil {
-		cfg.HealthEndpoint.Listen = &zero
-	}
 	require.NoError(t, cfg.Validate())
 
 	logs := &captureHandler{}

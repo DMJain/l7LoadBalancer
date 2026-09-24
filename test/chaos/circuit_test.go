@@ -43,8 +43,10 @@ func circuitChaosConfig(fbs []*flippableBackend) *config.Config {
 			ProbeInterval: &probeInterval,
 			ProbeTimeout:  &probeTimeout,
 		},
-		Circuit:  config.CircuitConfig{Cooldown: &cooldown},
-		Backends: backendConfigs(fbs),
+		Circuit:        config.CircuitConfig{Cooldown: &cooldown},
+		Metrics:        config.MetricsConfig{Listen: zeroListen()},
+		HealthEndpoint: config.HealthEndpointConfig{Listen: zeroListen()},
+		Backends:       backendConfigs(fbs),
 	}
 }
 

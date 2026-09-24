@@ -45,19 +45,13 @@ const readHeaderTimeout = 5 * time.Second
 // build time and never mutated here; Run only starts and stops the servers.
 type App struct {
 	log        *slog.Logger
+	cfg        *config.Config
 	collector  *metrics.Collector
 	reg        *backend.Registry
-	handler    http.Handler
 	checker    *health.Checker
 	srv        *http.Server
 	metricsSrv *http.Server
 	healthSrv  *http.Server
-
-	// health fields are retained only for Run's startup log line, which main
-	// used to emit with the same values.
-	probeInterval time.Duration
-	probeTimeout  time.Duration
-	backendCount  int
 }
 
 // Build assembles the whole wiring graph from an already-validated config and
@@ -77,7 +71,7 @@ func Build(cfg *config.Config, log *slog.Logger) (*App, error) {
 
 	reg, err := backend.NewRegistry(cfg.Backends)
 	if err != nil {
-		return nil, fmt.Errorf("backend registry build failed: %w", err)
+		return nil, fmt.Errorf("app: backend registry build failed: %w", err)
 	}
 	seedMetrics(collector, reg)
 
@@ -86,7 +80,7 @@ func Build(cfg *config.Config, log *slog.Logger) (*App, error) {
 
 	sel, err := balancer.NewFromConfig(cfg, reg)
 	if err != nil {
-		return nil, fmt.Errorf("selector build failed: %w", err)
+		return nil, fmt.Errorf("app: selector build failed for algorithm %q: %w", cfg.Algorithm, err)
 	}
 
 	p := proxy.New(reg, sel)
@@ -98,14 +92,11 @@ func Build(cfg *config.Config, log *slog.Logger) (*App, error) {
 	checker := health.New(reg, *cfg.Health.ProbeInterval, *cfg.Health.ProbeTimeout, log, collector)
 
 	return &App{
-		log:           log,
-		collector:     collector,
-		reg:           reg,
-		handler:       p,
-		checker:       checker,
-		probeInterval: *cfg.Health.ProbeInterval,
-		probeTimeout:  *cfg.Health.ProbeTimeout,
-		backendCount:  len(cfg.Backends),
+		log:       log,
+		cfg:       cfg,
+		collector: collector,
+		reg:       reg,
+		checker:   checker,
 		srv: &http.Server{
 			Addr:              cfg.Listen,
 			Handler:           p,
@@ -125,7 +116,7 @@ func Build(cfg *config.Config, log *slog.Logger) (*App, error) {
 }
 
 // Handler returns the client-facing proxy handler.
-func (a *App) Handler() http.Handler { return a.handler }
+func (a *App) Handler() http.Handler { return a.srv.Handler }
 
 // Collector returns the metrics collector whose private registry the /metrics
 // endpoint exposes.
@@ -137,17 +128,22 @@ func (a *App) Registry() *backend.Registry { return a.reg }
 
 // Run serves until ctx is cancelled, then performs the graceful shutdown of
 // the client, metrics, and health-endpoint servers in that order, each under
-// the same shutdown timeout. A server that fails before shutdown makes Run
-// return that error after logging it.
+// the same shutdown timeout. A server that fails before shutdown is logged,
+// the other two are still shut down, and Run returns that error.
 //
 // The active health checker shares ctx, so cancelling ctx stops probing as
 // well as serving (ADR-0011 decision 13).
+//
+// Concurrency: the checker owns its own goroutines (one per backend), and each
+// of the three servers runs in one goroutine that reports its failure on a
+// buffered errCh; Run is the only reader and owns all shutdowns, so no two
+// goroutines share mutable state.
 func (a *App) Run(ctx context.Context) error {
 	a.checker.Start(ctx)
 	a.log.Info("health checker started",
-		"probe_interval", a.probeInterval,
-		"probe_timeout", a.probeTimeout,
-		"backend_count", a.backendCount,
+		"probe_interval", *a.cfg.Health.ProbeInterval,
+		"probe_timeout", *a.cfg.Health.ProbeTimeout,
+		"backend_count", len(a.cfg.Backends),
 	)
 
 	errCh := make(chan runError, 3)
@@ -159,12 +155,13 @@ func (a *App) Run(ctx context.Context) error {
 	a.log.Info("health endpoint started", "listen", a.healthSrv.Addr)
 	go serve(a.healthSrv, "health server error", errCh)
 
+	var runErr error
 	select {
 	case <-ctx.Done():
 		a.log.Info("shutdown signal received")
 	case re := <-errCh:
 		a.log.Error(re.label, "err", re.err)
-		return re.err
+		runErr = re.err
 	}
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
@@ -182,7 +179,7 @@ func (a *App) Run(ctx context.Context) error {
 		return err
 	}
 	a.log.Info("shutdown complete")
-	return nil
+	return runErr
 }
 
 // runError carries a server's failure with the label main used to log it.

@@ -151,7 +151,7 @@ type Proxy struct {
 // New constructs a Proxy over reg using sel for backend selection.
 //
 // New registers no RoundTripObservers: a bare New records nothing. Callers
-// that want latency recording — main does, via newHandler — must call
+// that want latency recording — internal/app's Build does — must call
 // RegisterObserver(NewLatencyObserver()) (plus any other observers) before
 // serving. The separation is deliberate; see ADR-0011 decision 9.
 //
