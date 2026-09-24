@@ -29,14 +29,14 @@ func DiffBackends(oldCfg, newCfg *Config) BackendDiff {
 
 	var diff BackendDiff
 	for _, b := range newCfg.Backends {
-		if _, ok := oldIdentities[backendIdentity(b)]; ok {
+		if _, ok := oldIdentities[BackendIdentity(b)]; ok {
 			diff.Unchanged = append(diff.Unchanged, b)
 		} else {
 			diff.Added = append(diff.Added, b)
 		}
 	}
 	for _, b := range oldCfg.Backends {
-		if _, ok := newIdentities[backendIdentity(b)]; !ok {
+		if _, ok := newIdentities[BackendIdentity(b)]; !ok {
 			diff.Removed = append(diff.Removed, b)
 		}
 	}
@@ -79,9 +79,12 @@ func NonBackendChanges(oldCfg, newCfg *Config) []string {
 	return changed
 }
 
-// backendIdentity is the identity key for the diff: the (name, URL) pair. The
-// NUL separator cannot occur in either a validated name or a URL.
-func backendIdentity(b BackendConfig) string {
+// BackendIdentity is the identity key for a backend in a reload diff: the
+// (name, URL) pair, per ADR-0015 decision 2. It is exported so the registry's
+// Apply classifies added and unchanged backends by the exact same key the diff
+// does, rather than restating the identity contract. The NUL separator cannot
+// occur in either a validated name or a URL.
+func BackendIdentity(b BackendConfig) string {
 	return b.Name + "\x00" + b.URL
 }
 
@@ -89,7 +92,7 @@ func backendIdentity(b BackendConfig) string {
 func backendIdentities(cfgs []BackendConfig) map[string]struct{} {
 	ids := make(map[string]struct{}, len(cfgs))
 	for _, b := range cfgs {
-		ids[backendIdentity(b)] = struct{}{}
+		ids[BackendIdentity(b)] = struct{}{}
 	}
 	return ids
 }

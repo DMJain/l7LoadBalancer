@@ -45,14 +45,14 @@ const readHeaderTimeout = 5 * time.Second
 // App is the assembled load-balancing system. Its subsystems are wired at
 // build time and never mutated here; Run only starts and stops the servers.
 //
-// loadedCfg is the one field the reload operation (S4.T3) replaces: it holds
-// the config the running system was last built or reloaded from, so each reload
-// diffs against the currently loaded config rather than the startup config and
-// successive reloads compose. It is an atomic pointer so a reader never sees a
-// half-replaced config (ADR-0015 decision 12).
+// loadedCfg is the one config record the application keeps: the field the
+// reload operation (S4.T3) replaces, holding the config the running system was
+// last built or reloaded from, so each reload diffs against the currently
+// loaded config rather than the startup config and successive reloads compose.
+// It is an atomic pointer so a reader never sees a half-replaced config
+// (ADR-0015 decision 12).
 type App struct {
 	log        *slog.Logger
-	cfg        *config.Config
 	collector  *metrics.Collector
 	reg        *backend.Registry
 	checker    *health.Checker
@@ -101,7 +101,6 @@ func Build(cfg *config.Config, log *slog.Logger) (*App, error) {
 
 	a := &App{
 		log:       log,
-		cfg:       cfg,
 		collector: collector,
 		reg:       reg,
 		checker:   checker,
@@ -155,11 +154,12 @@ func (a *App) LoadedConfig() *config.Config { return a.loadedCfg.Load() }
 // buffered errCh; Run is the only reader and owns all shutdowns, so no two
 // goroutines share mutable state.
 func (a *App) Run(ctx context.Context) error {
+	cfg := a.loadedCfg.Load()
 	a.checker.Start(ctx)
 	a.log.Info("health checker started",
-		"probe_interval", *a.cfg.Health.ProbeInterval,
-		"probe_timeout", *a.cfg.Health.ProbeTimeout,
-		"backend_count", len(a.cfg.Backends),
+		"probe_interval", *cfg.Health.ProbeInterval,
+		"probe_timeout", *cfg.Health.ProbeTimeout,
+		"backend_count", len(cfg.Backends),
 	)
 
 	errCh := make(chan runError, 3)

@@ -162,25 +162,28 @@ func (r *Registry) Allow(b *Backend) bool {
 // reader loads the snapshot pointer once and never locks, so a swap is atomic
 // to readers (ADR-0015 decisions 5–6).
 //
-// diff classifies by backend identity (name, URL): an identity present in both
-// is unchanged and keeps its existing instance and all its state; one only in
-// the new config is added and gets a fresh instance; one only in the old config
-// is removed. newBackends supplies the new file's order — the diff's separate
-// Added/Unchanged slices cannot express how the two interleave — and Apply
-// walks it in order, so the new file dictates round-robin rotation and
-// LeastConnections' tie-break (ADR-0015 decision 3).
+// diff classifies every backend by identity (name, URL): an identity in
+// diff.Added gets a fresh instance; one in diff.Unchanged keeps its existing
+// instance and all its state. newBackends supplies the new file's order — the
+// diff's separate Added/Unchanged slices cannot express how the two interleave
+// — and Apply walks it in order, so the new file dictates round-robin rotation
+// and LeastConnections' tie-break (ADR-0015 decision 3). It is a programming
+// error for a newBackends entry to be in neither set, and Apply reports it
+// rather than guess.
 //
 // Each removed backend is marked removed before the snapshot is swapped, so a
 // request selected just before the swap already sees the flag when it completes
 // (ADR-0015 decision 7). Removed backends then leave All and Selectable at the
 // swap. A re-added identity is always fresh: it is in diff.Added, so it never
-// matches a current instance and never inherits the old instance's state
+// matches an unchanged entry and never inherits the old instance's state
 // (ADR-0015 decision 6).
 //
-// The only error is an unparseable URL, which config.Validate has already
-// rejected for every production caller; it is returned rather than panicked so
-// a malformed programmatic input cannot half-apply. On error nothing is marked
-// or swapped: the fresh instances built so far are discarded.
+// The errors are an unparseable URL and an inconsistent diff (a newBackends
+// entry in neither Added nor Unchanged, or an unchanged entry absent from the
+// current snapshot); config.Validate rules the first out for production
+// callers, and DiffBackends rules the rest out. They are returned rather than
+// panicked or silently mis-applied. On error nothing is marked or swapped: the
+// fresh instances built so far are discarded.
 func (r *Registry) Apply(diff config.BackendDiff, newBackends []config.BackendConfig) (added, removed []*Backend, err error) {
 	cur := r.snap.Load()
 
@@ -188,27 +191,29 @@ func (r *Registry) Apply(diff config.BackendDiff, newBackends []config.BackendCo
 	for _, b := range cur.backends {
 		byName[b.Name] = b
 	}
-	addedIdentities := make(map[string]struct{}, len(diff.Added))
-	for _, cfg := range diff.Added {
-		addedIdentities[backendConfigIdentity(cfg)] = struct{}{}
-	}
+	addedIdentities := identities(diff.Added)
+	unchangedIdentities := identities(diff.Unchanged)
 
 	next := make([]*Backend, 0, len(newBackends))
 	for _, cfg := range newBackends {
-		if _, fresh := addedIdentities[backendConfigIdentity(cfg)]; fresh {
+		id := config.BackendIdentity(cfg)
+		switch {
+		case inSet(addedIdentities, id):
 			b, err := newBackend(cfg)
 			if err != nil {
 				return nil, nil, err
 			}
 			next = append(next, b)
 			added = append(added, b)
-			continue
+		case inSet(unchangedIdentities, id):
+			b := byName[cfg.Name]
+			if b == nil {
+				return nil, nil, fmt.Errorf("backend: apply: unchanged backend %q not in current snapshot", cfg.Name)
+			}
+			next = append(next, b)
+		default:
+			return nil, nil, fmt.Errorf("backend: apply: backend %q (%s) is neither added nor unchanged in the diff", cfg.Name, cfg.URL)
 		}
-		b := byName[cfg.Name]
-		if b == nil {
-			return nil, nil, fmt.Errorf("backend: apply: unchanged backend %q not in current snapshot", cfg.Name)
-		}
-		next = append(next, b)
 	}
 
 	for _, cfg := range diff.Removed {
@@ -224,9 +229,17 @@ func (r *Registry) Apply(diff config.BackendDiff, newBackends []config.BackendCo
 	return added, removed, nil
 }
 
-// backendConfigIdentity is the identity key Apply matches added and unchanged
-// entries by: the (name, URL) pair, the same identity config.DiffBackends uses.
-// The NUL separator cannot occur in either a validated name or a URL.
-func backendConfigIdentity(cfg config.BackendConfig) string {
-	return cfg.Name + "\x00" + cfg.URL
+// identities builds the identity set of a backend config slice.
+func identities(cfgs []config.BackendConfig) map[string]struct{} {
+	ids := make(map[string]struct{}, len(cfgs))
+	for _, cfg := range cfgs {
+		ids[config.BackendIdentity(cfg)] = struct{}{}
+	}
+	return ids
+}
+
+// inSet reports whether id is in ids.
+func inSet(ids map[string]struct{}, id string) bool {
+	_, ok := ids[id]
+	return ok
 }

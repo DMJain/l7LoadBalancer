@@ -67,10 +67,17 @@ func NewConsistentHashBoundedLoads(reg *backend.Registry) *ConsistentHashBounded
 // rebuilding it from that snapshot's full backend list when the cached ring is
 // stale and CAS-ing the result in. Redundant concurrent builds right after a
 // swap are correct — each builds an identical ring for the same version and
-// all but one lose the CAS. The version and the backend list come from one
-// Snapshot load, so the ring is never built from a set its version does not
-// name (ADR-0015 decision 9).
+// all but one lose the CAS.
+//
+// The common path — no reload since the last call — is one atomic load of the
+// cache plus one of the version, no allocation; only a version mismatch pays
+// for a Snapshot (which clones the backend list). The version and backend list
+// used to build are read together from one Snapshot, so a rebuilt ring is never
+// assembled from a set its version does not name (ADR-0015 decision 9).
 func (s *ConsistentHashBoundedLoads) currentRing() *ring {
+	if cached := s.cache.Load(); cached != nil && cached.version == s.reg.Version() {
+		return cached.ring
+	}
 	for {
 		cached := s.cache.Load()
 		version, backends := s.reg.Snapshot()

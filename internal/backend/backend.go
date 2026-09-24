@@ -85,7 +85,9 @@ const (
 // circuit-breaker state (S3.T3), read and CAS-updated by every selector
 // (via Registry.Selectable) and the proxy admission gate. removed is set
 // once by Registry.Apply just before a backend leaves the snapshot (S4.T2)
-// and read by the proxy's observer fan-out on every round trip. All fields
+// and read by the proxy's observer fan-out and by
+// ConsistentHashBoundedLoads' admission check, which guards against a stale
+// ring admitting a just-removed backend. All fields
 // are unexported; callers MUST use
 // IsHealthy/MarkHealthy/MarkUnhealthy/IncActive/DecActive/ActiveConns/
 // RecordLatency/EWMALatency/CircuitOpen/CircuitAllow/CircuitSuccess/

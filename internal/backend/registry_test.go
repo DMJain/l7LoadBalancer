@@ -303,6 +303,14 @@ func TestRegistryConcurrentApplyAndRead(t *testing.T) {
 	withD := append(append([]config.BackendConfig{}, testConfigs()...),
 		config.BackendConfig{Name: "backend-d", URL: "http://127.0.0.1:9004"})
 	withoutD := testConfigs()
+	addD := config.BackendDiff{
+		Added:     []config.BackendConfig{withD[len(withD)-1]},
+		Unchanged: testConfigs(),
+	}
+	removeD := config.BackendDiff{
+		Removed:   []config.BackendConfig{withD[len(withD)-1]},
+		Unchanged: testConfigs(),
+	}
 
 	var wg sync.WaitGroup
 	stop := make(chan struct{})
@@ -330,16 +338,10 @@ func TestRegistryConcurrentApplyAndRead(t *testing.T) {
 		defer wg.Done()
 		defer close(stop)
 		for i := 0; i < 50; i++ {
-			if _, _, err := reg.Apply(
-				config.BackendDiff{Added: []config.BackendConfig{withD[len(withD)-1]}},
-				withD,
-			); err != nil {
+			if _, _, err := reg.Apply(addD, withD); err != nil {
 				t.Errorf("apply add: %v", err)
 			}
-			if _, _, err := reg.Apply(
-				config.BackendDiff{Removed: []config.BackendConfig{withD[len(withD)-1]}},
-				withoutD,
-			); err != nil {
+			if _, _, err := reg.Apply(removeD, withoutD); err != nil {
 				t.Errorf("apply remove: %v", err)
 			}
 		}

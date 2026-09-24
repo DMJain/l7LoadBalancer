@@ -335,6 +335,37 @@ func TestConsistentHashBoundedLoadsRebuildsRingOnVersionChange(t *testing.T) {
 	}
 }
 
+// TestConsistentHashBoundedLoadsKeepsAffinityAcrossReorder pins story 41: when
+// a reload changes only the file order, the ring is rebuilt (the version moved)
+// but membership is identical, so every key keeps its owner — session affinity
+// survives the swap.
+func TestConsistentHashBoundedLoadsKeepsAffinityAcrossReorder(t *testing.T) {
+	reg := ringRegistry(t, "backend-a", "backend-b", "backend-c", "backend-d")
+	sel := NewConsistentHashBoundedLoads(reg)
+
+	rng := rand.New(rand.NewSource(20260925))
+	keys := sampleKeys(rng, 100)
+
+	before := make(map[string]string, len(keys))
+	for _, ip := range keys {
+		before[ip] = selectNameForAddr(t, sel, ip+":12345")
+	}
+
+	reordered := []config.BackendConfig{
+		{Name: "backend-d", URL: "http://127.0.0.1:9004"},
+		{Name: "backend-c", URL: "http://127.0.0.1:9003"},
+		{Name: "backend-b", URL: "http://127.0.0.1:9002"},
+		{Name: "backend-a", URL: "http://127.0.0.1:9001"},
+	}
+	_, _, err := reg.Apply(config.BackendDiff{Unchanged: reordered}, reordered)
+	require.NoError(t, err)
+
+	for _, ip := range keys {
+		assert.Equalf(t, before[ip], selectNameForAddr(t, sel, ip+":12345"),
+			"a reorder-only reload must not move key %s", ip)
+	}
+}
+
 // TestConsistentHashBoundedLoadsConcurrentSelectAcrossSwap drives the selector
 // from many goroutines while another goroutine swaps the backend set the ring
 // is built from, so the version-check/rebuild path is exercised under -race.

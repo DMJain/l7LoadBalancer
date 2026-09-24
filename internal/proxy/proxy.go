@@ -347,6 +347,16 @@ func (p *Proxy) completeRequest(r *http.Request, state *reqState, start time.Tim
 // found), derived exactly as logRequest derives it; a circuit-denied request
 // still carries the real backend Select already identified. It is a no-op when
 // no collector is installed (ADR-0013 decision 14).
+//
+// Unlike the RoundTripObserver fan-out in observe, this whole-request hook is
+// NOT suppressed for a removed backend. The removed-backend rule (ADR-0015
+// decision 8) governs the observers — circuit, health, outlier, and their
+// gauges — which a reload deletes; the request counter and latency histogram
+// are aggregated by backend name like Backend.ActiveConns and cannot be reset
+// per instance, so suppressing one late request would not isolate a same-name
+// fresh backend's series anyway. The active-connection gauge's own increment
+// and decrement stay in activate/release regardless, so this hook's label and
+// the gauge it mirrors never disagree.
 func (p *Proxy) observeRequest(r *http.Request, state *reqState, start time.Time) {
 	if p.metrics == nil {
 		return
