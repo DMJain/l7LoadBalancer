@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/DMJain/l7LoadBalancer/internal/backend"
@@ -161,6 +162,23 @@ func TestBuildExposesRegistry(t *testing.T) {
 	require.Len(t, all, 2)
 	require.Equal(t, "backend-a", all[0].Name)
 	require.Equal(t, "backend-b", all[1].Name)
+}
+
+// TestBuildExposesLoadedConfig proves Build records the config it wired, so
+// the reload operation (S4.T3) has the currently loaded config to diff
+// against; in T2 only tests read it.
+func TestBuildExposesLoadedConfig(t *testing.T) {
+	silenceDefault(t)
+
+	cfg := testConfig([]config.BackendConfig{
+		{Name: "backend-a", URL: "http://127.0.0.1:9001"},
+	})
+	require.NoError(t, cfg.Validate())
+
+	application, err := Build(cfg, discardLogger())
+	require.NoError(t, err)
+
+	assert.Same(t, cfg, application.LoadedConfig())
 }
 
 // TestRunStopsOnContextCancel proves Run serves until the context is cancelled

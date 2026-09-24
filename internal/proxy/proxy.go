@@ -199,7 +199,19 @@ func (p *Proxy) SetMetrics(c *metrics.Collector) {
 // observe fans a round trip's outcome out to every registered observer. It is
 // the single unconditional recording path for both terminal hooks. See
 // ADR-0011 decision 9.
+//
+// A backend removed by a registry swap reports nothing: the whole fan-out is
+// skipped for it, so no circuit, health, outlier, or metric write can come from
+// a backend that is no longer in the fleet — this is what keeps every observer
+// ignorant of reload and a same-name fresh backend's series reflecting only its
+// own traffic (ADR-0015 decision 8). Active-connection accounting is not
+// observer-driven and is deliberately not gated here: a removed backend must
+// still release its slot in release()/releaseBody, or ActiveConns would never
+// drain.
 func (p *Proxy) observe(state *reqState, d time.Duration, success bool) {
+	if state.backend.IsRemoved() {
+		return
+	}
 	for _, o := range p.observers {
 		o.ObserveRoundTrip(state.backend, d, success)
 	}

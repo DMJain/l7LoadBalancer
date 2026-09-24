@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -43,6 +44,12 @@ const readHeaderTimeout = 5 * time.Second
 
 // App is the assembled load-balancing system. Its subsystems are wired at
 // build time and never mutated here; Run only starts and stops the servers.
+//
+// loadedCfg is the one field the reload operation (S4.T3) replaces: it holds
+// the config the running system was last built or reloaded from, so each reload
+// diffs against the currently loaded config rather than the startup config and
+// successive reloads compose. It is an atomic pointer so a reader never sees a
+// half-replaced config (ADR-0015 decision 12).
 type App struct {
 	log        *slog.Logger
 	cfg        *config.Config
@@ -52,6 +59,7 @@ type App struct {
 	srv        *http.Server
 	metricsSrv *http.Server
 	healthSrv  *http.Server
+	loadedCfg  atomic.Pointer[config.Config]
 }
 
 // Build assembles the whole wiring graph from an already-validated config and
@@ -91,7 +99,7 @@ func Build(cfg *config.Config, log *slog.Logger) (*App, error) {
 
 	checker := health.New(reg, *cfg.Health.ProbeInterval, *cfg.Health.ProbeTimeout, log, collector)
 
-	return &App{
+	a := &App{
 		log:       log,
 		cfg:       cfg,
 		collector: collector,
@@ -112,7 +120,9 @@ func Build(cfg *config.Config, log *slog.Logger) (*App, error) {
 			Handler:           health.NewHandler(checker, reg, true, collector),
 			ReadHeaderTimeout: readHeaderTimeout,
 		},
-	}, nil
+	}
+	a.loadedCfg.Store(cfg)
+	return a, nil
 }
 
 // Handler returns the client-facing proxy handler.
@@ -125,6 +135,12 @@ func (a *App) Collector() *metrics.Collector { return a.collector }
 // Registry returns the backend registry, for callers (tests, health probes)
 // that need the current backend set.
 func (a *App) Registry() *backend.Registry { return a.reg }
+
+// LoadedConfig returns the config the running system was last built or reloaded
+// from. It is the baseline the reload operation (S4.T3) diffs a new config
+// against; in T2 only tests read it. It is safe to call concurrently with a
+// reload.
+func (a *App) LoadedConfig() *config.Config { return a.loadedCfg.Load() }
 
 // Run serves until ctx is cancelled, then performs the graceful shutdown of
 // the client, metrics, and health-endpoint servers in that order, each under

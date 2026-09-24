@@ -3,6 +3,7 @@ package backend
 import (
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -205,6 +206,146 @@ func TestRegistrySnapshotsAreFresh(t *testing.T) {
 	healthy[0] = nil
 
 	assert.Equal(t, []string{"backend-a", "backend-b", "backend-c"}, names(reg.Selectable()))
+}
+
+func TestRegistryVersionAndSnapshot(t *testing.T) {
+	reg, err := NewRegistry(testConfigs())
+	require.NoError(t, err)
+
+	v := reg.Version()
+	require.NotZero(t, v, "the initial snapshot must carry a nonzero version")
+
+	gotV, gotAll := reg.Snapshot()
+	assert.Equal(t, v, gotV, "Snapshot must report the version Version does")
+	assert.Equal(t, []string{"backend-a", "backend-b", "backend-c"}, names(gotAll))
+}
+
+func TestRegistryApplyKeepsUnchangedInstancesAndState(t *testing.T) {
+	reg, err := NewRegistry(testConfigs())
+	require.NoError(t, err)
+
+	a := backendByName(t, reg, "backend-a")
+	b := backendByName(t, reg, "backend-b")
+	a.MarkUnhealthy()
+	a.IncActive()
+	a.RecordLatency(50 * time.Millisecond)
+	openCircuit(t, b, 3)
+
+	v0 := reg.Version()
+
+	const addedURL = "http://127.0.0.1:9004"
+	newBackends := []config.BackendConfig{
+		{Name: "backend-b", URL: "http://127.0.0.1:9002"},
+		{Name: "backend-a", URL: "http://127.0.0.1:9001"},
+		{Name: "backend-d", URL: addedURL},
+	}
+	diff := config.BackendDiff{
+		Added: []config.BackendConfig{{Name: "backend-d", URL: addedURL}},
+		Removed: []config.BackendConfig{
+			{Name: "backend-c", URL: "http://127.0.0.1:9003"},
+		},
+		Unchanged: []config.BackendConfig{newBackends[0], newBackends[1]},
+	}
+
+	added, removed, err := reg.Apply(diff, newBackends)
+	require.NoError(t, err)
+
+	require.Len(t, added, 1)
+	assert.Equal(t, "backend-d", added[0].Name)
+	assert.True(t, added[0].IsHealthy(), "an added backend is constructed healthy")
+	assert.Equal(t, int64(0), added[0].ActiveConns(), "an added backend starts idle")
+	require.Len(t, removed, 1)
+	assert.Equal(t, "backend-c", removed[0].Name)
+	assert.True(t, removed[0].IsRemoved())
+
+	// Unchanged identities keep their instance and every piece of state.
+	assert.Same(t, a, backendByName(t, reg, "backend-a"))
+	assert.Same(t, b, backendByName(t, reg, "backend-b"))
+	assert.False(t, a.IsHealthy(), "unchanged health state must survive")
+	assert.Equal(t, int64(1), a.ActiveConns(), "unchanged active connections must survive")
+	assert.Equal(t, 50*time.Millisecond, a.EWMALatency(), "unchanged EWMA must survive")
+	assert.True(t, b.CircuitOpen(circuitTestCooldown), "unchanged circuit state must survive")
+
+	// The snapshot follows the new file's order, and the removed backend is gone.
+	assert.Equal(t, []string{"backend-b", "backend-a", "backend-d"}, names(reg.All()))
+	assert.NotContains(t, names(reg.All()), "backend-c")
+	assert.NotContains(t, names(reg.Selectable()), "backend-c")
+	assert.Greater(t, reg.Version(), v0, "version must increase monotonically")
+}
+
+func TestRegistryApplyReAddedIdentityIsFresh(t *testing.T) {
+	reg, err := NewRegistry(testConfigs()[:1])
+	require.NoError(t, err)
+
+	original := backendByName(t, reg, "backend-a")
+	identity := config.BackendConfig{Name: "backend-a", URL: "http://127.0.0.1:9001"}
+
+	_, removed, err := reg.Apply(config.BackendDiff{Removed: []config.BackendConfig{identity}}, nil)
+	require.NoError(t, err)
+	require.Len(t, removed, 1)
+	require.Same(t, original, removed[0])
+
+	added, _, err := reg.Apply(
+		config.BackendDiff{Added: []config.BackendConfig{identity}},
+		[]config.BackendConfig{identity},
+	)
+	require.NoError(t, err)
+	require.Len(t, added, 1)
+	assert.NotSame(t, original, added[0], "a re-added identity must be a fresh instance")
+	assert.False(t, added[0].IsRemoved(), "the fresh instance must not inherit the removed flag")
+	assert.True(t, added[0].IsHealthy())
+}
+
+func TestRegistryConcurrentApplyAndRead(t *testing.T) {
+	reg, err := NewRegistry(testConfigs())
+	require.NoError(t, err)
+
+	withD := append(append([]config.BackendConfig{}, testConfigs()...),
+		config.BackendConfig{Name: "backend-d", URL: "http://127.0.0.1:9004"})
+	withoutD := testConfigs()
+
+	var wg sync.WaitGroup
+	stop := make(chan struct{})
+
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				_ = reg.All()
+				_ = reg.Selectable()
+				_ = reg.Version()
+				_, _ = reg.Snapshot()
+			}
+		}()
+	}
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		defer close(stop)
+		for i := 0; i < 50; i++ {
+			if _, _, err := reg.Apply(
+				config.BackendDiff{Added: []config.BackendConfig{withD[len(withD)-1]}},
+				withD,
+			); err != nil {
+				t.Errorf("apply add: %v", err)
+			}
+			if _, _, err := reg.Apply(
+				config.BackendDiff{Removed: []config.BackendConfig{withD[len(withD)-1]}},
+				withoutD,
+			); err != nil {
+				t.Errorf("apply remove: %v", err)
+			}
+		}
+	}()
+
+	wg.Wait()
 }
 
 func TestRegistryConcurrentMutation(t *testing.T) {

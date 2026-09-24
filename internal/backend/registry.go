@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/url"
 	"slices"
+	"sync/atomic"
 
 	"github.com/DMJain/l7LoadBalancer/internal/config"
 )
@@ -23,51 +24,96 @@ type CircuitGate interface {
 	Allow(b *Backend) bool
 }
 
-// Registry holds the set of backends built from validated config and
-// mediates concurrent read (selectors, proxy) and write (health checker,
-// Sprint 3; config reload, Sprint 4) access.
-//
-// Sprint 1: immutable after construction. Sprint 4 adds hot-reload via
-// atomic.Pointer swap.
-//
-// Concurrency: the backend slice is fixed at construction. circuit is written
-// once by SetCircuitGate before the registry is served and only read
-// afterwards, so the request path needs no lock — the same contract as
-// Proxy.RegisterObserver. See docs/design/sprint-1-contracts.md and ADR-0012.
-type Registry struct {
+// registrySnapshot is the registry's whole backend set as one immutable value:
+// a monotonically increasing version plus the ordered backend slice. Bundling
+// the two means a reader gets a version and a backend set that cannot disagree,
+// which is what lets the consistent-hash selector build a ring from the exact
+// set its cached version names (ADR-0015 decisions 5 and 9). A snapshot is
+// never mutated after it is published; a new one is built and swapped in whole.
+type registrySnapshot struct {
+	version  uint64
 	backends []*Backend
-	circuit  CircuitGate
 }
 
-// NewRegistry builds a Registry from validated backend config. It parses
-// each BackendConfig.URL into a *url.URL and starts every backend healthy:
-// there is no health checker yet to set it any other way, and Sprint 1's
-// exit criteria requires all configured backends reachable from the start.
-// Sprint 3's health checker takes over health state from here.
+// Registry holds the set of backends built from validated config and mediates
+// concurrent read (selectors, proxy) and write (health checker, Sprint 3;
+// config reload, Sprint 4) access.
 //
-// The registry holds an ordered slice (no name-indexed map) — preserving
-// config order, which LeastConnections relies on for its deterministic
-// tie-break. Nothing through Sprint 3 needs O(1) lookup by name; Sprint 4's
-// reload-diffing will add it if required.
+// Concurrency: the backend set is one immutable snapshot behind an
+// atomic.Pointer, replaced whole by Apply. All readers — All, Selectable,
+// Version, Snapshot — load the pointer once and never lock, so a swap is
+// invisible to a reader that already loaded the old snapshot. Apply is the
+// single writer, called by one goroutine at a time (the reload loop). The
+// circuit gate is written once by SetCircuitGate before the registry is served
+// and only read afterwards, the same contract as Proxy.RegisterObserver. See
+// docs/design/sprint-1-contracts.md and ADR-0012, ADR-0015.
+type Registry struct {
+	snap    atomic.Pointer[registrySnapshot]
+	circuit CircuitGate
+}
+
+// NewRegistry builds a Registry from validated backend config. It parses each
+// BackendConfig.URL into a *url.URL and starts every backend healthy: at
+// process startup there is no previously-serving fleet to protect and the
+// process must come up serving, so it trusts the operator's file and lets the
+// active checker correct it (ADR-0015 decision 10). The initial snapshot's
+// version is 1; every later Apply increments it.
+//
+// The registry preserves config order, which LeastConnections relies on for
+// its deterministic tie-break and the file order dictates after a reload. It
+// holds no name-indexed map: Apply builds a per-call name map from the current
+// snapshot, which is off the request path.
 func NewRegistry(cfgs []config.BackendConfig) (*Registry, error) {
 	backends := make([]*Backend, 0, len(cfgs))
 	for _, cfg := range cfgs {
-		u, err := url.Parse(cfg.URL)
+		b, err := newBackend(cfg)
 		if err != nil {
-			return nil, fmt.Errorf("backend: parse url %q for %q: %w", cfg.URL, cfg.Name, err)
+			return nil, err
 		}
-		b := &Backend{Name: cfg.Name, URL: u}
-		b.MarkHealthy()
 		backends = append(backends, b)
 	}
-	return &Registry{backends: backends}, nil
+	r := &Registry{}
+	r.snap.Store(&registrySnapshot{version: 1, backends: backends})
+	return r, nil
 }
 
-// All returns a fresh snapshot slice of every backend, regardless of
-// health, preserving registry order. The caller may mutate the returned
-// slice without affecting the registry; the backends themselves are shared.
+// newBackend parses one validated backend config into a fresh, healthy Backend
+// (see NewRegistry for why healthy is the construction default). It is shared
+// by NewRegistry and Apply, so a reload-added backend is built exactly like a
+// startup backend.
+func newBackend(cfg config.BackendConfig) (*Backend, error) {
+	u, err := url.Parse(cfg.URL)
+	if err != nil {
+		return nil, fmt.Errorf("backend: parse url %q for %q: %w", cfg.URL, cfg.Name, err)
+	}
+	b := &Backend{Name: cfg.Name, URL: u}
+	b.MarkHealthy()
+	return b, nil
+}
+
+// All returns a fresh snapshot slice of every backend in the current snapshot,
+// regardless of health, preserving registry order. The caller may mutate the
+// returned slice without affecting the registry; the backends themselves are
+// shared.
 func (r *Registry) All() []*Backend {
-	return slices.Clone(r.backends)
+	return slices.Clone(r.snap.Load().backends)
+}
+
+// Version returns the current snapshot's version. It is a monotonically
+// increasing counter, bumped by every Apply, that the consistent-hash selector
+// keys its ring cache on. Callers that need a version and its backend set to
+// agree must use Snapshot, not Version followed by All.
+func (r *Registry) Version() uint64 {
+	return r.snap.Load().version
+}
+
+// Snapshot returns the current snapshot's version and a fresh slice of every
+// backend in it, both from a single atomic load, so the two cannot disagree.
+// It is the read the consistent-hash selector uses to decide whether its
+// cached ring is stale (ADR-0015 decision 9).
+func (r *Registry) Snapshot() (uint64, []*Backend) {
+	snap := r.snap.Load()
+	return snap.version, slices.Clone(snap.backends)
 }
 
 // SetCircuitGate installs g as the registry's circuit gate. It must be called
@@ -89,8 +135,9 @@ func (r *Registry) SetCircuitGate(g CircuitGate) {
 // the old name would have quietly meant something narrower than what it
 // filters on once circuit state existed.
 func (r *Registry) Selectable() []*Backend {
-	selectable := make([]*Backend, 0, len(r.backends))
-	for _, b := range r.backends {
+	snap := r.snap.Load()
+	selectable := make([]*Backend, 0, len(snap.backends))
+	for _, b := range snap.backends {
 		if b.IsHealthy() && (r.circuit == nil || !r.circuit.Open(b)) {
 			selectable = append(selectable, b)
 		}
@@ -107,4 +154,79 @@ func (r *Registry) Allow(b *Backend) bool {
 		return true
 	}
 	return r.circuit.Allow(b)
+}
+
+// Apply atomically replaces the registry's backend set with the one the reload
+// diff describes, while traffic flows, and returns the freshly-constructed
+// added instances and the retired removed ones. It is the single writer; every
+// reader loads the snapshot pointer once and never locks, so a swap is atomic
+// to readers (ADR-0015 decisions 5–6).
+//
+// diff classifies by backend identity (name, URL): an identity present in both
+// is unchanged and keeps its existing instance and all its state; one only in
+// the new config is added and gets a fresh instance; one only in the old config
+// is removed. newBackends supplies the new file's order — the diff's separate
+// Added/Unchanged slices cannot express how the two interleave — and Apply
+// walks it in order, so the new file dictates round-robin rotation and
+// LeastConnections' tie-break (ADR-0015 decision 3).
+//
+// Each removed backend is marked removed before the snapshot is swapped, so a
+// request selected just before the swap already sees the flag when it completes
+// (ADR-0015 decision 7). Removed backends then leave All and Selectable at the
+// swap. A re-added identity is always fresh: it is in diff.Added, so it never
+// matches a current instance and never inherits the old instance's state
+// (ADR-0015 decision 6).
+//
+// The only error is an unparseable URL, which config.Validate has already
+// rejected for every production caller; it is returned rather than panicked so
+// a malformed programmatic input cannot half-apply. On error nothing is marked
+// or swapped: the fresh instances built so far are discarded.
+func (r *Registry) Apply(diff config.BackendDiff, newBackends []config.BackendConfig) (added, removed []*Backend, err error) {
+	cur := r.snap.Load()
+
+	byName := make(map[string]*Backend, len(cur.backends))
+	for _, b := range cur.backends {
+		byName[b.Name] = b
+	}
+	addedIdentities := make(map[string]struct{}, len(diff.Added))
+	for _, cfg := range diff.Added {
+		addedIdentities[backendConfigIdentity(cfg)] = struct{}{}
+	}
+
+	next := make([]*Backend, 0, len(newBackends))
+	for _, cfg := range newBackends {
+		if _, fresh := addedIdentities[backendConfigIdentity(cfg)]; fresh {
+			b, err := newBackend(cfg)
+			if err != nil {
+				return nil, nil, err
+			}
+			next = append(next, b)
+			added = append(added, b)
+			continue
+		}
+		b := byName[cfg.Name]
+		if b == nil {
+			return nil, nil, fmt.Errorf("backend: apply: unchanged backend %q not in current snapshot", cfg.Name)
+		}
+		next = append(next, b)
+	}
+
+	for _, cfg := range diff.Removed {
+		b := byName[cfg.Name]
+		if b == nil {
+			continue
+		}
+		b.markRemoved()
+		removed = append(removed, b)
+	}
+
+	r.snap.Store(&registrySnapshot{version: cur.version + 1, backends: next})
+	return added, removed, nil
+}
+
+// backendConfigIdentity is the identity key Apply matches added and unchanged
+// entries by: the (name, URL) pair, the same identity config.DiffBackends uses.
+// The NUL separator cannot occur in either a validated name or a URL.
+func backendConfigIdentity(cfg config.BackendConfig) string {
+	return cfg.Name + "\x00" + cfg.URL
 }

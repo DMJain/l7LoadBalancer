@@ -723,3 +723,85 @@ func TestProxyCircuitOpensOnRepeated5xxAndStopsRouting(t *testing.T) {
 			"an open-circuit backend must stop receiving traffic")
 	}
 }
+
+// TestProxyObserveSkipsRemovedBackend pins ADR-0015 decision 8 at the fan-out
+// seam: once a backend is removed, neither a successful nor a failed round trip
+// reaches any observer.
+func TestProxyObserveSkipsRemovedBackend(t *testing.T) {
+	const url = "http://127.0.0.1:9001"
+	reg := registryFrom(t, backendEntry{"backend-a", url})
+	b := reg.All()[0]
+
+	p := New(reg, balancer.NewRoundRobin(reg))
+	spy := &spyObserver{}
+	p.RegisterObserver(spy)
+
+	_, _, err := reg.Apply(
+		config.BackendDiff{Removed: []config.BackendConfig{{Name: "backend-a", URL: url}}},
+		nil,
+	)
+	require.NoError(t, err)
+
+	p.observe(&reqState{backend: b}, time.Millisecond, true)
+	p.observe(&reqState{backend: b}, p2cFailurePenalty, false)
+
+	assert.Empty(t, spy.snapshot(),
+		"a removed backend must report nothing to any observer, success or failure")
+}
+
+// TestProxySuppressesObserversForRequestCompletingAfterRemoval is the
+// integration counterpart: a request selected before its backend is removed is
+// still in flight when the swap lands. On completion it must reach no observer,
+// yet its active-connection slot must still be released — removed backends are
+// suppressed from observers but not from connection accounting.
+func TestProxySuppressesObserversForRequestCompletingAfterRemoval(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+	}{
+		{name: "2xx completion", status: http.StatusOK},
+		{name: "5xx completion", status: http.StatusInternalServerError},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			entered := make(chan struct{})
+			release := make(chan struct{})
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				close(entered)
+				<-release
+				w.WriteHeader(tt.status)
+			}))
+			t.Cleanup(srv.Close)
+
+			reg := registryFrom(t, backendEntry{"backend-a", srv.URL})
+			b := reg.All()[0]
+			p := New(reg, balancer.NewRoundRobin(reg))
+			spy := &spyObserver{}
+			p.RegisterObserver(spy)
+
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				p.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil))
+			}()
+
+			<-entered // the request is dispatched and blocked in the backend
+
+			_, removed, err := reg.Apply(
+				config.BackendDiff{Removed: []config.BackendConfig{{Name: "backend-a", URL: srv.URL}}},
+				nil,
+			)
+			require.NoError(t, err)
+			require.Len(t, removed, 1)
+
+			close(release)
+			<-done
+
+			assert.Empty(t, spy.snapshot(),
+				"a request completing on a removed backend must reach no observer")
+			assert.Zero(t, b.ActiveConns(),
+				"the removed backend's active-connection slot must still be released")
+		})
+	}
+}

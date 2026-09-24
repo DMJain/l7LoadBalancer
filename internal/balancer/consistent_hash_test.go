@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/DMJain/l7LoadBalancer/internal/backend"
+	"github.com/DMJain/l7LoadBalancer/internal/config"
 )
 
 // The bounded-loads selector routes by client IP like naiveConsistentHash, so
@@ -298,4 +299,114 @@ func TestConsistentHashBoundedLoadsSelectContext(t *testing.T) {
 
 	require.NoError(t, err)
 	require.NotNil(t, b)
+}
+
+// TestConsistentHashBoundedLoadsRebuildsRingOnVersionChange pins ADR-0015
+// decision 9: the selector caches its ring against the snapshot version and
+// rebuilds from the new backend set when the version moves, so a removed
+// backend owns no ring position after the swap and an added one takes its
+// share.
+func TestConsistentHashBoundedLoadsRebuildsRingOnVersionChange(t *testing.T) {
+	reg := ringRegistry(t, "backend-a", "backend-b")
+	sel := NewConsistentHashBoundedLoads(reg)
+
+	const (
+		aURL = "http://127.0.0.1:9001"
+		bURL = "http://127.0.0.1:9002"
+		cURL = "http://127.0.0.1:9003"
+	)
+	newBackends := []config.BackendConfig{
+		{Name: "backend-b", URL: bURL},
+		{Name: "backend-c", URL: cURL},
+	}
+	diff := config.BackendDiff{
+		Added:     []config.BackendConfig{{Name: "backend-c", URL: cURL}},
+		Removed:   []config.BackendConfig{{Name: "backend-a", URL: aURL}},
+		Unchanged: []config.BackendConfig{{Name: "backend-b", URL: bURL}},
+	}
+	_, _, err := reg.Apply(diff, newBackends)
+	require.NoError(t, err)
+
+	rng := rand.New(rand.NewSource(20260925))
+	for _, ip := range sampleKeys(rng, 200) {
+		got := selectNameForAddr(t, sel, ip+":12345")
+		assert.Contains(t, []string{"backend-b", "backend-c"}, got,
+			"a removed backend must own no ring position after the swap")
+	}
+}
+
+// TestConsistentHashBoundedLoadsConcurrentSelectAcrossSwap drives the selector
+// from many goroutines while another goroutine swaps the backend set the ring
+// is built from, so the version-check/rebuild path is exercised under -race.
+func TestConsistentHashBoundedLoadsConcurrentSelectAcrossSwap(t *testing.T) {
+	reg := ringRegistry(t, "backend-a", "backend-b", "backend-c", "backend-d")
+	sel := NewConsistentHashBoundedLoads(reg)
+
+	const (
+		aURL = "http://127.0.0.1:9001"
+		bURL = "http://127.0.0.1:9002"
+		cURL = "http://127.0.0.1:9003"
+		dURL = "http://127.0.0.1:9004"
+		eURL = "http://127.0.0.1:9005"
+	)
+	withD := []config.BackendConfig{
+		{Name: "backend-a", URL: aURL},
+		{Name: "backend-b", URL: bURL},
+		{Name: "backend-c", URL: cURL},
+		{Name: "backend-d", URL: dURL},
+	}
+	withE := []config.BackendConfig{
+		{Name: "backend-a", URL: aURL},
+		{Name: "backend-b", URL: bURL},
+		{Name: "backend-c", URL: cURL},
+		{Name: "backend-e", URL: eURL},
+	}
+	addE := config.BackendDiff{
+		Added:     []config.BackendConfig{{Name: "backend-e", URL: eURL}},
+		Removed:   []config.BackendConfig{{Name: "backend-d", URL: dURL}},
+		Unchanged: withD[:3],
+	}
+	addD := config.BackendDiff{
+		Added:     []config.BackendConfig{{Name: "backend-d", URL: dURL}},
+		Removed:   []config.BackendConfig{{Name: "backend-e", URL: eURL}},
+		Unchanged: withE[:3],
+	}
+
+	rng := rand.New(rand.NewSource(20260925))
+	keys := sampleKeys(rng, 100)
+
+	var wg sync.WaitGroup
+	stop := make(chan struct{})
+	for _, key := range keys {
+		wg.Add(1)
+		go func(key string) {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				b, err := selectForAddr(t, sel, key+":12345")
+				assert.NoError(t, err)
+				assert.NotNil(t, b)
+			}
+		}(key)
+	}
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		defer close(stop)
+		for i := 0; i < 50; i++ {
+			if _, _, err := reg.Apply(addE, withE); err != nil {
+				t.Errorf("apply add e: %v", err)
+			}
+			if _, _, err := reg.Apply(addD, withD); err != nil {
+				t.Errorf("apply add d: %v", err)
+			}
+		}
+	}()
+
+	wg.Wait()
 }

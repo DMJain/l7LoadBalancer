@@ -83,14 +83,16 @@ const (
 // metrics (Sprint 3). latencyEWMA is written by the proxy on every round
 // trip (S2.T3) and read by PowerOfTwoChoicesEWMA. circuit is the whole
 // circuit-breaker state (S3.T3), read and CAS-updated by every selector
-// (via Registry.Selectable) and the proxy admission gate. All fields are
-// unexported; callers MUST use
+// (via Registry.Selectable) and the proxy admission gate. removed is set
+// once by Registry.Apply just before a backend leaves the snapshot (S4.T2)
+// and read by the proxy's observer fan-out on every round trip. All fields
+// are unexported; callers MUST use
 // IsHealthy/MarkHealthy/MarkUnhealthy/IncActive/DecActive/ActiveConns/
 // RecordLatency/EWMALatency/CircuitOpen/CircuitAllow/CircuitSuccess/
-// CircuitFailure and never touch the fields directly — this keeps the field
-// representation free to change without touching balancer or proxy code.
-// See docs/design/sprint-1-contracts.md "Concurrency ownership table",
-// ADR-0010, ADR-0011, and ADR-0012.
+// CircuitFailure/IsRemoved and never touch the fields directly — this keeps
+// the field representation free to change without touching balancer or proxy
+// code. See docs/design/sprint-1-contracts.md "Concurrency ownership table",
+// ADR-0010, ADR-0011, ADR-0012, and ADR-0015.
 type Backend struct {
 	Name string
 	URL  *url.URL
@@ -99,6 +101,7 @@ type Backend struct {
 	active      atomic.Int64
 	latencyEWMA atomic.Int64
 	circuit     atomic.Pointer[circuitSnapshot]
+	removed     atomic.Bool
 }
 
 // IsHealthy reports whether the backend is currently eligible for
@@ -146,6 +149,26 @@ func (b *Backend) DecActive() {
 // S1.T3.
 func (b *Backend) ActiveConns() int64 {
 	return b.active.Load()
+}
+
+// markRemoved flags the backend as retired from the fleet. It is called only
+// by Registry.Apply, and only immediately before the swap that drops the
+// backend from the snapshot, so a request selected just before the swap
+// already observes the flag when it completes (ADR-0015 decision 7). It is
+// unexported because no caller outside internal/backend may retire a backend:
+// the registry's apply is the single writer.
+func (b *Backend) markRemoved() {
+	b.removed.Store(true)
+}
+
+// IsRemoved reports whether the backend has been retired by a registry swap.
+// Once true it is never reset for that instance — a re-added identity gets a
+// fresh Backend (ADR-0015 decision 6). The proxy reads it to suppress the
+// round-trip observer fan-out for a backend that is no longer part of the
+// fleet (ADR-0015 decision 8); the active-connection accounting is
+// deliberately not gated on it, so a removed backend still releases its slot.
+func (b *Backend) IsRemoved() bool {
+	return b.removed.Load()
 }
 
 // RecordLatency folds one observed round-trip duration into the backend's

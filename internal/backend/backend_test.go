@@ -47,6 +47,15 @@ func TestBackendHealthyState(t *testing.T) {
 	assert.True(t, b.IsHealthy(), "MarkHealthy must be able to recover a backend marked unhealthy")
 }
 
+func TestBackendRemovedFlag(t *testing.T) {
+	b := &Backend{Name: "backend-a"}
+
+	assert.False(t, b.IsRemoved(), "a zero-value backend is not removed")
+
+	b.markRemoved()
+	assert.True(t, b.IsRemoved())
+}
+
 func TestBackendActiveConns(t *testing.T) {
 	b := &Backend{Name: "backend-a"}
 	assert.Equal(t, int64(0), b.ActiveConns())

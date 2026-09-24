@@ -137,7 +137,7 @@ func (s *ConsistentHashBoundedLoads) wouldNeedFallback(addr string) bool {
 		return false
 	}
 	capacity := capacityFor(selectable)
-	for b := range s.ring.candidates(requestHashKey(requestForAddr(addr))) {
+	for b := range s.currentRing().candidates(requestHashKey(requestForAddr(addr))) {
 		if s.admits(b, capacity) {
 			return false
 		}
