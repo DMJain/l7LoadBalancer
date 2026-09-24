@@ -9,13 +9,10 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/DMJain/l7LoadBalancer/internal/app"
 	"github.com/DMJain/l7LoadBalancer/internal/backend"
-	"github.com/DMJain/l7LoadBalancer/internal/balancer"
-	"github.com/DMJain/l7LoadBalancer/internal/circuit"
 	"github.com/DMJain/l7LoadBalancer/internal/config"
-	"github.com/DMJain/l7LoadBalancer/internal/health"
 	"github.com/DMJain/l7LoadBalancer/internal/metrics"
-	"github.com/DMJain/l7LoadBalancer/internal/proxy"
 )
 
 // Chaos-test timing: the config-driven fast path. ADR-0011 decision 10 keeps
@@ -77,14 +74,23 @@ func chaosConfig(fbs []*flippableBackend) *config.Config {
 	}
 }
 
-// assemble duplicates cmd/l7LoadBalancer's Sprint 3 wiring: collector, seeded
-// registry, breaker installed as both the registry gate and an observer,
-// selector, proxy with every observer registered, and the active checker
-// started on a context cancelled at test cleanup. It is the local duplicate the
-// bundle's spec accepts; Sprint 4's programmatic Run(ctx, cfg) seam will either
-// converge with it or render it dead code.
+// assemble builds the system through internal/app's Build seam — production
+// and test wiring now converge, closing the Sprint 3 retro's assemble debt —
+// and starts it with Run on a context cancelled at test cleanup. The client,
+// metrics, and health-endpoint listeners all bind :0 (the tests drive the
+// handler directly). The returned handle keeps the same shape the chaos
+// assertions read before the swap.
 func assemble(t *testing.T, cfg *config.Config) *assembly {
 	t.Helper()
+
+	// Run serves all three servers; the tests never want a fixed port.
+	zero := ":0"
+	if cfg.Metrics.Listen == nil {
+		cfg.Metrics.Listen = &zero
+	}
+	if cfg.HealthEndpoint.Listen == nil {
+		cfg.HealthEndpoint.Listen = &zero
+	}
 	require.NoError(t, cfg.Validate())
 
 	logs := &captureHandler{}
@@ -98,39 +104,24 @@ func assemble(t *testing.T, cfg *config.Config) *assembly {
 	slog.SetDefault(log)
 	t.Cleanup(func() { slog.SetDefault(prevDefault) })
 
-	collector := metrics.NewCollector()
-
-	reg, err := backend.NewRegistry(cfg.Backends)
-	require.NoError(t, err)
-	seedMetrics(collector, reg)
-
-	breaker := circuit.New(*cfg.Circuit.Cooldown, log, collector)
-	reg.SetCircuitGate(breaker)
-
-	sel, err := balancer.NewFromConfig(cfg, reg)
+	application, err := app.Build(cfg, log)
 	require.NoError(t, err)
 
-	p := proxy.New(reg, sel)
-	p.SetMetrics(collector)
-	p.RegisterObserver(proxy.NewLatencyObserver())
-	p.RegisterObserver(health.NewOutlierDetector(log, collector))
-	p.RegisterObserver(breaker)
+	runCtx, cancel := context.WithCancel(context.Background())
+	runDone := make(chan struct{})
+	go func() {
+		defer close(runDone)
+		_ = application.Run(runCtx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-runDone
+	})
 
-	checker := health.New(reg, *cfg.Health.ProbeInterval, *cfg.Health.ProbeTimeout, log, collector)
-	ctx, cancel := context.WithCancel(context.Background())
-	checker.Start(ctx)
-	t.Cleanup(cancel)
-
-	return &assembly{handler: p, collector: collector, logs: logs, reg: reg}
-}
-
-// seedMetrics mirrors cmd/l7LoadBalancer's startup seeding (unexported there),
-// so every backend's gauge series exists before any failure — the baseline the
-// chaos assertions start from.
-func seedMetrics(c *metrics.Collector, reg *backend.Registry) {
-	for _, b := range reg.All() {
-		c.SetActiveConnections(b.Name, 0)
-		c.SetBackendHealthy(b.Name, true)
-		c.SetCircuitState(b.Name, metrics.CircuitStateClosed)
+	return &assembly{
+		handler:   application.Handler(),
+		collector: application.Collector(),
+		logs:      logs,
+		reg:       application.Registry(),
 	}
 }

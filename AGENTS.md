@@ -133,6 +133,9 @@ Client → http.Server → Proxy.ServeHTTP → Selector.Select → ReverseProxy.
 cmd/l7LoadBalancer
       │
       ▼
+    internal/app
+      │
+      ▼
    internal/proxy ──────┐
       │                 │
       ▼                 ▼
@@ -142,6 +145,8 @@ internal/balancer → internal/backend
               ▼
         internal/config
 
+internal/app      — wiring graph: imports proxy, health, circuit, metrics,
+                    balancer, backend, config; imported only by main and tests (Sprint 4)
 internal/logger   — leaf, no internal deps
 internal/metrics  — leaf, no internal deps (Sprint 3)
 internal/health   — depends on backend (Sprint 3)
@@ -288,11 +293,18 @@ internal/circuit  — depends on backend (Sprint 3)
 - **State and policy split**: the state (enum, consecutive-failure count, opened-at timestamp, half-open-trial flag) lives on `Backend` as one immutable snapshot behind `atomic.Pointer`, replaced by CAS; the policy (failure-to-open threshold constant, config cooldown) lives in `internal/circuit.Breaker`, which passes both into `Backend`'s methods. `circuit` imports `backend`, never the reverse. `Backend.{CircuitOpen,CircuitAllow,CircuitSuccess,CircuitFailure}` are the state API; `CircuitGate` is defined in `backend` and implemented by `circuit.Breaker` (consumer-defined interface, keeping the graph acyclic). See ADR-0011 and ADR-0012.
 - **Admission**: the proxy calls `Registry.Allow(b)` after `Select()` and before `IncActive()`; a denial is answered 503 without dispatching or touching active-connection accounting. `Registry.Selectable()` excludes an `Open` circuit but includes a `Half-Open` one, so a trial is a real selected request, not a synthetic probe.
 
+#### `internal/app` — Wiring graph and lifecycle (Sprint 4)
+
+**Concept**: One importable package owns the whole assembly so production and tests build the same system. `Build(cfg, log)` performs today's wiring (collector, seeded registry, breaker as gate + observer, selector, proxy with all observers, checker, health-endpoint handler) and returns an application value exposing the client handler, the collector, and the registry. `Run(ctx)` starts the checker and the client, metrics, and health-endpoint servers, then serves until `ctx` is cancelled and gracefully shuts them down in that order. No reload operation exists yet — S4.T3 adds it.
+
+- The package sits above proxy, health, circuit, metrics, balancer, backend, and config; only `main` and tests import it.
+- `main` is left with flags, file I/O, signals, and the `probe` subcommand.
+
 #### `cmd/l7LoadBalancer/main.go` — Entry point
 
-- Thin wiring layer: config.Load → backend.NewRegistry → balancer.NewFromConfig → proxy.New → http.Server.
-- Graceful shutdown on SIGINT/SIGTERM (already scaffolded).
-- Sprint 4 adds SIGHUP for zero-downtime reload.
+- Flags, file I/O, and signals only: config.Load → config.Validate → app.Build → app.Run on a shared SIGINT/SIGTERM context (S4.T0).
+- The `probe` subcommand and the version/commit startup lines live here (S3.T10).
+- Sprint 4 adds SIGHUP for zero-downtime reload, orchestrated in `internal/app`.
 
 ### Sprint 4 — Hard subsystems
 
@@ -363,7 +375,8 @@ All non-trivial decisions must have an ADR. Current ADRs:
 
 ## Directory map
 
-- `cmd/l7LoadBalancer/` — binary entry point.
+- `cmd/l7LoadBalancer/` — binary entry point: flags, file I/O, signals.
+- `internal/app/` — the wiring graph behind `Build`/`Run`; the one place production, the chaos harness, and tests assemble the system (Sprint 4).
 - `internal/proxy/` — the reverse-proxy handler, request path wiring.
 - `internal/backend/` — backend struct, registry, state management.
 - `internal/balancer/` — `Selector` interface + implementations (roundrobin, leastconn, consistent-hash-bounded, p2c-ewma).

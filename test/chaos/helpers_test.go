@@ -1,13 +1,13 @@
 // Package chaos_test holds the Sprint 3 chaos scenarios. It is an external
 // test package (package chaos_test, no non-test files) so its import graph is
 // exactly a consumer's and the acyclic package guarantee stays visible: the
-// tests compose internal/backend, internal/balancer, internal/proxy,
-// internal/health, internal/circuit, internal/metrics, and internal/logger the
-// way cmd/l7LoadBalancer does, but through their exported APIs only.
+// tests assemble the system through internal/app's Build/Run seam (S4.T0),
+// which is the same wiring main uses, and reach the subsystems through their
+// exported APIs only.
 //
 // The harness here is shared with S3.T9's circuit chaos test: assemble()
-// duplicates main.go's Sprint 3 wiring, flippableBackend injects failures,
-// and the log/gauge helpers read the two observability surfaces back.
+// builds through internal/app, flippableBackend injects failures, and the
+// log/gauge helpers read the two observability surfaces back.
 package chaos_test
 
 import (
