@@ -10,6 +10,8 @@ Live state of the project. Every agent updates this file per the protocol in `AG
 
 **Sprint 3 complete.** All of Sprint 3 (S3.T0.1–T13, including T6.5 and the four demo-stack tickets T10–T13) is [DONE]. Scoped in four passes: `.scratch/s3-t1-t3-health-passive-circuit/` (one spec + six tickets), `.scratch/s3-t4-t7-observability/` (one spec + ten tickets), `.scratch/s3-t6-5-t8-t9-chaos/` (one spec + three tickets: the reinstatement-gate fix plus the T8/T9 chaos tests), and `.scratch/s3-t10-t13-demo-stack/` (one spec + seven tickets: this MILESTONES amendment, the T12 prefactors + handlers, the T10 probe subcommand + Dockerfile, the T11 root compose, and the T13 retro). Done: S3.T0.1 (`MarkHealthy`/`MarkUnhealthy`), S3.T0.2 (round-trip observer fan-out), S3.T0.3 (probe/cooldown config schema), S3.T1 (active health checks), S3.T2 (passive outlier detection), S3.T3 (circuit breaker + `Registry.Selectable()` rename), S3.T4 (metrics package + `metrics.listen` endpoint), S3.T5.1 (logger test coverage), S3.T5.2 (`event`/`reason` transition vocabulary), S3.T5.3 (health transition log lines), S3.T5.4 (circuit transition log lines), S3.T6.1 (whole-request counter + histogram wired into the proxy), S3.T6.2 (active-connections gauge + its startup seeding), S3.T6.3 (backend-healthy gauge + its startup seeding), S3.T6.4 (circuit-state gauge + its startup seeding), S3.T7 (Grafana dashboard + Prometheus/Grafana observability demo stack), S3.T6.5 (active-checker reinstatement gate `==` → `>=`), S3.T8 (backend eviction/recovery chaos test + `docker stop` smoke), S3.T9 (circuit-breaker trip/half-open chaos test + 5xx-injection smoke), S3.T10–T13.D0 (MILESTONES.md amendment), S3.T12.0 (health-endpoint prefactor APIs: `ProbeRoundComplete`/`RecordProbe`/`health_endpoint.listen`), S3.T12 (health endpoint handlers + third listener + ADR-0014), S3.T10.0 (probe subcommand + version/commit injection), S3.T10 (multi-stage distroless Dockerfile + `.dockerignore` allowlist + baked `configs/docker.yaml` + OCI labels + ADR-0005 amendment), S3.T11 (repo-root `docker-compose.yml` + `prometheus-stack.yml` + ADR-0013 decision 18), S3.T13 (Sprint 3 retro + additive `docs/architecture.md` update, spec D39–D44).
 
+**Sprint 4 in progress.** The zero-downtime reload bundle is scoped in `.scratch/s4-t0-t4-reload/` as one spec plus eight strictly serial tickets (each `Blocked by:` the one before): S4.D0 (tracking amendment), S4.T0 (application seam), S4.T1 (config diffing + ADR-0015), S4.T2 (registry snapshot swap), S4.T3.0 (reload hook-up APIs), S4.T3 (SIGHUP orchestration), S4.T4.0 (drain-cancel join + ADR-0016), and S4.T4 (drain lifecycle). All are `[TODO]` below. The bundle carries Sprint 4's first exit criterion: SIGHUP with 1000 in-flight requests drops zero.
+
 ## Sprint 1 — Foundation
 
 - [DONE] S1.T0 — Repository scaffold (bootstrap agent, 2026-08-31T00:00:00Z, commit: 25c1952)
@@ -410,9 +412,20 @@ Not approved, not claimed, not implemented. Surfaced by the S3.T6.3 two-axis rev
 
 _None currently outstanding._
 
-## Sprint 4, 5
+## Sprint 4 — Hard Subsystems
 
-See `MILESTONES.md`. Tasks added per sprint.
+Scoped in `.scratch/s4-t0-t4-reload/` as one bundle spec plus eight strictly serial tickets (each `Blocked by:` the one before), with the `.0` split-outs following the S3.T12.0 precedent so each fits one context. The bundle's `spec.md` is the authoritative scope boundary; every story and implementation decision is tagged with exactly one ticket there.
+
+- [IN_PROGRESS] S4.D0 — Tracking amendment: MILESTONES + PROGRESS (opencode, started 2026-09-25T00:58:00+05:30)
+  - Goal: make the Sprint 4 reload work auditable before any of it is built, following the amendment-first precedent set by S3.T10–T13.D0: amend `MILESTONES.md`'s Sprint 4 deliverables with the application seam and add the S4.T0–T4 entries plus the four deferred follow-ups to `PROGRESS.md`. Spec stories 46–47, decisions D1–D2.
+  - Files: `MILESTONES.md`, `PROGRESS.md`, `.scratch/s4-t0-t4-reload/issues/01-d0-tracking-amendment.md`, `docs/sessions/2026-09-25-opencode.md`
+  - Depends on: none
+  - Acceptance: Sprint 4 deliverables gain one bullet — the programmatic application seam (build/run/reload) sourced from the Sprint 3 retro handoff — with the existing SIGHUP reload bullet, exit criteria, and deferred-deployment-target paragraph unchanged; `PROGRESS.md` gains `[TODO]` entries S4.T0, S4.T1, S4.T2, S4.T3.0, S4.T3, S4.T4.0, S4.T4 each with Goal/Depends on/Acceptance/Test approach drawn from tickets 02–08 and a pointer to `.scratch/s4-t0-t4-reload/spec.md`; four proposed tickets recorded (reload-outcome counter; client-cancellation-misclassified-as-backend-failure; non-backend hot-reload; pre-warming added backends); the status line reads Sprint 4 in progress; the substantive amendment lands as `docs(milestones): add S4 reload tickets and seam deliverable` touching only `MILESTONES.md` and `PROGRESS.md`.
+  - Test approach: none — docs-only (AGENTS.md TDD exception).
+
+## Sprint 5
+
+See `MILESTONES.md`. Tasks added as scoped.
 
 ## Session log
 
