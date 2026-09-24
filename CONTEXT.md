@@ -11,6 +11,50 @@ An upstream server the load balancer can route requests to, tracked by the
 registry for identity, health, and active-connection count.
 _Avoid_: server, upstream, node (reserve "node" for hash-ring positions)
 
+**Backend identity** (reload context):
+The (name, URL) pair. Two configs describe the *same* backend only when both
+match; a name kept with a new URL is a different backend — the old one is
+removed (and drains) and a new one is added with fresh state. Names are unique
+within one config file, so for a short while during a reload two backends of
+the same name can coexist: one draining, one fresh.
+_Avoid_: same backend (when only the name matches)
+
+**Reload**:
+Replacing the running backend set with the one in a re-read config file,
+triggered by SIGHUP, without restarting the process or dropping in-flight
+requests. Only the backend list may differ; a reload whose file changes any
+other field is rejected whole and the previous config keeps serving. A reload
+that fails to parse or validate is likewise rejected. Reloads never overlap,
+and each one is diffed against the currently loaded config.
+_Avoid_: restart, hot-restart (process-replacement techniques this is not)
+
+**Unchanged / added / removed backend** (reload context):
+The three outcomes of diffing the loaded config against a reloaded one by
+backend identity. An unchanged backend keeps all its runtime state — health,
+circuit, active connections, EWMA latency — across the reload. An added one
+starts fresh and unhealthy, becoming selectable after its first successful
+probe (a single success — unlike recovery, which needs two). A removed one
+begins draining and from that moment reports nothing: its late round-trip
+outcomes and probes no longer touch any health, circuit, or metric state.
+_Avoid_: updated/modified backend (there is no such outcome: a URL change is a
+removal plus an addition)
+
+**Draining** (reload context):
+The state of a removed backend that still has in-flight requests. It is never
+selected again; its in-flight requests are allowed to finish until either they
+all have or the drain window elapses. A draining backend has its own lifecycle
+independent of later reloads: re-adding the same identity does not revive or
+end it — the re-added backend is a new one.
+_Avoid_: disabled, unhealthy (a draining backend may be perfectly healthy),
+ejection (passive detection's word)
+
+**Drain window** (reload context):
+The upper bound on how long a draining backend may keep in-flight requests.
+When it elapses, any still in flight are cancelled and their clients get a 502;
+the backend is then forgotten. A drain-cancelled request is not a backend
+failure and must not count as one.
+_Avoid_: grace period, timeout (overloaded with transport timeouts)
+
 **Selector**:
 The pluggable policy that chooses which backend handles a given request.
 _Avoid_: algorithm (an algorithm is what a Selector implements — the Selector
