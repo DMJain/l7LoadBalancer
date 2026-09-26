@@ -54,6 +54,13 @@ func configWithReloadYAML(reload string) string {
 		"backends:\n" + backendYAML("backend-a", "http://127.0.0.1:9001")
 }
 
+// configWithServerYAML builds a minimal otherwise-valid config with the supplied
+// server YAML block (which may be empty) spliced in before the backends section.
+func configWithServerYAML(server string) string {
+	return "listen: \":8080\"\n" + server +
+		"backends:\n" + backendYAML("backend-a", "http://127.0.0.1:9001")
+}
+
 // loadAndValidate is the end-to-end seam under test: YAML -> Load -> Validate.
 func loadAndValidate(t *testing.T, contents string) (*Config, error) {
 	t.Helper()
@@ -398,6 +405,36 @@ func TestValidate(t *testing.T) {
 			yaml:      configWithReloadYAML("reload:\n  drain_window: \"-30s\"\n"),
 			wantErr:   true,
 			errSubstr: "drain_window",
+		},
+		{
+			name: "server read_timeout omitted defaults to 60s",
+			yaml: threeBackendYAML(),
+			check: func(t *testing.T, cfg *Config) {
+				t.Helper()
+				require.NotNil(t, cfg.Server.ReadTimeout)
+				assert.Equal(t, DefaultReadTimeout, *cfg.Server.ReadTimeout)
+			},
+		},
+		{
+			name: "server read_timeout set explicitly is kept",
+			yaml: configWithServerYAML("server:\n  read_timeout: \"90s\"\n"),
+			check: func(t *testing.T, cfg *Config) {
+				t.Helper()
+				require.NotNil(t, cfg.Server.ReadTimeout)
+				assert.Equal(t, 90*time.Second, *cfg.Server.ReadTimeout)
+			},
+		},
+		{
+			name:      "server read_timeout of zero is rejected naming the field",
+			yaml:      configWithServerYAML("server:\n  read_timeout: \"0s\"\n"),
+			wantErr:   true,
+			errSubstr: "read_timeout",
+		},
+		{
+			name:      "server read_timeout negative is rejected naming the field",
+			yaml:      configWithServerYAML("server:\n  read_timeout: \"-1s\"\n"),
+			wantErr:   true,
+			errSubstr: "read_timeout",
 		},
 	}
 

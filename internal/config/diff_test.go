@@ -177,6 +177,12 @@ func TestNonBackendChanges(t *testing.T) {
 			want: []string{"reload"},
 		},
 		{
+			name: "server read_timeout differs",
+			old:  oneBackendConfigYAML(base),
+			new:  oneBackendConfigYAML(base + "server:\n  read_timeout: \"90s\"\n"),
+			want: []string{"server"},
+		},
+		{
 			name: "omitted fields equal explicit defaults",
 			old:  oneBackendConfigYAML(base),
 			new: oneBackendConfigYAML(base +
@@ -185,7 +191,8 @@ func TestNonBackendChanges(t *testing.T) {
 				"circuit:\n  cooldown: \"" + DefaultCircuitCooldown.String() + "\"\n" +
 				"metrics:\n  listen: \"" + DefaultMetricsListen + "\"\n" +
 				"health_endpoint:\n  listen: \"" + DefaultHealthEndpointListen + "\"\n" +
-				"reload:\n  drain_window: \"" + DefaultDrainWindow.String() + "\"\n"),
+				"reload:\n  drain_window: \"" + DefaultDrainWindow.String() + "\"\n" +
+				"server:\n  read_timeout: \"" + DefaultReadTimeout.String() + "\"\n"),
 		},
 		{
 			name: "multiple fields come back in fixed order",

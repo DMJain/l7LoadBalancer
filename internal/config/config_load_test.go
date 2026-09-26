@@ -204,6 +204,35 @@ backends:
 			wantErr:   true,
 			errSubstr: "cannot unmarshal",
 		},
+		{
+			name:     "server read_timeout decodes from YAML without defaulting",
+			contents: "listen: \":8080\"\nserver:\n  read_timeout: \"90s\"\n",
+			check: func(t *testing.T, cfg *Config) {
+				t.Helper()
+				require.NotNil(t, cfg.Server.ReadTimeout)
+				assert.Equal(t, 90*time.Second, *cfg.Server.ReadTimeout)
+			},
+		},
+		{
+			name:     "omitted server read_timeout is left nil by Load",
+			contents: "listen: \":8080\"\n",
+			check: func(t *testing.T, cfg *Config) {
+				t.Helper()
+				assert.Nil(t, cfg.Server.ReadTimeout)
+			},
+		},
+		{
+			name:      "unknown field inside server section is rejected",
+			contents:  "listen: \":8080\"\nserver:\n  read_timeoutt: \"1s\"\n",
+			wantErr:   true,
+			errSubstr: "read_timeoutt",
+		},
+		{
+			name:      "malformed server read_timeout is rejected at load",
+			contents:  "listen: \":8080\"\nserver:\n  read_timeout: \"abc\"\n",
+			wantErr:   true,
+			errSubstr: "cannot unmarshal",
+		},
 	}
 
 	for _, tc := range cases {

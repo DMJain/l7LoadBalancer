@@ -182,6 +182,34 @@ func TestReloadRejectsNonBackendChange(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 }
 
+// TestReloadRejectsServerTimeoutChange proves a reload that changes the
+// server.read_timeout bound is rejected whole and names "server" (S4.T7).
+func TestReloadRejectsServerTimeoutChange(t *testing.T) {
+	silenceDefault(t)
+
+	a := serveFixed(t, "backend-a")
+	cfg := testConfig([]config.BackendConfig{{Name: "backend-a", URL: a.URL}})
+	require.NoError(t, cfg.Validate())
+
+	capture := &reloadLogCapture{}
+	application, err := Build(cfg, slog.New(capture))
+	require.NoError(t, err)
+
+	cfg2 := testConfig([]config.BackendConfig{{Name: "backend-a", URL: a.URL}})
+	longer := 90 * time.Second
+	cfg2.Server.ReadTimeout = &longer
+	require.NoError(t, cfg2.Validate())
+
+	err = application.Reload(context.Background(), cfg2)
+	require.Error(t, err, "a server change must reject the reload")
+	assert.Same(t, cfg, application.LoadedConfig(), "the loaded config must be untouched")
+
+	failed := capture.withEvent(logger.EventConfigReloadFailed)
+	require.Len(t, failed, 1, "exactly one config reload failed line")
+	assert.True(t, recordHasStringValue(failed[0], "fields", "server"),
+		"the failed line must name the changed server section")
+}
+
 // TestReloadAddsRemovesAndLogs proves the happy path: the registry follows the
 // new file's order, the loaded-config record is replaced, and one INFO
 // config-reloaded line carries the added/removed/unchanged counts.
