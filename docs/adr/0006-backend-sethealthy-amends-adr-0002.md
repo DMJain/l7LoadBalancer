@@ -1,6 +1,6 @@
 # ADR-0006: Add Backend.SetHealthy, amending ADR-0002 decision 5
 
-- **Status**: Accepted
+- **Status**: Superseded by ADR-0011 decision 2 (SetHealthy replaced by MarkHealthy/MarkUnhealthy)
 - **Date**: 2026-09-18
 - **Deciders**: Darshan Jain (project owner)
 

@@ -132,10 +132,6 @@ Canonical field names (from `internal/logger/doc.go`): `backend`,
 
 Example log line per event type (JSON via `slog.NewJSONHandler`):
 
-- **Request start**
-  ```json
-  {"time":"2026-09-01T16:10:00Z","level":"INFO","msg":"request start","method":"GET","path":"/api/widgets","remote_addr":"10.0.0.7:54321"}
-  ```
 - **Request complete**
   ```json
   {"time":"2026-09-01T16:10:00Z","level":"INFO","msg":"request complete","method":"GET","path":"/api/widgets","backend":"backend-a","status":200,"latency_ms":12.4}
@@ -213,7 +209,7 @@ exist (see S1.T10):
 | `Registry`'s backend set | `NewRegistry` at construction (S1.T3); `Registry.Apply` (S4.T2), single writer, called by the reload goroutine (S4.T3) | `All()`, `Selectable()`, `Version()`, `Snapshot()`, all selectors | One `atomic.Pointer` to an immutable `(version, []*Backend)` snapshot; readers load once and never lock. See ADR-0015. |
 | `RoundRobin`'s rotation counter | `RoundRobin.Select`, on every call (S1.T4) | none external | Atomic counter (`atomic.Uint64` or `atomic.Int64`), no mutex |
 | `config.Config` (loaded) | `Build` at startup (S4.T0); the reload operation (S4.T3) replaces it last | `internal/app` readers via `LoadedConfig()`, the reload operation | One `atomic.Pointer[Config]` on `App` holding the last applied config. See ADR-0015. |
-| Circuit breaker state (Sprint 3) | `circuit` package's state machine goroutine | Proxy `Director`/`ModifyResponse` | TBD — likely mutex, since closed→open→half-open transitions are compound (check-then-act), not a single atomic op. Decide in the Sprint 3 ADR. |
+| Circuit breaker state (Sprint 3) | `Backend.Circuit{Success,Failure}` via round-trip observers; `Backend.CircuitAllow` via `Registry.Allow` | Selectors (via `CircuitOpen()` through `Registry.Selectable()`), proxy (via `Registry.Allow`) | `atomic.Pointer[circuitSnapshot]`, replaced by CAS. State (enum, consecutive failures, trial flag, opened-at) is one immutable snapshot; policy (threshold, cooldown) passed per call. See ADR-0012. |
 
 ## Deviations / amendments from PROGRESS.md flagged by this freeze
 

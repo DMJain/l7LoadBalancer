@@ -1,6 +1,6 @@
 # ADR-0003: Pin not-yet-imported dependencies with a build-tagged tools.go
 
-- **Status**: Accepted
+- **Status**: Superseded (tools.go deleted in S1.T2; all deps now imported by production or test code)
 - **Date**: 2026-09-17
 - **Deciders**: project owner + opencode agent (S1.T1)
 
