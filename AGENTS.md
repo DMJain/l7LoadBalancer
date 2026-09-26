@@ -2,7 +2,7 @@
 
 Canonical guidance for any coding agent working on this repository (Claude Code, Antigravity IDE, OpenCode CLI, or others). `CLAUDE.md` and `GEMINI.md` are symlinks to this file.
 
-**Read this file in full before touching any code.** Then read `PROGRESS.md`, `MILESTONES.md`, and every file under `docs/adr/`.
+**Read this file in full before touching any code.** Then read `PROGRESS.md`, `MILESTONES.md`, and `docs/adr/INDEX.md`.
 
 ---
 
@@ -29,7 +29,7 @@ Every design decision must be **defensible**: if asked "why did you do X?", the 
 2. `MILESTONES.md` — sprints, goals, deliverables, exit criteria.
 3. `docs/design/sprint-1-contracts.md` — frozen interfaces, YAML schema, concurrency ownership table.
 4. `docs/architecture.md` — architecture doc (fills in as sprints complete).
-5. `docs/adr/` — architecture decision records. **Read them all** before proposing anything that contradicts one.
+5. `docs/adr/INDEX.md` — architecture decision records. **Read INDEX.md; open full ADRs on demand when your task touches that subsystem** before proposing anything that contradicts one.
 6. `docs/sessions/` — per-session logs from previous agent sessions.
 
 ---
@@ -42,7 +42,7 @@ Every task, without exception, follows this order. **TDD is not optional.** Test
 
 1. Read `AGENTS.md`, `PROGRESS.md`, `MILESTONES.md`.
 2. Read `docs/design/sprint-1-contracts.md` (or the current sprint's contract doc).
-3. Read every ADR in `docs/adr/`.
+3. Read `docs/adr/INDEX.md`. Open the full ADR only when the task touches that subsystem.
 4. If any task is `[IN_PROGRESS]` by a different agent or session, **STOP** and ask the user.
 
 ### Step 1: Claim
