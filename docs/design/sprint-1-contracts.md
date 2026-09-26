@@ -170,6 +170,16 @@ Example log line per event type (JSON via `slog.NewJSONHandler`):
   became idle before the window (INFO), or `window_expired` when the window
   elapsed and the remaining requests were cancelled (WARN), with `cancelled`
   their count. Added by S4.T4.
+- **Client cancelled** (Sprint 4)
+  ```json
+  {"time":"2026-09-01T16:10:00Z","level":"INFO","msg":"backend round-trip failed","backend":"backend-a","reason":"client_canceled","path":"/api/widgets"}
+  ```
+  The proxy's "backend round-trip failed" line, carrying reason
+  `client_canceled` when the client's own request context was done before a
+  response arrived. It is not a backend failure: the request reaches no
+  observer, records no EWMA latency, releases its active-connection slot, and
+  is recorded as 499 (`status_class="4xx"`), reserving the 5xx class for
+  backend-caused failures. Added by S4.T5.
 
 ## Metric name and label reservations
 
@@ -205,6 +215,7 @@ exist (see S1.T10):
 | `Backend.active` | Proxy: `IncActive()` before dispatch, `DecActive()` on response-body `Close()` (S1.T6) | `LeastConnections` selector (via `ActiveConns()`), metrics (Sprint 3) | `atomic.Int64`, accessed only via `IncActive`/`DecActive`/`ActiveConns()` |
 | `Backend.removed` | `Registry.Apply` (S4.T2), immediately before the snapshot swap | Proxy observer fan-out (via `IsRemoved()`), `ConsistentHashBoundedLoads` admission | `atomic.Bool`, set once, accessed only via `IsRemoved()`; never reset on an instance (a re-added identity is a fresh `Backend`) |
 | `Backend.retiredCtx` | `Backend.Retire()` (S4.T4), on drain-window expiry | Proxy: one `context.AfterFunc` join per in-flight request; tests via `RetiredContext()` | `context.WithCancelCause`, created at construction; never cancelled while the backend is in the fleet. Cancellation cause is `ErrDrainWindowExpired`. See ADR-0016. |
+| Proxy `reqState` (S4.T5) | `ServeHTTP`, on the request goroutine only | `Director`, `ModifyResponse`, `ErrorHandler` — the same goroutine | No lock: `ReverseProxy` handles a request synchronously; `once` guards the exactly-once release. `clientCtx` is the client request context captured before the drain join, used by `ErrorHandler` to tell client-gone from a transport failure. See ADR-0007. |
 | `App` drain goroutines (S4.T4) | `Reload`, one goroutine per removed backend | Read `Backend.ActiveConns()` (polled at 100ms in `waitActiveZero`); call `Backend.Retire()`, `Collector.DeleteActiveConnections`, and the logger | No shared mutable state of their own: they touch only the atomics/collector/logger above, which are goroutine-safe, and exit on the process context. Independent of each other and of later reloads. See ADR-0016. |
 | `Registry`'s backend set | `NewRegistry` at construction (S1.T3); `Registry.Apply` (S4.T2), single writer, called by the reload goroutine (S4.T3) | `All()`, `Selectable()`, `Version()`, `Snapshot()`, all selectors | One `atomic.Pointer` to an immutable `(version, []*Backend)` snapshot; readers load once and never lock. See ADR-0015. |
 | `RoundRobin`'s rotation counter | `RoundRobin.Select`, on every call (S1.T4) | none external | Atomic counter (`atomic.Uint64` or `atomic.Int64`), no mutex |

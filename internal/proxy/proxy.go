@@ -29,6 +29,14 @@ import (
 // repeated failures converge the estimate toward 2s. See ADR-0010.
 const p2cFailurePenalty = 2 * time.Second
 
+// statusClientClosedRequest is nginx's client-closed-request code: the client
+// disconnected before the proxy could answer, so no status was ever sent on the
+// wire. The proxy writes it to the recorder, metrics, and logs only — it makes
+// client churn legible as a 499/"4xx" rather than a backend-caused 5xx. It is
+// deliberately not written as a 5xx because the client, not the backend, ended
+// the request (S4.T5).
+const statusClientClosedRequest = 499
+
 // reqState is the per-request bookkeeping shared between ServeHTTP, Director,
 // ModifyResponse, and ErrorHandler.
 //
@@ -47,8 +55,17 @@ type reqState struct {
 	// and both the increment and decrement are skipped, so the gauge can never
 	// drift from Backend.ActiveConns (ADR-0013 decision 7).
 	metrics *metrics.Collector
-	status  int
-	once    sync.Once
+	// clientCtx is the client request's context, captured in ServeHTTP before
+	// the cancel-with-cause derivation. It is the discriminator the error
+	// handler uses to tell a client-gone cancellation (clientCtx.Err() != nil)
+	// from a transport failure: a drain cancellation lands on the derived
+	// context's cause, and the transport's own timers leave this context alive,
+	// so only a genuine client disconnect cancels it. Concurrency follows
+	// ADR-0007: the state is created on and only touched by the request
+	// goroutine, and the error handler runs on that same goroutine (S4.T5).
+	clientCtx context.Context
+	status    int
+	once      sync.Once
 
 	// dispatchStart is captured at the end of director(), just before the
 	// request is dispatched, and consumed in modifyResponse when the response
@@ -231,7 +248,7 @@ func (p *Proxy) observe(state *reqState, d time.Duration, success bool) {
 // also runs on the http.ErrAbortHandler panic path.
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
-	state := &reqState{metrics: p.metrics}
+	state := &reqState{metrics: p.metrics, clientCtx: r.Context()}
 	defer p.completeRequest(r, state, start)
 
 	b, err := p.sel.Select(r.Context(), r)
@@ -314,32 +331,66 @@ func (p *Proxy) modifyResponse(resp *http.Response) error {
 	return nil
 }
 
-// errorHandler runs when no response could be proxied. It fans the fixed
-// failure penalty out to every registered observer, releases the request's
-// active-connection slot, logs the cause (the canonical field vocabulary has
-// no error field, so the cause is a separate WARN line), and responds 502.
+// errorHandler runs when no response could be proxied. It classifies the failed
+// round trip into exactly one of three tiers, in this order, and only the
+// genuine-transport tier counts as a backend failure:
 //
-// A drain cancellation — the backend's retired context fired with
-// ErrDrainWindowExpired and cancelled the outbound request — arrives here too,
-// because it is a transport failure like any other. It is distinguished only
-// by its cause: the line then carries reason window_expired (ADR-0016 decision
-// 4). It is not a backend failure and reaches no observer, but that is not
-// because of this check: the backend was already removed before it could be
-// retired, and observe() already suppresses a removed backend (ADR-0015
-// decision 8).
+//  1. Drain cancellation — context.Cause(r.Context()) is ErrDrainWindowExpired
+//     (ADR-0016 decision 4). The backend was already removed, so observe()
+//     suppresses the fan-out; the line carries reason window_expired at WARN.
+//  2. Client-gone — state.clientCtx.Err() != nil: the client's own request
+//     context is done, so the cancellation originated client-side. Observers
+//     are not called, no EWMA latency is recorded, and the line carries reason
+//     client_canceled at INFO. The request is recorded as 499, not 502.
+//  3. Genuine transport failure — dial timeout, response-header timeout,
+//     connection refused. Observers get the fixed 2s penalty, the line is a
+//     WARN failure line with no reason, and the response is 502.
+//
+// The order is the predicate: a drain cancellation is checked first because it
+// is the most specific cause; the client check comes before the transport
+// fallback because the transport can only cancel the outbound context via
+// parent propagation (client context done), the drain after-func, or its own
+// timers — and the transport's own timers leave the client context alive, so a
+// backend timeout still reaches tier 3. Context cancellation is sticky, so
+// checking at error-handler time is race-free. On shutdown the HTTP server
+// cancels in-flight request contexts, so shutdown-time cancellations classify
+// as client-gone too; that is accepted and desirable, since suppressing
+// observer writes while the process exits is correct (S4.T5).
+//
+// In every tier the active-connection slot is released (once-guarded, so the
+// success path's body-wrapper Close and this path cannot double-decrement,
+// ADR-0007). The canonical field vocabulary has no error field, so the cause
+// rides its own line (ADR-0007 decision 5).
 func (p *Proxy) errorHandler(w http.ResponseWriter, r *http.Request, err error) {
 	attrs := []any{"err", err, "path", r.URL.Path}
-	if state := stateFrom(r.Context()); state != nil {
+	state := stateFrom(r.Context())
+	if state == nil {
+		p.logger.Warn("backend round-trip failed", attrs...)
+		http.Error(w, http.StatusText(http.StatusBadGateway), http.StatusBadGateway)
+		return
+	}
+	attrs = append(attrs, "backend", state.backend.Name)
+
+	switch {
+	case errors.Is(context.Cause(r.Context()), backend.ErrDrainWindowExpired):
 		state.status = http.StatusBadGateway
-		if errors.Is(context.Cause(r.Context()), backend.ErrDrainWindowExpired) {
-			attrs = append(attrs, "reason", logger.ReasonWindowExpired)
-		}
+		attrs = append(attrs, "reason", logger.ReasonWindowExpired)
 		p.observe(state, p2cFailurePenalty, false)
 		state.release()
-		attrs = append(attrs, "backend", state.backend.Name)
+		p.logger.Warn("backend round-trip failed", attrs...)
+	case state.clientCtx.Err() != nil:
+		state.status = statusClientClosedRequest
+		attrs = append(attrs, "reason", logger.ReasonClientCanceled)
+		state.release()
+		p.logger.Info("backend round-trip failed", attrs...)
+	default:
+		state.status = http.StatusBadGateway
+		p.observe(state, p2cFailurePenalty, false)
+		state.release()
+		p.logger.Warn("backend round-trip failed", attrs...)
 	}
-	p.logger.Warn("backend round-trip failed", attrs...)
-	http.Error(w, http.StatusText(http.StatusBadGateway), http.StatusBadGateway)
+
+	http.Error(w, http.StatusText(state.status), state.status)
 }
 
 // releaseBody releases the request's active-connection slot when the body is

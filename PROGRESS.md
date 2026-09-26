@@ -66,10 +66,10 @@ Scoped in `.scratch/s4-t5-t10-connection-lifecycle/` as one bundle spec plus eig
   - Spec: `.scratch/s4-t5-t10-connection-lifecycle/issues/01-d1-tracking-amendment.md`
   - Acceptance: PROGRESS.md gains the S4.T5–T11 entries with acceptance criteria; the client-cancellation proposed ticket is closed, named to S4.T5; MILESTONES.md confirmed unchanged.
 
-- [IN_PROGRESS] S4.T5 — Context propagation and cancellation correctness
-  - Agent: opencode · 2026-09-26T18:10:16Z · Classify failed round trips into drain / client-gone / transport-failure tiers; client-gone records 499 and reaches no observer.
+- [DONE] S4.T5 — Context propagation and cancellation correctness
   - Spec: `.scratch/s4-t5-t10-connection-lifecycle/issues/02-t5-client-cancellation-correctness.md`
   - Depends: S4.D1
+  - Completed: 2026-09-26T18:20:00Z. `reqState` gains `clientCtx`; `errorHandler` classifies failed round trips drain-first into drain / client-gone / transport-failure; client-gone reaches no observer, records no EWMA latency, releases its slot, records 499/4xx and logs `client_canceled` at INFO; response-header timeout still reaches observers as a failure.
   - Acceptance: the error handler classifies every failed round trip into exactly one of three buckets — drain cancellation, client-gone, genuine transport failure — using the client's own request context as the discriminator; client-gone requests reach no observer, record no EWMA latency, release their active-connection slot, and are recorded as 499 / `status_class="4xx"`; the log vocabulary gains the `client_canceled` reason; a chaos test proves a client cancellation reaches no observer and records no EWMA latency, and that a response-header timeout still reaches the observers as a failure.
 
 - [PENDING] S4.T6 — Backend death mid-response

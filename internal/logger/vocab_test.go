@@ -52,6 +52,7 @@ var reasonCases = []vocabCase{
 	{"apply error", ReasonApplyError, "apply_error", "reload"},
 	{"window expired", ReasonWindowExpired, "window_expired", "drain"},
 	{"idle", ReasonIdle, "idle", "drain"},
+	{"client canceled", ReasonClientCanceled, "client_canceled", "cancellation"},
 }
 
 func TestEventVocabulary(t *testing.T) {
@@ -71,7 +72,7 @@ func TestReasonVocabulary(t *testing.T) {
 			assert.Regexp(t, snakeCasePattern, tc.value)
 		})
 	}
-	assertClosed(t, "reason", reasonCases, 14)
+	assertClosed(t, "reason", reasonCases, 15)
 }
 
 // assertClosed guards the "closed vocabulary" property: a value colliding with

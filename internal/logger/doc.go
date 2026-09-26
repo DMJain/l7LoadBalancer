@@ -40,6 +40,15 @@
 //	               window elapsed with requests still in flight)
 //	cancelled    - number of requests the drain cancelled (backend_drained)
 //
+// Cancellation-scoped fields (Sprint 4; S4.T5). reason client_canceled appears
+// on the proxy's "backend round-trip failed" line, logged at INFO when the
+// client's own request context was done before a response arrived. The request
+// is recorded as 499 (status class 4xx), reaches no observer, and records no
+// EWMA latency:
+//
+//	reason       - client_canceled, a client-gone cancellation, not a backend
+//	               failure
+//
 // See docs/design/sprint-1-contracts.md "Log field vocabulary" for an
 // example log line per event type.
 package logger

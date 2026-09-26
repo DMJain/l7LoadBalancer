@@ -55,6 +55,17 @@ the backend is then forgotten. A drain-cancelled request is not a backend
 failure and must not count as one.
 _Avoid_: grace period, timeout (overloaded with transport timeouts)
 
+**Client cancellation** (Sprint 4 context):
+A client disconnecting mid-request — the client's own request context is
+done before a response arrives. It is not a backend failure: the proxy
+classifies it as client-gone, reaches no observer, records no EWMA latency,
+releases the active-connection slot, and counts the request as 499 (status
+class `4xx`), so client churn never pollutes the 5xx class reserved for
+backend-caused failures. Distinct from Draining, which is voluntary and
+proxy-initiated. See S4.T5.
+_Avoid_: timeout, backend failure (a backend/transport timeout leaves the
+client context alive and remains a genuine failure)
+
 **Selector**:
 The pluggable policy that chooses which backend handles a given request.
 _Avoid_: algorithm (an algorithm is what a Selector implements — the Selector

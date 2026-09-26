@@ -141,4 +141,14 @@ const (
 	// window elapsed, so no in-flight request had to be cancelled (ADR-0016
 	// decision 7).
 	ReasonIdle = "idle"
+
+	// ReasonClientCanceled attributes a failed round trip the client abandoned
+	// before a response arrived: the client's own request context was done, so
+	// the cancellation is client-side, not a backend failure. It is the reason
+	// on the proxy's "backend round-trip failed" line, which the proxy logs at
+	// INFO rather than WARN. A client-gone request reaches no observer, records
+	// no EWMA latency, releases its active-connection slot, and is recorded as
+	// 499 ("4xx") — reserving the 5xx class for backend-caused failures
+	// (S4.T5).
+	ReasonClientCanceled = "client_canceled"
 )

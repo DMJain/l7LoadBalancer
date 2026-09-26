@@ -465,6 +465,18 @@ func recordsWithMsg(recs []logRecord, msg string) []logRecord {
 	return out
 }
 
+// recordsWithReason returns every record carrying exactly this reason, used to
+// pin which of the three tiers a failed round trip was classified into.
+func recordsWithReason(recs []logRecord, reason string) []logRecord {
+	var out []logRecord
+	for _, r := range recs {
+		if r["reason"] == reason {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
 func TestProxyLogsRequestCompleteOnSuccess(t *testing.T) {
 	logger, dump := captureLogger(t)
 	useLogger(t, logger)
@@ -897,6 +909,129 @@ func TestProxyDrainCancelBeforeHeadersReturns502(t *testing.T) {
 	assert.Equal(t, "WARN", fails[0].level())
 	assert.Equal(t, "window_expired", fails[0]["reason"])
 	assert.Equal(t, "backend-a", fails[0]["backend"])
+	assert.Empty(t, recordsWithReason(dump(), "client_canceled"),
+		"a drain cancellation must classify as window_expired, not client-gone")
+}
+
+// TestProxyClientCancelReachesNoObserverAndRecords499 is the T5 chaos test: a
+// client that disconnects mid-request (its request context is cancelled, which
+// is exactly what net/http does on a dropped connection) must be classified as
+// client-gone, not as a backend failure. It reaches no observer, records no
+// EWMA latency, releases its active-connection slot, and is recorded as 499 →
+// status_class "4xx" with an INFO line carrying reason client_canceled. The
+// request is held open by a gated backend so the cancellation lands on an
+// in-flight round trip deterministically.
+func TestProxyClientCancelReachesNoObserverAndRecords499(t *testing.T) {
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		close(entered)
+		<-release
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+
+	reg := registryFrom(t, backendEntry{"backend-a", srv.URL})
+	b := reg.All()[0]
+
+	logger, dump := captureLogger(t)
+	useLogger(t, logger)
+
+	p := New(reg, balancer.NewRoundRobin(reg))
+	spy := &spyObserver{inner: NewLatencyObserver()}
+	p.RegisterObserver(spy)
+	c := metrics.NewCollector()
+	p.SetMetrics(c)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	req := httptest.NewRequest(http.MethodGet, "/cancel", nil).WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		p.ServeHTTP(rec, req)
+	}()
+
+	<-entered
+	require.Equal(t, int64(1), b.ActiveConns(), "the request must be in flight before the client leaves")
+
+	cancel()
+	<-done
+	close(release)
+
+	assert.Equal(t, 499, rec.Code, "a client-gone request must be recorded as 499")
+	assert.Empty(t, spy.snapshot(), "a client cancellation must reach no observer")
+	assert.Zero(t, b.EWMALatency(), "a client cancellation must record no EWMA latency")
+	assert.Zero(t, b.ActiveConns(), "a client cancellation must still release its active-connection slot")
+
+	completes := recordsWithMsg(dump(), "request complete")
+	require.Len(t, completes, 1)
+	assert.Equal(t, "INFO", completes[0].level())
+	assert.Equal(t, float64(499), completes[0]["status"])
+
+	fails := recordsWithMsg(dump(), "backend round-trip failed")
+	require.Len(t, fails, 1, "the client cancellation must emit exactly one cause line")
+	assert.Equal(t, "INFO", fails[0].level())
+	assert.Equal(t, "client_canceled", fails[0]["reason"])
+	assert.Equal(t, "backend-a", fails[0]["backend"])
+
+	counter := labeledSeries(t, c, "lb_requests_total",
+		map[string]string{"backend": "backend-a", "method": "GET", "status_class": "4xx"})
+	require.NotNil(t, counter, "client churn must stay visible as a 4xx request")
+	assert.Equal(t, 1.0, counter.GetCounter().GetValue())
+	assert.Nil(t, labeledSeries(t, c, "lb_requests_total",
+		map[string]string{"backend": "backend-a", "method": "GET", "status_class": "5xx"}),
+		"a client cancellation must never land in the 5xx class reserved for backend failures")
+}
+
+// TestProxyResponseHeaderTimeoutReachesObserversAsFailure is the guard on the
+// other side of the T5 predicate: a transport's own response-header timer
+// leaves the client's request context alive, so the failure must fall through
+// to the genuine-transport-failure tier — observers get the fixed penalty, the
+// response is 502, and the cause line is the WARN failure line, not
+// client_canceled. The proxy runs on an explicit transport here (configuring
+// the production transport is S4.T8); a gated backend that never sends headers
+// trips the timer deterministically.
+func TestProxyResponseHeaderTimeoutReachesObserversAsFailure(t *testing.T) {
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		<-release
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+
+	reg := registryFrom(t, backendEntry{"backend-a", srv.URL})
+	b := reg.All()[0]
+
+	logger, dump := captureLogger(t)
+	useLogger(t, logger)
+
+	p := New(reg, balancer.NewRoundRobin(reg))
+	p.rp.Transport = &http.Transport{ResponseHeaderTimeout: 50 * time.Millisecond}
+	spy := &spyObserver{inner: NewLatencyObserver()}
+	p.RegisterObserver(spy)
+
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/slow", nil))
+	close(release)
+
+	assert.Equal(t, http.StatusBadGateway, rec.Code,
+		"a backend that never answers headers must fail as a transport failure, not client-gone")
+
+	calls := spy.snapshot()
+	require.Len(t, calls, 1, "a response-header timeout must reach the observers as a failure")
+	assert.False(t, calls[0].success)
+	assert.Equal(t, p2cFailurePenalty, calls[0].d)
+	assert.Equal(t, p2cFailurePenalty, b.EWMALatency(),
+		"a backend timeout must record the failure penalty, not be over-suppressed")
+	assert.Zero(t, b.ActiveConns())
+
+	fails := recordsWithMsg(dump(), "backend round-trip failed")
+	require.Len(t, fails, 1)
+	assert.Equal(t, "WARN", fails[0].level())
+	assert.Empty(t, recordsWithReason(dump(), "client_canceled"),
+		"a backend timeout must not be misclassified as client-gone")
 }
 
 // pathSelector routes by request path to a fixed backend, so one proxy can hold
