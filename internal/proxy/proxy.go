@@ -317,8 +317,10 @@ func (p *Proxy) director(r *http.Request) {
 //
 // The body wrapper also observes read errors, so a backend that dies after the
 // headers but before completing the body leaves a WARN trace instead of a
-// silent truncation (S4.T6). The observer fan-out above runs before the body is
-// streamed, so that death cannot be un-rung: the success recorded here stands.
+// silent truncation (S4.T6) — while a drain or client-gone cancellation on the
+// same path is recognised and not misreported as a backend death. The observer
+// fan-out above runs before the body is streamed, so that death cannot be
+// un-rung: the success recorded here stands.
 //
 // The fan-out runs unconditionally, regardless of the configured selector —
 // like IncActive/DecActive, it is not gated on any observer actually reading
@@ -338,6 +340,8 @@ func (p *Proxy) modifyResponse(resp *http.Response) error {
 		logger:     p.logger,
 		backend:    state.backend.Name,
 		path:       resp.Request.URL.Path,
+		reqCtx:     resp.Request.Context(),
+		clientCtx:  state.clientCtx,
 	}
 	return nil
 }
@@ -412,14 +416,17 @@ func (p *Proxy) errorHandler(w http.ResponseWriter, r *http.Request, err error) 
 // then closes the underlying body.
 //
 // Read passes every read straight through and counts the bytes delivered. A
-// read error that is not io.EOF means the backend died after the headers — a
-// connection reset, an unexpected end on a Content-Length response — and is
-// logged once at WARN with the bytes copied so far; io.EOF is a clean end and
-// logs nothing. The recorded success is deliberately not revisited: the
-// observer already saw a success when the headers arrived, and a second failure
-// event for the same request would corrupt the outlier window's counts
-// (S4.T6). A backend that consistently dies after headers is therefore never
-// ejected by passive detection — a known limitation, not fixed here.
+// read error that is not io.EOF and was not a proxy-initiated stop — a drain
+// cancellation or a client-gone cancellation — means the backend died after the
+// headers (a connection reset, an unexpected end on a Content-Length response)
+// and is logged at WARN with the bytes copied so far; io.EOF is a clean end and
+// logs nothing. Reusing the error handler's discriminators keeps a voluntary
+// drain stop or a client disconnect from being misreported as an involuntary
+// backend death (ADR-0016, ADR-0017). The recorded success is deliberately not
+// revisited: the observer already saw a success when the headers arrived, and a
+// second failure event for the same request would corrupt the outlier window's
+// counts (S4.T6). A backend that consistently dies after headers is therefore
+// never ejected by passive detection — a known limitation, not fixed here.
 //
 // Concurrency: Read and Close run on the request goroutine, in ReverseProxy's
 // synchronous body copy, so bytesCopied needs no synchronization (ADR-0007).
@@ -430,10 +437,14 @@ type releaseBody struct {
 	release func()
 
 	// The mid-body-death fields are captured in ModifyResponse, when the
-	// serving backend and the request path are both known.
-	logger  *slog.Logger
-	backend string
-	path    string
+	// serving backend, the request path, and both contexts are known. reqCtx is
+	// the outbound request's drain-joined context and clientCtx is the client's
+	// own request context — the same discriminators the error handler uses.
+	logger    *slog.Logger
+	backend   string
+	path      string
+	reqCtx    context.Context
+	clientCtx context.Context
 
 	bytesCopied int64
 }
@@ -441,7 +452,7 @@ type releaseBody struct {
 func (b *releaseBody) Read(p []byte) (int, error) {
 	n, err := b.ReadCloser.Read(p)
 	b.bytesCopied += int64(n)
-	if err != nil && !errors.Is(err, io.EOF) {
+	if err != nil && !errors.Is(err, io.EOF) && !b.canceled() {
 		b.logger.Warn("backend died mid-response",
 			"backend", b.backend,
 			"path", b.path,
@@ -450,6 +461,18 @@ func (b *releaseBody) Read(p []byte) (int, error) {
 		)
 	}
 	return n, err
+}
+
+// canceled reports whether the failed read was ended by a proxy-initiated stop
+// rather than a backend death: a drain cancellation (the outbound context's
+// ErrDrainWindowExpired cause, ADR-0016) or a client-gone cancellation (the
+// client's own context is done, ADR-0017). Context cancellation is sticky, so
+// checking at read-error time is race-free; either way no backend died.
+func (b *releaseBody) canceled() bool {
+	if errors.Is(context.Cause(b.reqCtx), backend.ErrDrainWindowExpired) {
+		return true
+	}
+	return b.clientCtx.Err() != nil
 }
 
 func (b *releaseBody) Close() error {

@@ -2,7 +2,6 @@ package chaos_test
 
 import (
 	"net/http"
-	"net/http/httptest"
 	"strconv"
 	"testing"
 	"time"
@@ -33,15 +32,6 @@ func (fb *flippableBackend) ServePartialThenClose(body string) {
 		_ = conn.Close()
 	}))
 	fb.handler.Store(&h)
-}
-
-// doRequestPath is doRequest with an explicit path, so a test can assert the
-// path on a request-scoped log line.
-func doRequestPath(h http.Handler, path string) (int, string) {
-	req := httptest.NewRequest(http.MethodGet, path, nil)
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-	return rec.Code, rec.Body.String()
 }
 
 // TestChaosBackendDiesMidBody is S4.T6 arc (i). A backend sends response headers

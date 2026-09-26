@@ -186,9 +186,10 @@ Example log line per event type (JSON via `slog.NewJSONHandler`):
   ```
   A distinct proxy line (not "backend round-trip failed"): the response
   headers arrived, so the observer recorded a success, and the backend then
-  died before completing the body (a non-EOF body read error). The line
-  carries the bytes copied before the error. The headers-time success stands
-  and no observer is fed a second event. Added by S4.T6.
+  died before completing the body (a non-EOF body read error that was not a
+  drain or client-gone cancellation). The line carries the bytes copied before
+  the error. The headers-time success stands and no observer is fed a second
+  event. Added by S4.T6.
 
 ## Metric name and label reservations
 

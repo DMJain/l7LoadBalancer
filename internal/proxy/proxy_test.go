@@ -1161,7 +1161,9 @@ func TestProxyDrainCancelDoesNotAffectOtherBackends(t *testing.T) {
 // TestProxyDrainCancelAfterHeadersTruncatesBody proves that retirement after
 // response headers have been sent truncates the body rather than producing a
 // second outcome: the success recorded when the headers arrived stands, no
-// failure is recorded, and the active-connection slot still releases.
+// failure is recorded, and the active-connection slot still releases. The
+// truncation is a voluntary, proxy-initiated stop, so it must not be logged as
+// a backend death either.
 func TestProxyDrainCancelAfterHeadersTruncatesBody(t *testing.T) {
 	release := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -1177,6 +1179,9 @@ func TestProxyDrainCancelAfterHeadersTruncatesBody(t *testing.T) {
 
 	reg := registryFrom(t, backendEntry{"backend-a", srv.URL})
 	b := reg.All()[0]
+
+	logger, dump := captureLogger(t)
+	useLogger(t, logger)
 
 	p := New(reg, balancer.NewRoundRobin(reg))
 	spy := &spyObserver{inner: NewLatencyObserver()}
@@ -1211,6 +1216,60 @@ func TestProxyDrainCancelAfterHeadersTruncatesBody(t *testing.T) {
 	assert.Positive(t, b.EWMALatency(),
 		"the success recorded at headers must stand")
 	assert.Zero(t, b.ActiveConns(), "the slot must still release after a truncated body")
+
+	assert.Empty(t, recordsWithReason(dump(), "backend_died_mid_response"),
+		"a drain cancellation after headers is a voluntary stop, not a backend death")
+}
+
+// TestProxyClientCancelMidBodyIsNotMidBodyDeath proves the client-gone tier also
+// holds on the body path: when the client disconnects while the response body
+// is streaming, the resulting read error is a client-side cancellation, not a
+// backend death, and must not be logged as one. The client reads the first body
+// bytes before disconnecting, so the request is unambiguously past the headers
+// and the failure lands on releaseBody.Read, not the error handler.
+func TestProxyClientCancelMidBodyIsNotMidBodyDeath(t *testing.T) {
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, "hello")
+		_ = http.NewResponseController(w).Flush()
+		<-release
+		_, _ = io.WriteString(w, "world")
+	}))
+	t.Cleanup(srv.Close)
+
+	reg := registryFrom(t, backendEntry{"backend-a", srv.URL})
+	b := reg.All()[0]
+
+	logger, dump := captureLogger(t)
+	useLogger(t, logger)
+
+	p := New(reg, balancer.NewRoundRobin(reg))
+	front := httptest.NewServer(p)
+	t.Cleanup(front.Close)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, front.URL, nil)
+	require.NoError(t, err)
+	resp, err := front.Client().Do(req)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	prefix := make([]byte, len("hello"))
+	_, err = io.ReadFull(resp.Body, prefix)
+	require.NoError(t, err)
+	require.Equal(t, "hello", string(prefix))
+
+	cancel()
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+	close(release)
+
+	require.Eventually(t, func() bool { return b.ActiveConns() == 0 },
+		5*time.Second, 10*time.Millisecond, "the cancelled request must release its slot")
+
+	assert.Empty(t, recordsWithReason(dump(), "backend_died_mid_response"),
+		"a client cancellation mid-body is a client-gone stop, not a backend death")
 }
 
 // midBodyDeathBackend starts an httptest.Server that answers with 200 headers

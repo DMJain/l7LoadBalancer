@@ -52,8 +52,10 @@
 // Mid-body-death-scoped fields (Sprint 4; S4.T6). reason
 // backend_died_mid_response appears on the proxy's WARN "backend died
 // mid-response" line when a non-EOF body read error follows the response
-// headers — the backend died before completing the body. The success recorded
-// when the headers arrived stands; no observer is fed a second event:
+// headers — the backend died before completing the body. A drain cancellation
+// or a client-gone cancellation on the same path is not a death and carries no
+// such line. The success recorded when the headers arrived stands; no observer
+// is fed a second event:
 //
 //	backend      - backend that died
 //	path         - request path

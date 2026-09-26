@@ -155,9 +155,11 @@ const (
 	// ReasonBackendDiedMidResponse attributes a backend that sent response
 	// headers but died before completing the body. It is the reason on the
 	// proxy's WARN "backend died mid-response" line, which carries the backend,
-	// the path, and the bytes already copied. The death reaches no observer and
-	// records no second outcome: the success recorded when the headers arrived
-	// stands, because a second failure event for the same request would corrupt
-	// the outlier window's counts (S4.T6).
+	// the path, and the bytes already copied. A drain or client-gone
+	// cancellation on the same body path is a proxy- or client-initiated stop,
+	// not a backend death, and is not logged with this reason. The death reaches
+	// no observer and records no second outcome: the success recorded when the
+	// headers arrived stands, because a second failure event for the same
+	// request would corrupt the outlier window's counts (S4.T6).
 	ReasonBackendDiedMidResponse = "backend_died_mid_response"
 )

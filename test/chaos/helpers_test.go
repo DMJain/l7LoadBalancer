@@ -145,7 +145,13 @@ func (fb *flippableBackend) start() {
 // client-server hop, and returns the status and body. It is safe to call inside
 // a require.Eventually condition: it never touches *testing.T.
 func doRequest(h http.Handler) (int, string) {
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	return doRequestPath(h, "/")
+}
+
+// doRequestPath is doRequest with an explicit path, so a test can assert the
+// path on a request-scoped log line.
+func doRequestPath(h http.Handler, path string) (int, string) {
+	req := httptest.NewRequest(http.MethodGet, path, nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	return rec.Code, rec.Body.String()
