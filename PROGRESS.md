@@ -78,9 +78,10 @@ Scoped in `.scratch/s4-t5-t10-connection-lifecycle/` as one bundle spec plus eig
   - Completed: 2026-09-26T18:34:00Z. `releaseBody` gains a `Read` that counts copied bytes and logs a non-EOF read error at WARN with reason `backend_died_mid_response`, backend, path, and `bytes_copied`; the headers-time success stands and no observer is fed a second event. A drain or client-gone cancellation on the same body path is recognised via the same discriminators and is not misreported as a backend death. Chaos tests cover a mid-body death (WARN line, gauges unchanged, slot released) and a pre-headers death (clean 502, failure observed, no leak); the mid-body ejection gap is documented as a known limitation in the session log.
   - Acceptance: the response-body wrapper observes read errors — any non-EOF error after headers is logged at WARN with the new `backend_died_mid_response` reason carrying the backend name, the path, and the bytes already copied; the success recorded when headers arrives stands; no observer is fed; the mid-body ejection gap is documented as a known limitation.
 
-- [PENDING] S4.T7 — Slow-loris client timeouts
+- [IN_PROGRESS] S4.T7 — Slow-loris client timeouts
   - Spec: `.scratch/s4-t5-t10-connection-lifecycle/issues/04-t7-slow-loris-client-timeouts.md`
   - Depends: S4.D1
+  - Claimed 2026-09-26T18:42:21Z by OpenCode (deepseek-v4.1-flash): add `server.read_timeout` config (default 60s, non-positive rejected), wire it to the client-facing ReadTimeout, reject reloads that change it, document the WriteTimeout omission, and prove a slow-body client is disconnected at the bound.
   - Acceptance: config gains a `server:` section with `read_timeout` (default 60s when omitted, explicitly non-positive rejected naming the field); a slow-loris client is disconnected at the read timeout; `WriteTimeout` is deliberately omitted with the rationale documented; a reload that changes `server` is rejected naming it.
 
 - [PENDING] S4.T8 — Transport tuning
