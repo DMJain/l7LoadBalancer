@@ -165,9 +165,15 @@ Example log line per event type (JSON via `slog.NewJSONHandler`):
   The proxy's existing "backend round-trip failed" line, carrying reason
   `window_expired` when the round trip was cancelled because a removed
   backend's drain window elapsed. It is not a backend failure and reaches no
-  observer (the backend was already removed). Added by S4.T4.0; the drain
-  lifecycle's own event vocabulary (`backend drained`; reason `idle`) lands
-  with S4.T4.
+  observer (the backend was already removed). Added by S4.T4.0.
+- **Backend drained** (Sprint 4)
+  ```json
+  {"time":"2026-09-01T16:10:00Z","level":"INFO","msg":"backend drained","event":"backend_drained","backend":"backend-b","reason":"idle","cancelled":0}
+  ```
+  One line per removed backend when its drain ends: reason `idle` when it
+  became idle before the window (INFO), or `window_expired` when the window
+  elapsed and the remaining requests were cancelled (WARN), with `cancelled`
+  their count. Added by S4.T4.
 
 ## Metric name and label reservations
 

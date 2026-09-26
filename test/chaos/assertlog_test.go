@@ -96,6 +96,23 @@ func (h *captureHandler) transitionRecords() []slog.Record {
 	return out
 }
 
+// transitionRecord returns the single captured record matching all of event,
+// backend, and reason, and whether exactly one such record exists. It backs the
+// assertions that read a field (such as the drain's cancelled count) off the
+// line rather than only counting it.
+func (h *captureHandler) transitionRecord(event, backend, reason string) (slog.Record, bool) {
+	var out slog.Record
+	n := 0
+	for _, r := range h.snapshot() {
+		f := recordFields(r)
+		if f["event"] == event && f["backend"] == backend && f["reason"] == reason {
+			out = r
+			n++
+		}
+	}
+	return out, n == 1
+}
+
 // assertTransitionLogged asserts exactly one transition line matching the
 // frozen event/backend/reason triple was captured.
 func assertTransitionLogged(t *testing.T, h *captureHandler, event, backend, reason string) {

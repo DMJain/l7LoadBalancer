@@ -210,6 +210,26 @@ func TestCollectorDeletesBackendSeries(t *testing.T) {
 		"the active-connections series is not deleted here")
 }
 
+// TestCollectorDeleteActiveConnections proves the drain's deletion (S4.T4): a
+// removed backend's active-connections series is gone, and a same-name fresh
+// backend's series survives when the drain skips the deletion because the name
+// is in use — modelled here as deleting the old instance's series before the
+// fresh one is seeded.
+func TestCollectorDeleteActiveConnections(t *testing.T) {
+	t.Parallel()
+	c := NewCollector()
+	c.SetActiveConnections("backend-a", 3)
+
+	c.DeleteActiveConnections("backend-a")
+	assert.Nil(t, findMetric(t, c, "lb_active_connections", map[string]string{"backend": "backend-a"}),
+		"the active-connections series must be gone")
+
+	c.SetActiveConnections("backend-a", 0)
+	require.NotNil(t, findMetric(t, c, "lb_active_connections", map[string]string{"backend": "backend-a"}),
+		"a fresh same-name series must exist after seeding")
+	assert.Equal(t, 0.0, findMetric(t, c, "lb_active_connections", map[string]string{"backend": "backend-a"}).GetGauge().GetValue())
+}
+
 // TestCollectorDeleteUnknownSeriesIsNoop proves deletion is safe for a backend
 // with no series, as it is for a backend removed before serving any traffic.
 func TestCollectorDeleteUnknownSeriesIsNoop(t *testing.T) {
@@ -218,6 +238,7 @@ func TestCollectorDeleteUnknownSeriesIsNoop(t *testing.T) {
 	require.NotPanics(t, func() {
 		c.DeleteBackendHealthy("absent")
 		c.DeleteCircuitState("absent")
+		c.DeleteActiveConnections("absent")
 	})
 }
 

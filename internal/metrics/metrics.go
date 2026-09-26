@@ -181,6 +181,16 @@ func (c *Collector) SetActiveConnections(backend string, n int64) {
 	c.active.WithLabelValues(backend).Set(float64(n))
 }
 
+// DeleteActiveConnections removes a backend's lb_active_connections series. It
+// is deleted at drain completion, not at removal, because a removed backend's
+// in-flight requests still decrement it by name; deleting it earlier would
+// recreate it negative. The drain deletes it only when no current backend
+// shares the name, so a same-name fresh backend's own series survives
+// (ADR-0016 decision 7). Deleting a backend with no series is a no-op.
+func (c *Collector) DeleteActiveConnections(backend string) {
+	c.active.DeleteLabelValues(backend)
+}
+
 // RecordProbe records one health-endpoint probe response against the
 // lb_health_probe_total counter. The status label is the same status-class
 // vocabulary ObserveRequest uses ("2xx", "5xx", …), not the raw code, so the

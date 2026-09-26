@@ -53,6 +53,16 @@ func reloadChaosConfig(fbs []*flippableBackend) *config.Config {
 	}
 }
 
+// reloadChaosConfigWindow is reloadChaosConfig with an explicit drain window,
+// so a test can make the window shorter than the hold it stages. Both the
+// startup and the reloaded config must carry the same window: reload.drain_window
+// is not reloadable (ADR-0016 decision 1), so a change would reject the reload.
+func reloadChaosConfigWindow(fbs []*flippableBackend, window time.Duration) *config.Config {
+	cfg := reloadChaosConfig(fbs)
+	cfg.Reload.DrainWindow = &window
+	return cfg
+}
+
 // containsBackend reports whether bs holds a backend with the given name.
 func containsBackend(bs []*backend.Backend, name string) bool {
 	for _, b := range bs {
@@ -166,11 +176,11 @@ func TestChaosReloadAddedBackendAdmittedAfterFirstProbe(t *testing.T) {
 	assertGauge(t, a.collector, "lb_backend_healthy", healthGaugeLabels(d.id), 1)
 }
 
-// TestChaosReloadRemovedIdleBackendLeavesSeries proves an idle removed backend
-// leaves All and Selectable and its healthy and circuit-state series are
-// deleted, while its active-connections series is deliberately left in place
-// (the T3 → T4 hand-off).
-func TestChaosReloadRemovedIdleBackendLeavesSeries(t *testing.T) {
+// TestChaosReloadRemovedIdleBackendDrains proves an idle removed backend drains
+// immediately: it leaves All and Selectable, its healthy and circuit-state
+// series are deleted at removal, and its active-connections series is deleted
+// at drain completion with exactly one idle drained line (ADR-0016 decision 7).
+func TestChaosReloadRemovedIdleBackendDrains(t *testing.T) {
 	fbs := newFlippableBackends(t, 2)
 	a := assemble(t, chaosConfig(fbs))
 
@@ -185,9 +195,172 @@ func TestChaosReloadRemovedIdleBackendLeavesSeries(t *testing.T) {
 	_, circuit := gaugeValueOK(a.collector, "lb_circuit_state", circuitStateLabels(b.id, "closed"))
 	require.False(t, circuit, "the removed backend's circuit series must be deleted")
 
-	active, ok := gaugeValueOK(a.collector, "lb_active_connections", map[string]string{"backend": b.id})
-	require.True(t, ok, "the removed backend's active-connections series must remain until drain (T4)")
-	require.Equal(t, 0.0, active)
+	require.Eventually(t, func() bool {
+		_, ok := gaugeValueOK(a.collector, "lb_active_connections", map[string]string{"backend": b.id})
+		return !ok
+	}, eventuallyDeadline, eventuallyTick, "the drained backend's active-connections series must be deleted")
+
+	require.Eventually(t, func() bool {
+		return a.logs.transitionCount(logger.EventBackendDrained, b.id, logger.ReasonIdle) == 1
+	}, eventuallyDeadline, eventuallyTick, "the idle drain must be logged exactly once")
+}
+
+// TestChaosReloadDrainExitCriterion1000 is Sprint 4's first exit-criterion test:
+// 1000 concurrent requests held open by gated backends — some on a backend that
+// stays, some on one being removed — survive a reload that adds one backend and
+// removes another with a drain window longer than the hold. All 1000 return
+// 200; the removed backend drains idle; the unchanged backend keeps its
+// instance and its EWMA state (ADR-0016 decision 7).
+func TestChaosReloadDrainExitCriterion1000(t *testing.T) {
+	const total = 1000
+
+	fbs := newFlippableBackends(t, 2)
+	a := assemble(t, reloadChaosConfig(fbs))
+
+	// Warm backend-a so its EWMA state is non-zero before the reload: the reload
+	// must carry that state across on the same instance. With two round-robin
+	// backends the first request lands on backend-a.
+	aBefore := backendByName(t, a.reg, "backend-a")
+	status, _ := doRequest(a.handler)
+	require.Equal(t, http.StatusOK, status)
+	ewmaBefore := aBefore.EWMALatency()
+	require.NotZero(t, ewmaBefore, "the warmup must have recorded a latency")
+
+	release := make(chan struct{})
+	entered := make(chan string, 4)
+	fbs[0].ServeGated(entered, release)
+	fbs[1].ServeGated(entered, release)
+
+	results := make(chan int, total)
+	for i := 0; i < total; i++ {
+		go func() {
+			status, _ := doRequest(a.handler)
+			results <- status
+		}()
+	}
+
+	// Every request must be in flight before the reload: the count is
+	// incremented before dispatch, so all 1000 are then held by a gate.
+	require.Eventually(t, func() bool {
+		var held int64
+		for _, b := range a.reg.All() {
+			held += b.ActiveConns()
+		}
+		return held == total
+	}, eventuallyDeadline, eventuallyTick, "all %d requests must be held open", total)
+
+	// Reload adds backend-c and removes backend-b while all 1000 are in flight.
+	// The default drain window is longer than the hold.
+	c := newFlippableBackend(t, "backend-c")
+	require.NoError(t, a.application.Reload(context.Background(),
+		reloadChaosConfig([]*flippableBackend{fbs[0], c})))
+
+	// The unchanged backend keeps its instance and its EWMA state: no request
+	// on it has completed since the reload, since all are still gated.
+	aAfter := backendByName(t, a.reg, "backend-a")
+	require.Same(t, aBefore, aAfter, "the unchanged backend must keep its instance")
+	require.Equal(t, ewmaBefore, aAfter.EWMALatency(), "the unchanged backend's EWMA state must survive")
+
+	close(release)
+	for i := 0; i < total; i++ {
+		select {
+		case status := <-results:
+			require.Equal(t, http.StatusOK, status, "every in-flight request must survive the reload")
+		case <-time.After(eventuallyDeadline):
+			t.Fatalf("only %d/%d requests completed", i, total)
+		}
+	}
+
+	require.False(t, containsBackend(a.reg.All(), "backend-b"), "the removed backend leaves All")
+	require.Eventually(t, func() bool {
+		var held int64
+		for _, b := range a.reg.All() {
+			held += b.ActiveConns()
+		}
+		return held == 0
+	}, eventuallyDeadline, eventuallyTick, "active connections must return to zero")
+
+	require.Eventually(t, func() bool {
+		return a.logs.transitionCount(logger.EventBackendDrained, "backend-b", logger.ReasonIdle) == 1
+	}, eventuallyDeadline, eventuallyTick, "the removed backend must log one idle drain")
+
+	require.Eventually(t, func() bool {
+		_, active := gaugeValueOK(a.collector, "lb_active_connections", map[string]string{"backend": "backend-b"})
+		_, healthy := gaugeValueOK(a.collector, "lb_backend_healthy", healthGaugeLabels("backend-b"))
+		_, circuit := gaugeValueOK(a.collector, "lb_circuit_state", circuitStateLabels("backend-b", "closed"))
+		return !active && !healthy && !circuit
+	}, eventuallyDeadline, eventuallyTick, "no gauge series may be left for the drained backend")
+}
+
+// TestChaosReloadDrainWindowExpired proves the bound is real: when the drain
+// window elapses before the hold ends, the removed backend's in-flight request
+// is cancelled with a 502, the drain logs window_expired with the cancelled
+// count, and a fresh same-name backend re-added under a new URL keeps its own
+// series and state (ADR-0016 decision 7).
+func TestChaosReloadDrainWindowExpired(t *testing.T) {
+	window := 50 * time.Millisecond
+	fbs := newFlippableBackends(t, 2)
+	a := assemble(t, reloadChaosConfigWindow(fbs, window))
+
+	aBefore := backendByName(t, a.reg, "backend-a")
+	bBefore := backendByName(t, a.reg, "backend-b")
+
+	release := make(chan struct{})
+	entered := make(chan string, 2)
+	fbs[0].ServeGated(entered, release)
+	fbs[1].ServeGated(entered, release)
+
+	results := make(chan int, 2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			status, _ := doRequest(a.handler)
+			results <- status
+		}()
+	}
+
+	require.Eventually(t, func() bool {
+		return aBefore.ActiveConns() == 1 && bBefore.ActiveConns() == 1
+	}, eventuallyDeadline, eventuallyTick, "one request must be held on each backend")
+
+	// Re-add backend-b under a new URL, removing the old instance. The drain
+	// window is unchanged, so the reload is accepted.
+	b2 := newFlippableBackend(t, "backend-b")
+	require.NoError(t, a.application.Reload(context.Background(),
+		reloadChaosConfigWindow([]*flippableBackend{fbs[0], b2}, window)))
+
+	// The removed backend's held request is cut off at window expiry with 502.
+	select {
+	case status := <-results:
+		require.Equal(t, http.StatusBadGateway, status, "the removed backend's request must be cut off with 502")
+	case <-time.After(eventuallyDeadline):
+		t.Fatal("the removed backend's request was not cancelled at window expiry")
+	}
+
+	close(release)
+	select {
+	case status := <-results:
+		require.Equal(t, http.StatusOK, status, "the unchanged backend's request must complete")
+	case <-time.After(eventuallyDeadline):
+		t.Fatal("the unchanged backend's request did not complete")
+	}
+
+	// One drained line, reason window_expired, carrying the cancelled count.
+	require.Eventually(t, func() bool {
+		return a.logs.transitionCount(logger.EventBackendDrained, "backend-b", logger.ReasonWindowExpired) == 1
+	}, eventuallyDeadline, eventuallyTick, "the removed backend must log one window_expired drain")
+
+	rec, ok := a.logs.transitionRecord(logger.EventBackendDrained, "backend-b", logger.ReasonWindowExpired)
+	require.True(t, ok)
+	require.Equal(t, "1", recordFields(rec)["cancelled"], "the drain must report one cancelled request")
+
+	// The fresh same-name backend is admitted by its first probe, and its state
+	// reflects only its own traffic: healthy, circuit closed, and its
+	// active-connections series survived the drain because the name is in use.
+	requireGaugeEventually(t, a.collector, "lb_backend_healthy", healthGaugeLabels("backend-b"), 1,
+		"the fresh same-name backend must be admitted")
+	assertGauge(t, a.collector, "lb_circuit_state", circuitStateLabels("backend-b", "closed"), 1)
+	_, active := gaugeValueOK(a.collector, "lb_active_connections", map[string]string{"backend": "backend-b"})
+	require.True(t, active, "the drain must not delete a series whose name is in use")
 }
 
 // TestChaosReloadSuccessiveDiffReAddsFresh proves each reload is diffed against

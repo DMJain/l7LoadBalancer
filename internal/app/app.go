@@ -211,6 +211,7 @@ func (a *App) Reload(ctx context.Context, cfg *config.Config) error {
 		a.outlier.Forget(b)
 		a.collector.DeleteBackendHealthy(b.Name)
 		a.collector.DeleteCircuitState(b.Name)
+		go a.drainBackend(ctx, b, *cfg.Reload.DrainWindow)
 	}
 	for _, b := range added {
 		a.collector.SetActiveConnections(b.Name, 0)

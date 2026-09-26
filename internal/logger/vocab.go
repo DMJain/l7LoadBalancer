@@ -60,6 +60,13 @@ const (
 	// or the defensive ReasonApplyError. A non-backend change additionally
 	// carries the changed field names under a `fields` attribute.
 	EventConfigReloadFailed = "config_reload_failed"
+
+	// EventBackendDrained is emitted once per removed backend when its drain
+	// finishes: it became idle before the window (reason ReasonIdle) or the
+	// window elapsed and its remaining requests were cancelled (reason
+	// ReasonWindowExpired). The line carries the number of requests cancelled.
+	// See ADR-0016 decision 7.
+	EventBackendDrained = "backend_drained"
 )
 
 // Transition reason names — the closed value vocabulary for the canonical
@@ -124,7 +131,14 @@ const (
 	// removed backend's drain window elapsed. It is the reason on the WARN
 	// "backend round-trip failed" line the proxy emits for such a request; it
 	// is not a backend failure, so it reaches no observer and no circuit,
-	// health, or outlier state (ADR-0016 decision 4). The drain lifecycle's
-	// own event vocabulary (backend drained; idle) lands with S4.T4.
+	// health, or outlier state (ADR-0016 decision 4). It is also the reason on
+	// the backend drained event when the drain's window elapsed with requests
+	// still in flight (ADR-0016 decision 7).
 	ReasonWindowExpired = "window_expired"
+
+	// ReasonIdle is paired with EventBackendDrained: a removed backend's drain
+	// finished because its active-connection count reached zero before the
+	// window elapsed, so no in-flight request had to be cancelled (ADR-0016
+	// decision 7).
+	ReasonIdle = "idle"
 )

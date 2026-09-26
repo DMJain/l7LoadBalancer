@@ -308,17 +308,19 @@ lb_circuit_state{backend="backend-c",state="open"} 0
 	require.NoError(t, testutil.GatherAndCompare(
 		application.Collector().Registry(), strings.NewReader(wantCircuit), "lb_circuit_state"))
 
-	// The removed backend's active-connections series must remain (T4 deletes
-	// it at drain completion); nothing else about it should.
+	// S4.T4's drain deletes the removed backend's active-connections series at
+	// drain completion; the unchanged backend's remains and the added one's is
+	// seeded.
 	const wantActive = `
 # HELP lb_active_connections In-flight requests currently being served by a backend.
 # TYPE lb_active_connections gauge
 lb_active_connections{backend="backend-a"} 0
-lb_active_connections{backend="backend-b"} 0
 lb_active_connections{backend="backend-c"} 0
 `
-	require.NoError(t, testutil.GatherAndCompare(
-		application.Collector().Registry(), strings.NewReader(wantActive), "lb_active_connections"))
+	require.Eventually(t, func() bool {
+		return testutil.GatherAndCompare(
+			application.Collector().Registry(), strings.NewReader(wantActive), "lb_active_connections") == nil
+	}, 3*time.Second, 10*time.Millisecond, "the drained backend's active series must be deleted")
 }
 
 // TestReloadSuccessiveDiffComposes proves each reload is diffed against the
