@@ -20,6 +20,7 @@ One-line decision summaries. Read the full ADR when your task touches that subsy
 | [0014](0014-health-endpoint-contract-and-probe-semantics.md) | Health endpoint contract and probe semantics | Accepted | Separate always-on listener serving `/livez`, `/readyz`, `/startupz` with pinned JSON envelope. |
 | [0015](0015-reload-architecture.md) | Zero-downtime reload architecture: in-process snapshot swap, backend identity, and admission | Accepted | Reload swaps an immutable versioned snapshot in process; identity is `(name, URL)`; only backends are reloadable. |
 | [0016](0016-drain-lifecycle.md) | Drain lifecycle: retired-context join, two-phase drain, and cancel-at-window | Accepted | Per-backend retired context joined via `context.AfterFunc`; drain window is config; cut-off signal is structural. |
+| [0017](0017-client-gone-classification-and-trial-rearm.md) | Client-gone classification and half-open trial re-arm | Accepted | Error handler classifies client-gone to 499/INFO with no observer; `Backend.RearmTrial()` re-arms a half-open trial a cancelled client held. |
 
 ## Decisions without a dedicated ADR
 

@@ -455,26 +455,25 @@ func captureLogger(t *testing.T) (*slog.Logger, func() []logRecord) {
 	return logger, dump
 }
 
-func recordsWithMsg(recs []logRecord, msg string) []logRecord {
+// recordsWithField returns every record whose field key equals want.
+func recordsWithField(recs []logRecord, key, want string) []logRecord {
 	var out []logRecord
 	for _, r := range recs {
-		if r.msg() == msg {
+		if r[key] == want {
 			out = append(out, r)
 		}
 	}
 	return out
 }
 
+func recordsWithMsg(recs []logRecord, msg string) []logRecord {
+	return recordsWithField(recs, "msg", msg)
+}
+
 // recordsWithReason returns every record carrying exactly this reason, used to
-// pin which of the three tiers a failed round trip was classified into.
+// pin which tier a failed round trip was classified into.
 func recordsWithReason(recs []logRecord, reason string) []logRecord {
-	var out []logRecord
-	for _, r := range recs {
-		if r["reason"] == reason {
-			out = append(out, r)
-		}
-	}
-	return out
+	return recordsWithField(recs, "reason", reason)
 }
 
 func TestProxyLogsRequestCompleteOnSuccess(t *testing.T) {
@@ -1032,6 +1031,60 @@ func TestProxyResponseHeaderTimeoutReachesObserversAsFailure(t *testing.T) {
 	assert.Equal(t, "WARN", fails[0].level())
 	assert.Empty(t, recordsWithReason(dump(), "client_canceled"),
 		"a backend timeout must not be misclassified as client-gone")
+}
+
+// TestProxyClientCancelRearmsHalfOpenTrial is the regression test for the wedge
+// the T5 suppression would otherwise introduce: a client-gone request that was
+// admitted as a half-open circuit's single trial must re-arm the trial, or the
+// circuit would deny every later request to a live backend forever. It forces
+// the trial path with a fixed selector and a real circuit gate, cancels the
+// in-flight trial request, and asserts a later admission is allowed again.
+func TestProxyClientCancelRearmsHalfOpenTrial(t *testing.T) {
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		close(entered)
+		<-release
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+
+	reg := registryFrom(t, backendEntry{"backend-a", srv.URL})
+	b := reg.All()[0]
+
+	const cooldown = 20 * time.Millisecond
+	br := circuit.New(cooldown, slog.Default(), metrics.NewCollector())
+	reg.SetCircuitGate(br)
+	for i := 0; i < 3; i++ {
+		br.ObserveRoundTrip(b, 0, false)
+	}
+	require.True(t, b.CircuitOpen(cooldown), "setup: circuit must be open")
+
+	p := New(reg, fixedSelector{b: b})
+	p.RegisterObserver(br)
+
+	require.Eventually(t, func() bool { return !b.CircuitOpen(cooldown) },
+		5*time.Second, time.Millisecond, "the circuit must promote to half-open after its cooldown")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	req := httptest.NewRequest(http.MethodGet, "/trial", nil).WithContext(ctx)
+	rec := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		p.ServeHTTP(rec, req)
+	}()
+
+	<-entered
+	assert.False(t, p.reg.Allow(b), "while the trial is out, no other request may be admitted")
+
+	cancel()
+	<-done
+	close(release)
+
+	assert.Equal(t, 499, rec.Code)
+	assert.True(t, p.reg.Allow(b),
+		"a client-gone trial must be re-armed so a later request can probe the backend")
 }
 
 // pathSelector routes by request path to a fixed backend, so one proxy can hold

@@ -254,6 +254,36 @@ func TestBackendCircuitTrialResolves(t *testing.T) {
 	})
 }
 
+// TestBackendRearmTrialLetsAnotherRequestTakeTheTrial pins the S4.T5 fix for the
+// half-open wedge: a request that took the trial but ended without a backend
+// outcome (a client cancellation) releases the slot via RearmTrial, so a later
+// request may probe the backend instead of the circuit denying every future
+// request forever.
+func TestBackendRearmTrialLetsAnotherRequestTakeTheTrial(t *testing.T) {
+	const cooldown = 50 * time.Millisecond
+	b := &Backend{Name: "backend-a"}
+	openCircuit(t, b, 3)
+	time.Sleep(200 * time.Millisecond)
+
+	require.False(t, b.CircuitOpen(cooldown), "after cooldown the circuit is half-open")
+	require.True(t, circuitAllow(b, cooldown), "the first request takes the trial")
+	require.False(t, circuitAllow(b, cooldown), "no second request may take the same trial")
+
+	b.RearmTrial()
+
+	assert.True(t, circuitAllow(b, cooldown),
+		"after a client-gone trial is re-armed, a later request must be able to take it")
+}
+
+// TestBackendRearmTrialIsNoOpWhenNotHalfOpen proves the release is a no-op on a
+// closed circuit and never panics on a zero-value backend, so the proxy can
+// call it unconditionally on a client-gone request.
+func TestBackendRearmTrialIsNoOpWhenNotHalfOpen(t *testing.T) {
+	b := &Backend{Name: "backend-a"}
+	assert.NotPanics(t, b.RearmTrial)
+	assert.True(t, circuitAllow(b, time.Hour), "a closed circuit admits every request")
+}
+
 func TestBackendCircuitAdmitsExactlyOneConcurrentTrial(t *testing.T) {
 	const (
 		cooldown   = 50 * time.Millisecond

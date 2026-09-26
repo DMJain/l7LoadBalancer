@@ -371,24 +371,27 @@ func (p *Proxy) errorHandler(w http.ResponseWriter, r *http.Request, err error) 
 	}
 	attrs = append(attrs, "backend", state.backend.Name)
 
+	level := slog.LevelWarn
 	switch {
 	case errors.Is(context.Cause(r.Context()), backend.ErrDrainWindowExpired):
 		state.status = http.StatusBadGateway
 		attrs = append(attrs, "reason", logger.ReasonWindowExpired)
 		p.observe(state, p2cFailurePenalty, false)
-		state.release()
-		p.logger.Warn("backend round-trip failed", attrs...)
 	case state.clientCtx.Err() != nil:
 		state.status = statusClientClosedRequest
 		attrs = append(attrs, "reason", logger.ReasonClientCanceled)
-		state.release()
-		p.logger.Info("backend round-trip failed", attrs...)
+		// No round trip completed, so nothing is observed — but if this
+		// request was a half-open circuit's trial, its slot must be re-armed
+		// or the circuit would deny every later request to a live backend
+		// (ADR-0017).
+		state.backend.RearmTrial()
+		level = slog.LevelInfo
 	default:
 		state.status = http.StatusBadGateway
 		p.observe(state, p2cFailurePenalty, false)
-		state.release()
-		p.logger.Warn("backend round-trip failed", attrs...)
 	}
+	state.release()
+	p.logger.Log(r.Context(), level, "backend round-trip failed", attrs...)
 
 	http.Error(w, http.StatusText(state.status), state.status)
 }
@@ -456,8 +459,9 @@ func backendName(state *reqState) string {
 	return state.backend.Name
 }
 
-// statusClass maps an HTTP status code to its class label ("2xx", "5xx"),
-// matching the metric's status_class vocabulary. A per-code label would make
+// statusClass maps an HTTP status code to its class label ("2xx", "4xx",
+// "5xx", …), matching the metric's status_class vocabulary. A per-code label
+// would make
 // Prometheus cardinality unbounded from arbitrary upstream statuses
 // (ADR-0013 decision 3).
 func statusClass(status int) string {

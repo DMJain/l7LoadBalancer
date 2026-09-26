@@ -351,6 +351,33 @@ func (b *Backend) CircuitAllow(cooldown time.Duration) (bool, CircuitTransition)
 	}
 }
 
+// RearmTrial releases a Half-Open circuit's trial slot after the request that
+// took it ended without a backend outcome — a client-gone cancellation, which
+// the proxy records as no observer result at all (S4.T5). While a trial is
+// outstanding the circuit admits no other request, so without this the trial
+// flag would never clear and the backend would deny every future request even
+// though no probe of it ever completed. It is a no-op unless the circuit is
+// Half-Open with its trial taken, so a caller may invoke it unconditionally.
+//
+// The call is intentionally not generation-guarded: while a trial is
+// outstanding no other request may be admitted, so the only outcome that could
+// interleave is a stale in-flight request admitted while Closed resolving the
+// trial early — the same documented limitation as CircuitSuccess/CircuitFailure
+// (ADR-0012), whose resolution turns this call into a no-op. See ADR-0017.
+func (b *Backend) RearmTrial() {
+	for {
+		old := b.circuit.Load()
+		if old == nil || old.state != circuitHalfOpen || !old.trial {
+			return
+		}
+		next := *old
+		next.trial = false
+		if b.circuit.CompareAndSwap(old, &next) {
+			return
+		}
+	}
+}
+
 // CircuitSuccess records a successful round trip. From Closed it resets the
 // consecutive-failure count to zero (ADR-0011 decision 8); from Half-Open it
 // closes the circuit, resolving the trial with a single success and no
