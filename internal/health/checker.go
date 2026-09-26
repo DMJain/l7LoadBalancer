@@ -12,6 +12,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -38,17 +39,25 @@ const (
 	// ejected by passive outlier detection, so it also paces recovery at
 	// roughly 10s by default.
 	probeSuccessesBeforeHealthy = 2
+
+	// probeInitialSuccessesBeforeHealthy is the number of successful probes
+	// that admit a backend a reload just added. One, not the recovery
+	// threshold: an added backend starts unhealthy and its first successful
+	// probe is the proof the operator's URL works (ADR-0015 decision 10).
+	probeInitialSuccessesBeforeHealthy = 1
 )
 
 // Checker periodically probes every backend in a Registry and reflects the
 // outcome into Backend health state.
 //
-// Concurrency: the Checker itself is immutable after New except for the
-// first-probe-round latch (probed/probeRoundComplete), which is atomic; each
-// backend's mutable state lives in that backend's own prober, touched by
-// exactly one goroutine (see Start), so the consecutive counters need no
-// synchronization. Backend health is read/written only through Backend's
-// atomic-backed methods. See ADR-0011 decisions 2, 10, and 11.
+// Concurrency: the Checker's immutable fields are set at New; the running
+// probers are tracked in a mutex-guarded map so a reload can add and remove
+// individual backends without touching the others, and the first-probe-round
+// latch (probed/probeRoundComplete) is atomic. Each backend's mutable state
+// lives in that backend's own prober, touched by exactly one goroutine (its
+// run loop) or, in tests, one goroutine calling probeOnce directly. Backend
+// health is read/written only through Backend's atomic-backed methods. See
+// ADR-0011 decisions 2, 10, and 11, and ADR-0015 decision 10.
 type Checker struct {
 	reg      *backend.Registry
 	interval time.Duration
@@ -63,8 +72,25 @@ type Checker struct {
 	// probe. It is only compared against backendCount, never reset.
 	probed atomic.Int32
 	// probeRoundComplete latches true once probed reaches backendCount — the
-	// first full sweep — and is never cleared (ADR-0014 (S3.T12)).
+	// first full sweep — and is never cleared, including by a reload's
+	// add/remove (ADR-0014 (S3.T12) decision 4).
 	probeRoundComplete atomic.Bool
+
+	// mu guards probers, which holds each running prober's control block. Add
+	// and Remove are called off the request path (Start once, then the reload
+	// loop), so the lock exists only to keep a concurrent add and remove from
+	// corrupting the map.
+	mu      sync.Mutex
+	probers map[*backend.Backend]*proberHandle
+}
+
+// proberHandle is one running prober's control block: its cancel function and
+// a channel closed when its goroutine exits. Remove waits on done so that once
+// it returns, a removed backend's probe can no longer write a transition log
+// or gauge after the reload has deleted its series.
+type proberHandle struct {
+	cancel context.CancelFunc
+	done   chan struct{}
 }
 
 // New builds a Checker over reg that probes each backend every interval,
@@ -95,6 +121,7 @@ func New(reg *backend.Registry, interval, timeout time.Duration, log *slog.Logge
 		log:          log,
 		metrics:      collector,
 		backendCount: len(reg.All()),
+		probers:      make(map[*backend.Backend]*proberHandle),
 		client: &http.Client{
 			Transport: transport,
 			Timeout:   timeout,
@@ -105,14 +132,72 @@ func New(reg *backend.Registry, interval, timeout time.Duration, log *slog.Logge
 	}
 }
 
-// Start launches one probe goroutine per backend. It returns immediately; the
-// goroutines run until ctx is cancelled, which is why main passes its existing
-// SIGINT/SIGTERM signal context rather than introducing a second shutdown
-// primitive (ADR-0011 decision 13).
+// Start launches one probe goroutine per backend in the registry's current
+// snapshot. It returns immediately; the goroutines run until ctx is cancelled,
+// which is why main passes its existing SIGINT/SIGTERM signal context rather
+// than introducing a second shutdown primitive (ADR-0011 decision 13).
+//
+// Start registers every backend with the ordinary (non-added) admission rule;
+// a reload registers a backend it introduces with Add.
 func (c *Checker) Start(ctx context.Context) {
 	for _, b := range c.reg.All() {
-		go c.newProber(b).run(ctx)
+		c.add(ctx, b, false)
 	}
+}
+
+// Add starts probing a backend a reload has just introduced and returns
+// immediately. It is the reload counterpart to Start: b is marked unhealthy and
+// admitted by one successful probe, logged with reason initial_probe, because
+// an added URL is unproven and must not produce client-visible 502s before it
+// has answered once (ADR-0015 decision 10). After admission the prober reverts
+// to the normal consecutive-success recovery threshold. Adding a backend that
+// is already being probed is a no-op.
+func (c *Checker) Add(ctx context.Context, b *backend.Backend) {
+	c.add(ctx, b, true)
+}
+
+// add is the shared registration behind Start and Add. added selects the
+// admission rule: true for a reload-added backend (starts unhealthy, admitted
+// on one success), false for a startup backend (starts healthy, recovered only
+// after the normal threshold). The prober is registered in the checker's
+// mutex-guarded map so Remove can stop it without touching any other backend's
+// prober.
+func (c *Checker) add(ctx context.Context, b *backend.Backend, added bool) {
+	c.mu.Lock()
+	if _, exists := c.probers[b]; exists {
+		c.mu.Unlock()
+		return
+	}
+	pctx, cancel := context.WithCancel(ctx)
+	p := c.newProber(b)
+	p.added = added
+	h := &proberHandle{cancel: cancel, done: make(chan struct{})}
+	c.probers[b] = h
+	c.mu.Unlock()
+
+	if added {
+		b.MarkUnhealthy()
+	}
+	go func() {
+		defer close(h.done)
+		p.run(pctx)
+	}()
+}
+
+// Remove stops probing b and waits until its prober goroutine has exited, so a
+// probe in flight at removal cannot apply its outcome after Remove returns and
+// recreate a series a reload has just deleted. Removing a backend that is not
+// being probed is a no-op.
+func (c *Checker) Remove(b *backend.Backend) {
+	c.mu.Lock()
+	h := c.probers[b]
+	delete(c.probers, b)
+	c.mu.Unlock()
+	if h == nil {
+		return
+	}
+	h.cancel()
+	<-h.done
 }
 
 // ProbeRoundComplete reports whether every configured backend has answered at
@@ -125,8 +210,8 @@ func (c *Checker) ProbeRoundComplete() bool {
 
 // probeOnce issues one probe against b and folds the outcome into the state
 // machine, marking the backend healthy/unhealthy once a consecutive run
-// reaches M or N. It is intentionally separate from run's ticker loop so tests
-// can drive probe cycles directly, with no real ticker or context
+// reaches its threshold. It is intentionally separate from run's ticker loop so
+// tests can drive probe cycles directly, with no real ticker or context
 // cancellation. It returns whether this probe succeeded.
 //
 // Transition logging is edge-triggered twice over. The threshold checks fire
@@ -144,21 +229,45 @@ func (c *Checker) ProbeRoundComplete() bool {
 // adding a prober field (ADR-0013 decision 11). lb_backend_healthy is written
 // inside those same two guarded blocks, so it shares this exact edge-triggered
 // signal rather than re-deriving health independently (ADR-0013 decision 6).
+//
+// A prober for a reload-added backend (p.added) uses a one-success admission
+// threshold with reason initial_probe for its first successful probe only, then
+// reverts to the normal recovery threshold (ADR-0015 decision 10); its first
+// failure logs nothing because the backend was never healthy.
 func (p *prober) probeOnce(ctx context.Context) bool {
 	ok := p.checker.probe(ctx, p.target)
+	// A prober removed while its probe was in flight must not apply the
+	// outcome: no health mark, no log line, no gauge write. Remove cancels the
+	// prober's context and then waits for this goroutine to exit, so an outcome
+	// that gets past this check still finishes before Remove returns and a
+	// reload deletes the backend's series (S4.T3.0).
+	if ctx.Err() != nil {
+		return false
+	}
 	if ok {
 		p.failures = 0
 		p.successes++
-		if p.successes >= probeSuccessesBeforeHealthy && !p.target.IsHealthy() {
+		threshold, reason := probeSuccessesBeforeHealthy, logger.ReasonProbeRecovered
+		if p.added {
+			threshold, reason = probeInitialSuccessesBeforeHealthy, logger.ReasonInitialProbe
+		}
+		if p.successes >= threshold && !p.target.IsHealthy() {
 			p.checker.log.Info("backend reinstated",
 				"backend", p.target.Name,
 				"event", logger.EventHealthReinstated,
-				"reason", logger.ReasonProbeRecovered,
+				"reason", reason,
 			)
 			p.checker.metrics.SetBackendHealthy(p.target.Name, true)
 		}
-		if p.successes >= probeSuccessesBeforeHealthy {
+		if p.successes >= threshold {
 			p.target.MarkHealthy()
+		}
+		// First admission is consumed here: a later ejection recovers on the
+		// normal consecutive-success threshold, not one probe, and the streak
+		// starts fresh so that threshold is measured from admission.
+		if p.added {
+			p.added = false
+			p.successes = 0
 		}
 	} else {
 		p.successes = 0
@@ -203,6 +312,12 @@ type prober struct {
 	checker *Checker
 	target  *backend.Backend
 
+	// added marks a prober for a backend a reload just introduced. While set,
+	// a single successful probe admits the backend (reason initial_probe);
+	// admission consumes the flag, so later recovery uses the normal
+	// consecutive-success threshold.
+	added bool
+
 	successes int
 	failures  int
 
@@ -217,8 +332,14 @@ func (c *Checker) newProber(b *backend.Backend) *prober {
 }
 
 // run is the per-backend goroutine wiring: a ticker selecting against ctx.
-// All probe logic lives in probeOnce.
+// All probe logic lives in probeOnce. A reload-added prober probes once
+// immediately so it can be admitted without waiting a full interval; startup
+// probers keep the original first-probe-after-one-interval schedule
+// (ADR-0015 decision 10).
 func (p *prober) run(ctx context.Context) {
+	if p.added {
+		p.probeOnce(ctx)
+	}
 	ticker := time.NewTicker(p.checker.interval)
 	defer ticker.Stop()
 	for {

@@ -126,6 +126,23 @@ func (c *Collector) SetBackendHealthy(backend string, healthy bool) {
 	c.healthy.WithLabelValues(backend).Set(value)
 }
 
+// DeleteBackendHealthy removes a backend's lb_backend_healthy series. Reload
+// calls it when a backend leaves the fleet, so its dashboard entry stops
+// rendering; deleting a backend with no series is a no-op.
+func (c *Collector) DeleteBackendHealthy(backend string) {
+	c.healthy.DeleteLabelValues(backend)
+}
+
+// DeleteCircuitState removes every lb_circuit_state series for a backend — all
+// three state labels — for the same reason DeleteBackendHealthy exists. Neither
+// deletion touches the active-connections series: a removed backend's in-flight
+// requests still decrement it by name until its drain completes (S4.T4).
+func (c *Collector) DeleteCircuitState(backend string) {
+	for _, s := range circuitStates {
+		c.circuit.DeleteLabelValues(backend, string(s))
+	}
+}
+
 // SetCircuitState sets the per-backend circuit-state label enum, writing every
 // known state on every call — the target to 1 and the other two to 0 — so the
 // exactly-one-state-is-1 invariant holds even if a caller only knows the new

@@ -186,6 +186,41 @@ func TestOutlierDetectorDefaultEjectsViaMarkUnhealthy(t *testing.T) {
 		"the production default must eject through Backend.MarkUnhealthy")
 }
 
+// TestOutlierDetectorForgetClearsWindow proves a removed backend's window is
+// dropped whole: failures observed before Forget no longer accumulate toward a
+// later ejection. Without Forget the 4 + 4 failures would sit in the same
+// window and cross the 5-failure threshold, so the assertion has teeth.
+func TestOutlierDetectorForgetClearsWindow(t *testing.T) {
+	b := outlierBackends(t, 1)[0]
+	d, rec := newRecordingDetector()
+
+	for i := 0; i < outlierFailuresBeforeEject-1; i++ {
+		d.ObserveRoundTrip(b, time.Millisecond, false)
+	}
+	d.Forget(b)
+	for i := 0; i < outlierFailuresBeforeEject-1; i++ {
+		d.ObserveRoundTrip(b, time.Millisecond, false)
+	}
+
+	assert.True(t, b.IsHealthy(), "failures before Forget must not count after it")
+	assert.Zero(t, rec.count(b))
+
+	// A fresh window still ejects on its own threshold.
+	for i := 0; i < outlierFailuresBeforeEject; i++ {
+		d.ObserveRoundTrip(b, time.Millisecond, false)
+	}
+	assert.False(t, b.IsHealthy())
+	assert.Equal(t, 1, rec.count(b))
+}
+
+// TestOutlierDetectorForgetUnknownBackendIsNoop proves forget is safe for a
+// backend the detector has never observed, as a reload that removes an idle
+// backend would call it.
+func TestOutlierDetectorForgetUnknownBackendIsNoop(t *testing.T) {
+	d := NewOutlierDetector(discardLogger(), metrics.NewCollector())
+	require.NotPanics(t, func() { d.Forget(outlierBackends(t, 1)[0]) })
+}
+
 // TestOutlierDetectorConcurrentObserveEjectsEachBackendOnce drives the detector
 // from many goroutines per backend under -race: the lock-free-looking contract
 // must still eject each backend exactly once, not once per racing observer.

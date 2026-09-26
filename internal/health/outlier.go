@@ -94,6 +94,15 @@ func NewOutlierDetector(log *slog.Logger, collector *metrics.Collector) *Outlier
 	}
 }
 
+// Forget discards b's window entirely. A reload calls it when b leaves the
+// fleet, so a backend re-added later under the same name cannot inherit a
+// stale failure window; forgetting a backend with no window is a no-op.
+func (d *OutlierDetector) Forget(b *backend.Backend) {
+	d.mu.Lock()
+	delete(d.windows, b)
+	d.mu.Unlock()
+}
+
 // ObserveRoundTrip folds one backend round trip into that backend's window and
 // ejects it once the failure count reaches the threshold. It is called
 // unconditionally for every round trip, success and failure alike; the duration

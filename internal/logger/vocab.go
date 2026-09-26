@@ -22,10 +22,13 @@ const (
 	// outlier detection crossed its in-window failure threshold.
 	EventHealthEjected = "health_ejected"
 
-	// EventHealthReinstated is emitted when a previously ejected backend is
-	// marked healthy again by the active health checker. reason is
-	// ReasonProbeRecovered. Passive outlier detection never reinstates a
-	// backend; only an active probe may prove recovery (ADR-0011 decision 2).
+	// EventHealthReinstated is emitted when a backend becomes healthy again:
+	// either a previously ejected backend is marked healthy by the active
+	// health checker (reason ReasonProbeRecovered), or a backend a reload just
+	// added is admitted by its first successful probe (reason
+	// ReasonInitialProbe). Passive outlier detection never reinstates a
+	// backend; only an active probe may prove health (ADR-0011 decision 2,
+	// ADR-0015 decision 10).
 	EventHealthReinstated = "health_reinstated"
 
 	// EventCircuitOpened is emitted when a backend's circuit moves to Open.
@@ -58,6 +61,12 @@ const (
 	// ReasonProbeRecovered is paired with EventHealthReinstated: the active
 	// health checker observed its consecutive-success threshold.
 	ReasonProbeRecovered = "probe_recovered"
+
+	// ReasonInitialProbe is paired with EventHealthReinstated: a backend a
+	// reload just added answered its first successful probe, admitting it to
+	// the selectable set. Distinct from ReasonProbeRecovered so first admission
+	// is legible apart from ejection recovery (ADR-0015 decision 10).
+	ReasonInitialProbe = "initial_probe"
 
 	// ReasonOutlierWindow is paired with EventHealthEjected: passive outlier
 	// detection observed its in-window failure threshold.

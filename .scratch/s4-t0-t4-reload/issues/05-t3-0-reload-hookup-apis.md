@@ -11,31 +11,31 @@ Nothing calls these yet. Same prefactor pattern as S3.T12.0. Spec: stories
 
 **Blocked by:** 04.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] The active checker gains **add** (start a prober for a backend) and
+- [x] The active checker gains **add** (start a prober for a backend) and
       **remove** (stop it). Each prober has its own cancel function in a
       mutex-guarded map, off the request path. Existing Start behaviour and
       unchanged backends' probers are unaffected.
-- [ ] A prober checks its own context after a probe returns and before
+- [x] A prober checks its own context after a probe returns and before
       applying any outcome: a probe in flight at remove never marks health,
       logs, or writes a gauge. Race test (`-race`) with a probe blocked on a
       channel gate: remove, release, assert no transition log and no gauge
       write.
-- [ ] A backend started via add as "added" is unhealthy until **one**
+- [x] A backend started via add as "added" is unhealthy until **one**
       successful probe, then marked healthy with exactly one
       `health_reinstated` line with reason `initial_probe` (not
       `probe_recovered`) and its healthy gauge flipped 0 → 1. A failing first
       probe emits nothing. Added probers probe immediately, not after one
       interval. Recovery after ejection still needs two successes.
-- [ ] The probe-round-complete latch is never cleared by add/remove (ADR-0014
+- [x] The probe-round-complete latch is never cleared by add/remove (ADR-0014
       decision 4).
-- [ ] The log vocabulary gains the `initial_probe` reason constant; the
+- [x] The log vocabulary gains the `initial_probe` reason constant; the
       health-reinstated event's documentation is widened to cover first
       admission.
-- [ ] The outlier detector gains **forget**, deleting a backend's window.
-- [ ] The metrics collector gains deletion of a backend's `lb_backend_healthy`
+- [x] The outlier detector gains **forget**, deleting a backend's window.
+- [x] The metrics collector gains deletion of a backend's `lb_backend_healthy`
       and `lb_circuit_state` series (all state labels). No deletion of the
       active-connections series (T4).
-- [ ] Tests Red first, one per surface above; `make test`, `make test-race`,
+- [x] Tests Red first, one per surface above; `make test`, `make test-race`,
       vet, fmt clean.

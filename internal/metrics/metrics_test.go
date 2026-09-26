@@ -185,6 +185,42 @@ func TestCollectorActiveConnections(t *testing.T) {
 	require.NotNil(t, findMetric(t, c, "lb_active_connections", map[string]string{"backend": "backend-b"}))
 }
 
+// TestCollectorDeletesBackendSeries proves the deletion operations reload needs
+// for a removed backend: its healthy series and every circuit-state series are
+// gone, while its active-connections series is deliberately left in place
+// (deleted only at drain completion, S4.T4).
+func TestCollectorDeletesBackendSeries(t *testing.T) {
+	t.Parallel()
+	c := NewCollector()
+	c.SetBackendHealthy("backend-a", true)
+	c.SetCircuitState("backend-a", CircuitStateOpen)
+	c.SetActiveConnections("backend-a", 2)
+
+	c.DeleteBackendHealthy("backend-a")
+	c.DeleteCircuitState("backend-a")
+
+	assert.Nil(t, findMetric(t, c, "lb_backend_healthy", map[string]string{"backend": "backend-a"}),
+		"the healthy series must be gone")
+	for _, state := range circuitStates {
+		assert.Nil(t, findMetric(t, c, "lb_circuit_state",
+			map[string]string{"backend": "backend-a", "state": string(state)}),
+			"every circuit-state series must be gone")
+	}
+	require.NotNil(t, findMetric(t, c, "lb_active_connections", map[string]string{"backend": "backend-a"}),
+		"the active-connections series is not deleted here")
+}
+
+// TestCollectorDeleteUnknownSeriesIsNoop proves deletion is safe for a backend
+// with no series, as it is for a backend removed before serving any traffic.
+func TestCollectorDeleteUnknownSeriesIsNoop(t *testing.T) {
+	t.Parallel()
+	c := NewCollector()
+	require.NotPanics(t, func() {
+		c.DeleteBackendHealthy("absent")
+		c.DeleteCircuitState("absent")
+	})
+}
+
 func TestCollectorInstancesIndependent(t *testing.T) {
 	t.Parallel()
 	c1 := NewCollector()

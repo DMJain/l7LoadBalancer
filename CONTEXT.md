@@ -117,8 +117,10 @@ clients rather than following them, so a redirecting backend is unusable
 even though it is "up." Consecutive probes drive the health state machine:
 3 consecutive failed probes eject a backend, 2 consecutive successful ones
 reinstate it — and active probes are the *only* path that reinstates a
-backend ejected by passive detection. The thresholds are Go constants, not
-config. See ADR-0011 decisions 2 and 10.
+backend ejected by passive detection. The one exception is a backend a
+reload adds: it starts unhealthy and is admitted by a *single* successful
+probe, logged with reason `initial_probe` (ADR-0015 decision 10). The
+thresholds are Go constants, not config. See ADR-0011 decisions 2 and 10.
 _Avoid_: health check (the subsystem), ping
 
 **Outlier** (passive health check context):
