@@ -55,6 +55,16 @@ contract to implement.
    production every instance comes from `newBackend`, so every selectable
    backend has a real retired context.
 
+   `ErrDrainWindowExpired` is a second **exported** sentinel, which the frozen
+   error-handling convention allowed exactly one of
+   (`balancer.ErrNoHealthyBackends`). It is exported deliberately and is not a
+   branchable condition: the proxy must match it against `context.Cause` to
+   attribute the `window_expired` reason, and it must cross the `backend →
+   proxy` package boundary to be comparable at all. This decision amends that
+   convention (recorded in `AGENTS.md` decision 7 and the contracts doc's
+   "Error handling convention") rather than breaking it silently; no caller
+   branches on it as control flow.
+
    Why a context rather than a cancel-func or a done channel: `context` is the
    stdlib idiom for "work scoped to a lifetime", it composes with the request's
    own client-cancellation context, and `context.AfterFunc` is the one stdlib

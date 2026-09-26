@@ -198,6 +198,12 @@ backends:
 			wantErr:   true,
 			errSubstr: "drain_windw",
 		},
+		{
+			name:      "malformed reload drain_window is rejected at load",
+			contents:  "listen: \":8080\"\nreload:\n  drain_window: \"abc\"\n",
+			wantErr:   true,
+			errSubstr: "cannot unmarshal",
+		},
 	}
 
 	for _, tc := range cases {

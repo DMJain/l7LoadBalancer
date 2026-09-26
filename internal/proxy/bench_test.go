@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -39,5 +40,31 @@ func BenchmarkProxyServeHTTP(b *testing.B) {
 		if rec.Code != http.StatusOK {
 			b.Fatalf("unexpected status %d", rec.Code)
 		}
+	}
+}
+
+// BenchmarkRetiredContextJoin isolates the drain join's marginal per-request
+// cost from the HTTP round trip: one context.WithCancelCause plus one
+// context.AfterFunc registered on a real backend's retired context and then
+// stopped, exactly what ServeHTTP does per request. It is the evidence for
+// ADR-0016 decision 3's "no goroutine per request and no mutex-guarded
+// cancel-func registry" claim.
+func BenchmarkRetiredContextJoin(b *testing.B) {
+	reg, err := backend.NewRegistry([]config.BackendConfig{{Name: "backend-a", URL: "http://127.0.0.1:9001"}})
+	if err != nil {
+		b.Fatal(err)
+	}
+	bk := reg.All()[0]
+	retired := bk.RetiredContext()
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, cancel := context.WithCancelCause(context.Background())
+		stop := context.AfterFunc(retired, func() {
+			cancel(context.Cause(retired))
+		})
+		stop()
+		cancel(nil)
 	}
 }

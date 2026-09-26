@@ -116,6 +116,15 @@ deliberately has no exported validation sentinels — callers don't need to
 distinguish "empty listen" from "bad URL" programmatically, only render
 the wrapped message.
 
+One further exported sentinel was added by S4.T4.0 and is recorded in
+ADR-0016 decision 2: `backend.ErrDrainWindowExpired`. It is **not** a branchable
+error condition like `ErrNoHealthyBackends` — it is a **comparison value** the
+proxy matches against `context.Cause(r.Context())` to attribute a drain
+cancellation's WARN reason (`window_expired`). It has to cross the
+`backend → proxy` package boundary to be comparable, which is why it is
+exported; no caller branches on it as control flow. It is the only exception to
+the rule above, amending it deliberately rather than silently.
+
 ## Log field vocabulary
 
 Canonical field names (from `internal/logger/doc.go`): `backend`,

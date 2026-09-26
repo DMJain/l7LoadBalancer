@@ -214,7 +214,7 @@ internal/circuit  — depends on backend (Sprint 3)
   ```
   **Why in `balancer`?** Four implementations live here. `proxy` only stores and calls the interface. Consumer-side placement would add an import inversion for zero isolation benefit. See ADR-0002 decision 2.
 
-- **`ErrNoHealthyBackends`** — the **only** exported sentinel error in the project. `proxy` branches on `errors.Is(err, ErrNoHealthyBackends)` to decide 503 vs 502. All other errors use wrapping, not sentinels.
+- **`ErrNoHealthyBackends`** — the **only branchable exported sentinel error in the project**. `proxy` branches on `errors.Is(err, ErrNoHealthyBackends)` to decide 503 vs 502. All other errors use wrapping, not sentinels. (One further exported value, `backend.ErrDrainWindowExpired`, is a `context.Cause` comparison value, not branchable — see ADR-0016 decision 2.)
 
 - **`NewFromConfig(cfg, reg) (Selector, error)`** — selector factory. Lives in `balancer` (not `main.go`) because `balancer` owns the config-string-to-type mapping. `main.go` stays a thin wiring layer.
 
@@ -356,7 +356,7 @@ All non-trivial decisions must have an ADR. Current ADRs:
 4. **Backend fields are unexported, methods-only access** — ADR-0002. Compile-time encapsulation lets Sprint 3 change internal representation.
 5. **Contract freeze before implementation** — ADR-0002. Prevents cross-session integration drift.
 6. **Log/metric names frozen before request-path code exists** — ADR-0002. Cheaper than grep-and-rename later.
-7. **`ErrNoHealthyBackends` is the only sentinel** — `docs/design/sprint-1-contracts.md`. All other errors are wrapped with `fmt.Errorf`.
+7. **`ErrNoHealthyBackends` is the only branchable sentinel** — `docs/design/sprint-1-contracts.md`. All other errors are wrapped with `fmt.Errorf`. The one exception is `backend.ErrDrainWindowExpired` (ADR-0016 decision 2), which is not a branchable condition but a **comparison value** matched against `context.Cause` to attribute a drain cancellation's log reason; it is exported only because it must cross the `backend → proxy` package boundary. See the contracts doc's "Error handling convention".
 8. **`httputil.ReverseProxy` over hand-rolled proxy** — stated in architecture summary. Handles hop-by-hop headers, `X-Forwarded-For`, buffering. The interesting work is the selection layer.
 9. **Atomic counter for RoundRobin, not mutex** — single increment doesn't need mutual exclusion.
 10. **Deterministic tie-breaking in LeastConnections** — first-in-registry-order wins. Enables reproducible tests.
@@ -420,7 +420,7 @@ All commands via `make`. Run `make help` to list them. Common:
 - **Language**: Go 1.22+.
 - **Style**: `gofmt` + `goimports`. No exceptions.
 - **Packages**: lowercase, single word where possible. No `util`, no `common`.
-- **Errors**: wrap with `fmt.Errorf("context: %w", err)`. No sentinel `errors.New` at call sites for dynamic messages. The only exported sentinel is `balancer.ErrNoHealthyBackends`.
+- **Errors**: wrap with `fmt.Errorf("context: %w", err)`. No sentinel `errors.New` at call sites for dynamic messages. The only branchable exported sentinel is `balancer.ErrNoHealthyBackends`; the one further exported value is `backend.ErrDrainWindowExpired`, a `context.Cause` comparison value, not a branchable condition (ADR-0016 decision 2).
 - **Contexts**: every request-scoped function takes `context.Context` as first arg.
 - **Interfaces**: define at the consumer, not the producer. Small interfaces preferred. **Exception**: `Selector` in `balancer` — see ADR-0002.
 - **Concurrency**: prefer channels for coordination, atomics for counters, mutex for state. Document the concurrency model at the top of every file with shared state. See the concurrency ownership table in `docs/design/sprint-1-contracts.md`.

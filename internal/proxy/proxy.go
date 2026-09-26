@@ -267,8 +267,9 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// (ADR-0016 decision 3).
 	reqCtx, cancel := context.WithCancelCause(r.Context())
 	defer cancel(nil)
-	stopRetire := context.AfterFunc(b.RetiredContext(), func() {
-		cancel(context.Cause(b.RetiredContext()))
+	retired := b.RetiredContext()
+	stopRetire := context.AfterFunc(retired, func() {
+		cancel(context.Cause(retired))
 	})
 	defer stopRetire()
 
