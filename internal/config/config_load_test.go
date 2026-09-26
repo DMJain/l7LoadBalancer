@@ -175,6 +175,29 @@ backends:
 			wantErr:   true,
 			errSubstr: "listn",
 		},
+		{
+			name:     "reload drain_window decodes from YAML without defaulting",
+			contents: "listen: \":8080\"\nreload:\n  drain_window: \"15s\"\n",
+			check: func(t *testing.T, cfg *Config) {
+				t.Helper()
+				require.NotNil(t, cfg.Reload.DrainWindow)
+				assert.Equal(t, 15*time.Second, *cfg.Reload.DrainWindow)
+			},
+		},
+		{
+			name:     "omitted reload drain_window is left nil by Load",
+			contents: "listen: \":8080\"\n",
+			check: func(t *testing.T, cfg *Config) {
+				t.Helper()
+				assert.Nil(t, cfg.Reload.DrainWindow)
+			},
+		},
+		{
+			name:      "unknown field inside reload section is rejected",
+			contents:  "listen: \":8080\"\nreload:\n  drain_windw: \"15s\"\n",
+			wantErr:   true,
+			errSubstr: "drain_windw",
+		},
 	}
 
 	for _, tc := range cases {

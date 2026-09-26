@@ -1,6 +1,8 @@
 package backend
 
 import (
+	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -8,6 +10,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/DMJain/l7LoadBalancer/internal/config"
 )
 
 // circuitTestCooldown is long enough that an opened circuit never promotes to
@@ -54,6 +58,41 @@ func TestBackendRemovedFlag(t *testing.T) {
 
 	b.markRemoved()
 	assert.True(t, b.IsRemoved())
+}
+
+// TestBackendRetiredContext proves the retired context is created at
+// construction, is not cancelled by default, and is cancelled with
+// ErrDrainWindowExpired by Retire. The backend is built through NewRegistry,
+// the only production constructor, so its retired context is real.
+func TestBackendRetiredContext(t *testing.T) {
+	reg, err := NewRegistry([]config.BackendConfig{{Name: "backend-a", URL: "http://127.0.0.1:9001"}})
+	require.NoError(t, err)
+	b := reg.All()[0]
+
+	require.NotNil(t, b.RetiredContext())
+	assert.NoError(t, b.RetiredContext().Err(), "a fresh backend is not retired")
+
+	b.Retire()
+	assert.Error(t, b.RetiredContext().Err(), "Retire must cancel the retired context")
+	assert.True(t, errors.Is(context.Cause(b.RetiredContext()), ErrDrainWindowExpired),
+		"the cancellation must carry ErrDrainWindowExpired as its cause")
+
+	b.Retire()
+	assert.True(t, errors.Is(context.Cause(b.RetiredContext()), ErrDrainWindowExpired),
+		"Retire is idempotent and must not change the cause")
+}
+
+// TestBackendZeroValueRetiredContext proves the retired-context accessors are
+// total for a directly-constructed Backend: the accessor returns a usable
+// context and Retire is a no-op rather than a nil-context panic.
+func TestBackendZeroValueRetiredContext(t *testing.T) {
+	b := &Backend{Name: "backend-a"}
+
+	require.NotNil(t, b.RetiredContext())
+	assert.NoError(t, b.RetiredContext().Err())
+
+	require.NotPanics(t, b.Retire)
+	assert.NoError(t, b.RetiredContext().Err(), "Retire on a backend with no retired context is a no-op")
 }
 
 func TestBackendActiveConns(t *testing.T) {

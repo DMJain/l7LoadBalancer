@@ -1,10 +1,22 @@
 package backend
 
 import (
+	"context"
+	"errors"
 	"net/url"
 	"sync/atomic"
 	"time"
 )
+
+// ErrDrainWindowExpired is the cause with which a retired backend's context is
+// cancelled: a removed backend's drain window elapsed while requests were still
+// in flight (ADR-0016). The proxy propagates it onto each joined outbound
+// request context, so an error handler can tell a drain cancellation from a
+// client cancellation (context.Canceled) or a real transport failure, and
+// attribute reason window_expired. It is the one exported sentinel this package
+// adds; unlike balancer.ErrNoHealthyBackends it is a cause value, not a
+// branchable error condition.
+var ErrDrainWindowExpired = errors.New("backend: drain window expired")
 
 // ewmaAlpha is α in the latency EWMA update
 // latency_new = α·observed + (1-α)·latency_old. 0.1 smooths normal
@@ -87,14 +99,17 @@ const (
 // once by Registry.Apply just before a backend leaves the snapshot (S4.T2)
 // and read by the proxy's observer fan-out and by
 // ConsistentHashBoundedLoads' admission check, which guards against a stale
-// ring admitting a just-removed backend. All fields
-// are unexported; callers MUST use
+// ring admitting a just-removed backend. retiredCtx is the drain signal (S4.T4):
+// cancelled by Retire when a removed backend's drain window expires, and joined
+// into each in-flight request by the proxy, which registers a context.AfterFunc
+// on it. All fields are unexported; callers MUST use
 // IsHealthy/MarkHealthy/MarkUnhealthy/IncActive/DecActive/ActiveConns/
 // RecordLatency/EWMALatency/CircuitOpen/CircuitAllow/CircuitSuccess/
-// CircuitFailure/IsRemoved and never touch the fields directly — this keeps
-// the field representation free to change without touching balancer or proxy
-// code. See docs/design/sprint-1-contracts.md "Concurrency ownership table",
-// ADR-0010, ADR-0011, ADR-0012, and ADR-0015.
+// CircuitFailure/IsRemoved/Retire/RetiredContext and never touch the fields
+// directly — this keeps the field representation free to change without
+// touching balancer or proxy code. See docs/design/sprint-1-contracts.md
+// "Concurrency ownership table", ADR-0010, ADR-0011, ADR-0012, ADR-0015, and
+// ADR-0016.
 type Backend struct {
 	Name string
 	URL  *url.URL
@@ -104,6 +119,14 @@ type Backend struct {
 	latencyEWMA atomic.Int64
 	circuit     atomic.Pointer[circuitSnapshot]
 	removed     atomic.Bool
+
+	// retiredCtx is cancelled by Retire() with ErrDrainWindowExpired. It is
+	// created at construction (newBackend) and is nil for a directly-
+	// constructed Backend; RetiredContext tolerates the nil and Retire is a
+	// no-op then, so zero-value test fixtures keep working. The cancel func is
+	// never called anywhere but Retire.
+	retiredCtx   context.Context
+	retireCancel context.CancelCauseFunc
 }
 
 // IsHealthy reports whether the backend is currently eligible for
@@ -171,6 +194,32 @@ func (b *Backend) markRemoved() {
 // deliberately not gated on it, so a removed backend still releases its slot.
 func (b *Backend) IsRemoved() bool {
 	return b.removed.Load()
+}
+
+// Retire cancels the backend's retired context with ErrDrainWindowExpired,
+// which fires the after-funcs the proxy registered on it and thereby cancels
+// the backend's in-flight requests. It is called only by a drain whose window
+// elapsed (S4.T4); a removed backend's other requests have already finished or
+// been cut off by the time it runs. It is idempotent — a second call cannot
+// change the cause — because context.CancelCauseFunc is. On a directly-
+// constructed Backend with no retired context it is a no-op. See ADR-0016
+// decisions 2–4.
+func (b *Backend) Retire() {
+	if b.retireCancel != nil {
+		b.retireCancel(ErrDrainWindowExpired)
+	}
+}
+
+// RetiredContext returns the backend's retired context, the signal the proxy
+// joins into each in-flight request with context.AfterFunc (ADR-0016 decision
+// 3). It is never cancelled while the backend is part of the fleet; Retire
+// cancels it. A directly-constructed Backend returns context.Background(), so
+// the proxy's join is total without a nil check at every call site.
+func (b *Backend) RetiredContext() context.Context {
+	if b.retiredCtx == nil {
+		return context.Background()
+	}
+	return b.retiredCtx
 }
 
 // RecordLatency folds one observed round-trip duration into the backend's

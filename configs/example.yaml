@@ -16,6 +16,12 @@ algorithm: "round_robin"
 health_endpoint:
   listen: ":8081"
 
+# Zero-downtime reload. `drain_window` bounds how long a backend removed by a
+# SIGHUP reload may keep its in-flight requests before they are cancelled.
+# Optional; defaults to "30s". Not reloadable: changing it rejects the reload.
+reload:
+  drain_window: "30s"
+
 # Upstream backends. At least one required. Names must be unique.
 backends:
   - name: "backend-a"

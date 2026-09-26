@@ -31,6 +31,12 @@
 //	fields       - names of the changed non-backend fields (config_reload_failed
 //	               with reason non_backend_change)
 //
+// Drain-scoped fields (Sprint 4; ADR-0016):
+//
+//	reason       - window_expired, on the proxy's "backend round-trip failed"
+//	               line for a request a drain cancelled. No `event` yet: the
+//	               drain lifecycle's own event vocabulary lands with S4.T4.
+//
 // See docs/design/sprint-1-contracts.md "Log field vocabulary" for an
 // example log line per event type.
 package logger

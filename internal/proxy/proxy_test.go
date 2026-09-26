@@ -412,12 +412,33 @@ func (r logRecord) level() string {
 	return s
 }
 
+// lockedBuffer is a concurrency-safe bytes.Buffer. slog's JSON handler does
+// not serialize writes, and the drain tests log from a real server goroutine
+// while the test goroutine reads the buffer, so the shared capture buffer must
+// guard both sides.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
 // captureLogger returns a logger writing JSON to an in-memory buffer, plus a
 // function that parses every line emitted so far.
 func captureLogger(t *testing.T) (*slog.Logger, func() []logRecord) {
 	t.Helper()
-	var buf bytes.Buffer
-	logger := slog.New(slog.NewJSONHandler(&buf, nil))
+	buf := &lockedBuffer{}
+	logger := slog.New(slog.NewJSONHandler(buf, nil))
 
 	dump := func() []logRecord {
 		var out []logRecord
@@ -804,4 +825,202 @@ func TestProxySuppressesObserversForRequestCompletingAfterRemoval(t *testing.T) 
 				"the removed backend's active-connection slot must still be released")
 		})
 	}
+}
+
+// TestProxyDrainCancelBeforeHeadersReturns502 proves the drain join: retiring a
+// backend with an in-flight request whose response headers have not arrived
+// aborts the round trip, which the proxy turns into a 502, releases the
+// active-connection slot, logs a window_expired reason, and (because the
+// backend was already removed) reaches no observer. The removal-before-retire
+// order mirrors production: a drain starts only for a backend a reload removed.
+func TestProxyDrainCancelBeforeHeadersReturns502(t *testing.T) {
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		close(entered)
+		<-release
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+
+	reg := registryFrom(t, backendEntry{"backend-a", srv.URL})
+	b := reg.All()[0]
+
+	logger, dump := captureLogger(t)
+	useLogger(t, logger)
+
+	p := New(reg, balancer.NewRoundRobin(reg))
+	spy := &spyObserver{}
+	p.RegisterObserver(spy)
+	front := httptest.NewServer(p)
+	t.Cleanup(front.Close)
+
+	type result struct {
+		resp *http.Response
+		err  error
+	}
+	resCh := make(chan result, 1)
+	go func() {
+		resp, err := front.Client().Get(front.URL)
+		resCh <- result{resp, err}
+	}()
+
+	<-entered
+	require.Eventually(t, func() bool { return b.ActiveConns() == 1 },
+		5*time.Second, 10*time.Millisecond, "the request should be in flight and counted")
+
+	_, removed, err := reg.Apply(
+		config.BackendDiff{Removed: []config.BackendConfig{{Name: "backend-a", URL: srv.URL}}},
+		nil,
+	)
+	require.NoError(t, err)
+	require.Len(t, removed, 1)
+
+	b.Retire()
+
+	got := <-resCh
+	require.NoError(t, got.err)
+	defer got.resp.Body.Close()
+	assert.Equal(t, http.StatusBadGateway, got.resp.StatusCode)
+
+	close(release)
+	require.Eventually(t, func() bool { return b.ActiveConns() == 0 },
+		5*time.Second, 10*time.Millisecond, "the drain-cancelled request must release its slot")
+
+	assert.Empty(t, spy.snapshot(), "a drain cancellation on a removed backend must reach no observer")
+
+	var fails []logRecord
+	require.Eventually(t, func() bool {
+		fails = recordsWithMsg(dump(), "backend round-trip failed")
+		return len(fails) == 1
+	}, 5*time.Second, 10*time.Millisecond, "the drain cancellation must emit exactly one WARN line")
+	assert.Equal(t, "WARN", fails[0].level())
+	assert.Equal(t, "window_expired", fails[0]["reason"])
+	assert.Equal(t, "backend-a", fails[0]["backend"])
+}
+
+// pathSelector routes by request path to a fixed backend, so one proxy can hold
+// a drain-cancelled request on one backend while another backend serves
+// normally.
+type pathSelector struct {
+	byPath map[string]*backend.Backend
+}
+
+func (s pathSelector) Select(_ context.Context, r *http.Request) (*backend.Backend, error) {
+	if b, ok := s.byPath[r.URL.Path]; ok {
+		return b, nil
+	}
+	return nil, balancer.ErrNoHealthyBackends
+}
+
+// TestProxyDrainCancelDoesNotAffectOtherBackends proves retiring one backend
+// cancels only its own in-flight requests: a request held on the retired
+// backend gets a 502 while a request on another backend completes 200.
+func TestProxyDrainCancelDoesNotAffectOtherBackends(t *testing.T) {
+	gateEntered := make(chan struct{})
+	gateRelease := make(chan struct{})
+	gated := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		close(gateEntered)
+		<-gateRelease
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(gated.Close)
+
+	healthy := startBackend(t, "backend-b")
+
+	reg := registryFrom(t,
+		backendEntry{"backend-a", gated.URL},
+		backendEntry{"backend-b", healthy.URL},
+	)
+	a, b := reg.All()[0], reg.All()[1]
+
+	p := New(reg, pathSelector{byPath: map[string]*backend.Backend{
+		"/a": a,
+		"/b": b,
+	}})
+	front := httptest.NewServer(p)
+	t.Cleanup(front.Close)
+
+	resCh := make(chan *http.Response, 1)
+	go func() {
+		resp, err := front.Client().Get(front.URL + "/a")
+		if err == nil {
+			resCh <- resp
+		}
+	}()
+	<-gateEntered
+
+	respB, err := front.Client().Get(front.URL + "/b")
+	require.NoError(t, err)
+	bodyB, err := io.ReadAll(respB.Body)
+	require.NoError(t, err)
+	require.NoError(t, respB.Body.Close())
+	assert.Equal(t, http.StatusOK, respB.StatusCode)
+	assert.Equal(t, "backend-b", string(bodyB), "the other backend must serve normally")
+
+	a.Retire()
+
+	respA := <-resCh
+	defer respA.Body.Close()
+	assert.Equal(t, http.StatusBadGateway, respA.StatusCode,
+		"retiring backend-a must cancel only backend-a's request")
+
+	close(gateRelease)
+	require.Eventually(t, func() bool { return a.ActiveConns() == 0 && b.ActiveConns() == 0 },
+		5*time.Second, 10*time.Millisecond)
+}
+
+// TestProxyDrainCancelAfterHeadersTruncatesBody proves that retirement after
+// response headers have been sent truncates the body rather than producing a
+// second outcome: the success recorded when the headers arrived stands, no
+// failure is recorded, and the active-connection slot still releases.
+func TestProxyDrainCancelAfterHeadersTruncatesBody(t *testing.T) {
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		// Streaming (unknown Content-Length) makes ReverseProxy flush each
+		// write immediately, so the client observes the partial body.
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, "hello")
+		_ = http.NewResponseController(w).Flush()
+		<-release
+		_, _ = io.WriteString(w, "world")
+	}))
+	t.Cleanup(srv.Close)
+
+	reg := registryFrom(t, backendEntry{"backend-a", srv.URL})
+	b := reg.All()[0]
+
+	p := New(reg, balancer.NewRoundRobin(reg))
+	spy := &spyObserver{inner: NewLatencyObserver()}
+	p.RegisterObserver(spy)
+	front := httptest.NewServer(p)
+	t.Cleanup(front.Close)
+
+	resp, err := front.Client().Get(front.URL)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	prefix := make([]byte, len("hello"))
+	_, err = io.ReadFull(resp.Body, prefix)
+	require.NoError(t, err)
+	require.Equal(t, "hello", string(prefix))
+
+	require.Len(t, spy.snapshot(), 1, "headers must have recorded exactly one success")
+
+	b.Retire()
+
+	rest, readErr := io.ReadAll(resp.Body)
+	assert.Error(t, readErr, "the body must be truncated after retirement")
+	assert.Empty(t, rest, "no bytes written after retirement may reach the client")
+
+	close(release)
+
+	assert.Len(t, spy.snapshot(), 1,
+		"a post-headers retirement must not record a second outcome")
+	assert.True(t, spy.snapshot()[0].success,
+		"the outcome recorded at headers was a success and must stay one")
+	assert.Positive(t, b.EWMALatency(),
+		"the success recorded at headers must stand")
+	assert.Zero(t, b.ActiveConns(), "the slot must still release after a truncated body")
 }

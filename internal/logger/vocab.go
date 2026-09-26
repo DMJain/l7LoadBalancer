@@ -119,4 +119,12 @@ const (
 	// out the inconsistent diffs Apply rejects, so production should never
 	// emit it.
 	ReasonApplyError = "apply_error"
+
+	// ReasonWindowExpired attributes a request that a drain cancelled when a
+	// removed backend's drain window elapsed. It is the reason on the WARN
+	// "backend round-trip failed" line the proxy emits for such a request; it
+	// is not a backend failure, so it reaches no observer and no circuit,
+	// health, or outlier state (ADR-0016 decision 4). The drain lifecycle's
+	// own event vocabulary (backend drained; idle) lands with S4.T4.
+	ReasonWindowExpired = "window_expired"
 )

@@ -149,6 +149,16 @@ Example log line per event type (JSON via `slog.NewJSONHandler`):
   `reason` is one of `parse_error`, `validation_error`, `non_backend_change`,
   or the defensive `apply_error`; a non-backend change names the changed
   fields under `fields`. Added by S4.T3.
+- **Drain cancelled** (Sprint 4)
+  ```json
+  {"time":"2026-09-01T16:10:00Z","level":"WARN","msg":"backend round-trip failed","backend":"backend-a","reason":"window_expired","path":"/api/widgets"}
+  ```
+  The proxy's existing "backend round-trip failed" line, carrying reason
+  `window_expired` when the round trip was cancelled because a removed
+  backend's drain window elapsed. It is not a backend failure and reaches no
+  observer (the backend was already removed). Added by S4.T4.0; the drain
+  lifecycle's own event vocabulary (`backend drained`; reason `idle`) lands
+  with S4.T4.
 
 ## Metric name and label reservations
 
@@ -183,6 +193,7 @@ exist (see S1.T10):
 | `Backend.healthy` | Health checker (active probe + passive outlier detection, Sprint 3); initial value set by `NewRegistry` (S1.T3) | Selectors (via `IsHealthy()`), proxy, metrics (Sprint 3) | `atomic.Bool`, accessed only via `IsHealthy()` |
 | `Backend.active` | Proxy: `IncActive()` before dispatch, `DecActive()` on response-body `Close()` (S1.T6) | `LeastConnections` selector (via `ActiveConns()`), metrics (Sprint 3) | `atomic.Int64`, accessed only via `IncActive`/`DecActive`/`ActiveConns()` |
 | `Backend.removed` | `Registry.Apply` (S4.T2), immediately before the snapshot swap | Proxy observer fan-out (via `IsRemoved()`), `ConsistentHashBoundedLoads` admission | `atomic.Bool`, set once, accessed only via `IsRemoved()`; never reset on an instance (a re-added identity is a fresh `Backend`) |
+| `Backend.retiredCtx` | `Backend.Retire()` (S4.T4), on drain-window expiry | Proxy: one `context.AfterFunc` join per in-flight request; tests via `RetiredContext()` | `context.WithCancelCause`, created at construction; never cancelled while the backend is in the fleet. Cancellation cause is `ErrDrainWindowExpired`. See ADR-0016. |
 | `Registry`'s backend set | `NewRegistry` at construction (S1.T3); `Registry.Apply` (S4.T2), single writer, called by the reload goroutine (S4.T3) | `All()`, `Selectable()`, `Version()`, `Snapshot()`, all selectors | One `atomic.Pointer` to an immutable `(version, []*Backend)` snapshot; readers load once and never lock. See ADR-0015. |
 | `RoundRobin`'s rotation counter | `RoundRobin.Select`, on every call (S1.T4) | none external | Atomic counter (`atomic.Uint64` or `atomic.Int64`), no mutex |
 | `config.Config` (loaded) | `Build` at startup (S4.T0); the reload operation (S4.T3) replaces it last | `internal/app` readers via `LoadedConfig()`, the reload operation | One `atomic.Pointer[Config]` on `App` holding the last applied config. See ADR-0015. |

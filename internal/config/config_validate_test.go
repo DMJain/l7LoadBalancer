@@ -47,6 +47,13 @@ func configWithHealthEndpointYAML(healthEndpoint string) string {
 		"backends:\n" + backendYAML("backend-a", "http://127.0.0.1:9001")
 }
 
+// configWithReloadYAML builds a minimal otherwise-valid config with the supplied
+// reload YAML block (which may be empty) spliced in before the backends section.
+func configWithReloadYAML(reload string) string {
+	return "listen: \":8080\"\n" + reload +
+		"backends:\n" + backendYAML("backend-a", "http://127.0.0.1:9001")
+}
+
 // loadAndValidate is the end-to-end seam under test: YAML -> Load -> Validate.
 func loadAndValidate(t *testing.T, contents string) (*Config, error) {
 	t.Helper()
@@ -361,6 +368,36 @@ func TestValidate(t *testing.T) {
 			yaml:      configWithHealthEndpointYAML("health_endpoint:\n  listen: \":99999\"\n"),
 			wantErr:   true,
 			errSubstr: "health_endpoint",
+		},
+		{
+			name: "reload drain_window omitted defaults to 30s",
+			yaml: threeBackendYAML(),
+			check: func(t *testing.T, cfg *Config) {
+				t.Helper()
+				require.NotNil(t, cfg.Reload.DrainWindow)
+				assert.Equal(t, DefaultDrainWindow, *cfg.Reload.DrainWindow)
+			},
+		},
+		{
+			name: "reload drain_window set explicitly is kept",
+			yaml: configWithReloadYAML("reload:\n  drain_window: \"5s\"\n"),
+			check: func(t *testing.T, cfg *Config) {
+				t.Helper()
+				require.NotNil(t, cfg.Reload.DrainWindow)
+				assert.Equal(t, 5*time.Second, *cfg.Reload.DrainWindow)
+			},
+		},
+		{
+			name:      "reload drain_window of zero is rejected naming the field",
+			yaml:      configWithReloadYAML("reload:\n  drain_window: \"0s\"\n"),
+			wantErr:   true,
+			errSubstr: "drain_window",
+		},
+		{
+			name:      "reload drain_window negative is rejected naming the field",
+			yaml:      configWithReloadYAML("reload:\n  drain_window: \"-30s\"\n"),
+			wantErr:   true,
+			errSubstr: "drain_window",
 		},
 	}
 

@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"context"
 	"fmt"
 	"net/url"
 	"slices"
@@ -89,6 +90,7 @@ func newBackend(cfg config.BackendConfig) (*Backend, error) {
 		return nil, fmt.Errorf("backend: parse url %q for %q: %w", cfg.URL, cfg.Name, err)
 	}
 	b := &Backend{Name: cfg.Name, URL: u}
+	b.retiredCtx, b.retireCancel = context.WithCancelCause(context.Background())
 	b.MarkHealthy()
 	return b, nil
 }

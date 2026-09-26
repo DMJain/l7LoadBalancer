@@ -171,6 +171,12 @@ func TestNonBackendChanges(t *testing.T) {
 			want: []string{"health_endpoint"},
 		},
 		{
+			name: "reload drain_window differs",
+			old:  oneBackendConfigYAML(base),
+			new:  oneBackendConfigYAML(base + "reload:\n  drain_window: \"10s\"\n"),
+			want: []string{"reload"},
+		},
+		{
 			name: "omitted fields equal explicit defaults",
 			old:  oneBackendConfigYAML(base),
 			new: oneBackendConfigYAML(base +
@@ -178,7 +184,8 @@ func TestNonBackendChanges(t *testing.T) {
 				"health:\n  probe_interval: \"" + DefaultProbeInterval.String() + "\"\n  probe_timeout: \"" + DefaultProbeTimeout.String() + "\"\n" +
 				"circuit:\n  cooldown: \"" + DefaultCircuitCooldown.String() + "\"\n" +
 				"metrics:\n  listen: \"" + DefaultMetricsListen + "\"\n" +
-				"health_endpoint:\n  listen: \"" + DefaultHealthEndpointListen + "\"\n"),
+				"health_endpoint:\n  listen: \"" + DefaultHealthEndpointListen + "\"\n" +
+				"reload:\n  drain_window: \"" + DefaultDrainWindow.String() + "\"\n"),
 		},
 		{
 			name: "multiple fields come back in fixed order",

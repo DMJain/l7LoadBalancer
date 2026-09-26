@@ -40,6 +40,7 @@ func reloadChaosConfig(fbs []*flippableBackend) *config.Config {
 	probeInterval := time.Hour
 	probeTimeout := time.Second
 	cooldown := chaosCooldown
+	drainWindow := config.DefaultDrainWindow
 	return &config.Config{
 		Listen:         ":0",
 		Algorithm:      config.AlgorithmRoundRobin,
@@ -47,6 +48,7 @@ func reloadChaosConfig(fbs []*flippableBackend) *config.Config {
 		Circuit:        config.CircuitConfig{Cooldown: &cooldown},
 		Metrics:        config.MetricsConfig{Listen: zeroListen()},
 		HealthEndpoint: config.HealthEndpointConfig{Listen: zeroListen()},
+		Reload:         config.ReloadConfig{DrainWindow: &drainWindow},
 		Backends:       backendConfigs(fbs),
 	}
 }

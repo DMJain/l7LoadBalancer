@@ -13,6 +13,7 @@ import (
 
 	"github.com/DMJain/l7LoadBalancer/internal/backend"
 	"github.com/DMJain/l7LoadBalancer/internal/balancer"
+	"github.com/DMJain/l7LoadBalancer/internal/logger"
 	"github.com/DMJain/l7LoadBalancer/internal/metrics"
 )
 
@@ -255,7 +256,23 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	state.activate()
 
-	ctx := context.WithValue(r.Context(), reqStateKey{}, state)
+	// Join this request to the backend's retired context. Retiring the backend
+	// (a removed backend whose drain window expired, S4.T4) cancels this
+	// request's outbound context with ErrDrainWindowExpired, which the
+	// transport surfaces as a failed round trip and ErrorHandler turns into a
+	// 502. context.AfterFunc registers the callback without a goroutine while
+	// the request lives; the deferred stop removes the registration on
+	// completion so a long-lived backend does not accumulate one dead callback
+	// per request. No goroutine per request and no cancel-func registry
+	// (ADR-0016 decision 3).
+	reqCtx, cancel := context.WithCancelCause(r.Context())
+	defer cancel(nil)
+	stopRetire := context.AfterFunc(b.RetiredContext(), func() {
+		cancel(context.Cause(b.RetiredContext()))
+	})
+	defer stopRetire()
+
+	ctx := context.WithValue(reqCtx, reqStateKey{}, state)
 	p.rp.ServeHTTP(w, r.WithContext(ctx))
 }
 
@@ -300,10 +317,22 @@ func (p *Proxy) modifyResponse(resp *http.Response) error {
 // failure penalty out to every registered observer, releases the request's
 // active-connection slot, logs the cause (the canonical field vocabulary has
 // no error field, so the cause is a separate WARN line), and responds 502.
+//
+// A drain cancellation — the backend's retired context fired with
+// ErrDrainWindowExpired and cancelled the outbound request — arrives here too,
+// because it is a transport failure like any other. It is distinguished only
+// by its cause: the line then carries reason window_expired (ADR-0016 decision
+// 4). It is not a backend failure and reaches no observer, but that is not
+// because of this check: the backend was already removed before it could be
+// retired, and observe() already suppresses a removed backend (ADR-0015
+// decision 8).
 func (p *Proxy) errorHandler(w http.ResponseWriter, r *http.Request, err error) {
 	attrs := []any{"err", err, "path", r.URL.Path}
 	if state := stateFrom(r.Context()); state != nil {
 		state.status = http.StatusBadGateway
+		if errors.Is(context.Cause(r.Context()), backend.ErrDrainWindowExpired) {
+			attrs = append(attrs, "reason", logger.ReasonWindowExpired)
+		}
 		p.observe(state, p2cFailurePenalty, false)
 		state.release()
 		attrs = append(attrs, "backend", state.backend.Name)

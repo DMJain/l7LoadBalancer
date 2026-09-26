@@ -70,6 +70,10 @@ const (
 	// endpoint (livez/readyz/startupz) binds when health_endpoint.listen is
 	// omitted. Always-on, mirroring DefaultMetricsListen. ADR-0014 (S3.T12).
 	DefaultHealthEndpointListen = ":8081"
+	// DefaultDrainWindow is how long a removed backend may keep its in-flight
+	// requests before they are cancelled, when reload.drain_window is omitted.
+	// See ADR-0016 decision 1.
+	DefaultDrainWindow = 30 * time.Second
 )
 
 // Config is the top-level load balancer configuration, loaded from YAML.
@@ -84,6 +88,7 @@ type Config struct {
 	Circuit        CircuitConfig        `yaml:"circuit"`
 	Metrics        MetricsConfig        `yaml:"metrics"`
 	HealthEndpoint HealthEndpointConfig `yaml:"health_endpoint"`
+	Reload         ReloadConfig         `yaml:"reload"`
 	Backends       []BackendConfig      `yaml:"backends"`
 }
 
@@ -131,6 +136,18 @@ type HealthEndpointConfig struct {
 	// Listen is the host:port the /livez, /readyz, and /startupz endpoints
 	// bind. Omitted → DefaultHealthEndpointListen.
 	Listen *string `yaml:"listen"`
+}
+
+// ReloadConfig holds the zero-downtime-reload tunables. It is one field today,
+// but nested like the other subsystems so its shape can grow without a flat
+// top-level key. Its field follows the same nil-means-omitted convention as
+// HealthConfig and CircuitConfig. ADR-0016 decision 1.
+type ReloadConfig struct {
+	// DrainWindow is how long a removed backend may keep its in-flight requests
+	// before the drain cancels them. Omitted → DefaultDrainWindow. Not
+	// reloadable: NonBackendChanges names "reload" when it differs, so a reload
+	// that would silently change it is rejected (ADR-0016 decision 1).
+	DrainWindow *time.Duration `yaml:"drain_window"`
 }
 
 // BackendConfig describes one backend entry in the YAML config.
@@ -239,7 +256,10 @@ func (c *Config) normalizeAndValidateDurations() error {
 	if err := normalizeDuration("health probe_timeout", &c.Health.ProbeTimeout, DefaultProbeTimeout); err != nil {
 		return err
 	}
-	return normalizeDuration("circuit cooldown", &c.Circuit.Cooldown, DefaultCircuitCooldown)
+	if err := normalizeDuration("circuit cooldown", &c.Circuit.Cooldown, DefaultCircuitCooldown); err != nil {
+		return err
+	}
+	return normalizeDuration("reload drain_window", &c.Reload.DrainWindow, DefaultDrainWindow)
 }
 
 // normalizeListen defaults an omitted listen address to def and rejects an
