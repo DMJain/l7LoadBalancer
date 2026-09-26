@@ -1212,3 +1212,92 @@ func TestProxyDrainCancelAfterHeadersTruncatesBody(t *testing.T) {
 		"the success recorded at headers must stand")
 	assert.Zero(t, b.ActiveConns(), "the slot must still release after a truncated body")
 }
+
+// midBodyDeathBackend starts an httptest.Server that answers with 200 headers
+// promising more body bytes than it sends, then abruptly closes the connection.
+// The proxy's body read therefore ends on a non-EOF error (an unexpected EOF),
+// which is exactly the mid-body death S4.T6 detects.
+func midBodyDeathBackend(t *testing.T) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hj, ok := w.(http.Hijacker)
+		if !ok {
+			return
+		}
+		conn, buf, err := hj.Hijack()
+		if err != nil {
+			return
+		}
+		// Content-Length is larger than the five bytes actually sent, so the
+		// transport reads a truncated body and reports io.ErrUnexpectedEOF.
+		_, _ = buf.WriteString("HTTP/1.1 200 OK\r\nContent-Length: 1024\r\n\r\nhello")
+		_ = buf.Flush()
+		_ = conn.Close()
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// TestProxyBackendDiesMidBodyLogsAndKeepsSuccess is the T6 test: a backend that
+// sends response headers then dies before completing the body is logged at WARN
+// with reason backend_died_mid_response, carrying the backend, the path, and the
+// bytes already copied. The success recorded when the headers arrived stands —
+// the observer is called exactly once, for that success, never a second time for
+// the death — and the active-connection slot still releases.
+func TestProxyBackendDiesMidBodyLogsAndKeepsSuccess(t *testing.T) {
+	logger, dump := captureLogger(t)
+	useLogger(t, logger)
+
+	srv := midBodyDeathBackend(t)
+	reg := registryFrom(t, backendEntry{"backend-a", srv.URL})
+	b := reg.All()[0]
+
+	p := New(reg, balancer.NewRoundRobin(reg))
+	spy := &spyObserver{inner: NewLatencyObserver()}
+	p.RegisterObserver(spy)
+
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/partial", nil))
+
+	assert.Equal(t, http.StatusOK, rec.Code,
+		"the headers arrived, so the response is the success the observer recorded")
+	assert.Equal(t, "hello", rec.Body.String(),
+		"the bytes received before the death must reach the client")
+	assert.Zero(t, b.ActiveConns(), "the slot must release after a truncated body")
+
+	calls := spy.snapshot()
+	require.Len(t, calls, 1, "the headers-time success must be the only observer call")
+	assert.True(t, calls[0].success, "the recorded success must stand")
+	assert.NotEqual(t, p2cFailurePenalty, calls[0].d,
+		"a mid-body death must not record a second, failure event")
+
+	deaths := recordsWithReason(dump(), "backend_died_mid_response")
+	require.Len(t, deaths, 1, "the mid-body death must emit exactly one line")
+	assert.Equal(t, "WARN", deaths[0].level())
+	assert.Equal(t, "backend-a", deaths[0]["backend"])
+	assert.Equal(t, "/partial", deaths[0]["path"])
+	assert.Equal(t, float64(len("hello")), deaths[0]["bytes_copied"])
+
+	completes := recordsWithMsg(dump(), "request complete")
+	require.Len(t, completes, 1)
+	assert.Equal(t, float64(http.StatusOK), completes[0]["status"])
+}
+
+// TestProxyCleanBodyReadLogsNoDeath pins the other half of the T6 predicate: a
+// normally completed body ends on io.EOF, which is a clean end and must not be
+// logged as a death.
+func TestProxyCleanBodyReadLogsNoDeath(t *testing.T) {
+	logger, dump := captureLogger(t)
+	useLogger(t, logger)
+
+	srv := startBackend(t, "backend-a")
+	reg := registryFrom(t, backendEntry{"backend-a", srv.URL})
+	p := New(reg, balancer.NewRoundRobin(reg))
+
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/ok", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	assert.Empty(t, recordsWithReason(dump(), "backend_died_mid_response"),
+		"a clean body end is io.EOF and must not log a death")
+}

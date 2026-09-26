@@ -72,10 +72,10 @@ Scoped in `.scratch/s4-t5-t10-connection-lifecycle/` as one bundle spec plus eig
   - Completed: 2026-09-26T18:20:00Z. `reqState` gains `clientCtx`; `errorHandler` classifies failed round trips drain-first into drain / client-gone / transport-failure; client-gone reaches no observer, records no EWMA latency, releases its slot, records 499/4xx and logs `client_canceled` at INFO; response-header timeout still reaches observers as a failure. Scope amended by owner approval mid-task (two-axis review finding): ADR-0017 adds `Backend.RearmTrial()` so a client-gone request that held a half-open circuit trial re-arms it instead of wedging the circuit permanently away from a live backend.
   - Acceptance: the error handler classifies every failed round trip into exactly one of three buckets — drain cancellation, client-gone, genuine transport failure — using the client's own request context as the discriminator; client-gone requests reach no observer, record no EWMA latency, release their active-connection slot, and are recorded as 499 / `status_class="4xx"`; the log vocabulary gains the `client_canceled` reason; a chaos test proves a client cancellation reaches no observer and records no EWMA latency, and that a response-header timeout still reaches the observers as a failure.
 
-- [IN_PROGRESS] S4.T6 — Backend death mid-response
+- [DONE] S4.T6 — Backend death mid-response
   - Spec: `.scratch/s4-t5-t10-connection-lifecycle/issues/03-t6-backend-death-mid-response.md`
   - Depends: S4.T5
-  - Started: 2026-09-26T18:25:35Z by opencode — releaseBody observes non-EOF read errors and logs backend_died_mid_response with bytes copied.
+  - Completed: 2026-09-26T18:34:00Z. `releaseBody` gains a `Read` that counts copied bytes and logs a non-EOF read error at WARN with reason `backend_died_mid_response`, backend, path, and `bytes_copied`; the headers-time success stands and no observer is fed a second event. Chaos tests cover a mid-body death (WARN line, gauges unchanged, slot released) and a pre-headers death (clean 502, failure observed, no leak); the mid-body ejection gap is documented as a known limitation in the session log.
   - Acceptance: the response-body wrapper observes read errors — any non-EOF error after headers is logged at WARN with the new `backend_died_mid_response` reason carrying the backend name, the path, and the bytes already copied; the success recorded when headers arrives stands; no observer is fed; the mid-body ejection gap is documented as a known limitation.
 
 - [PENDING] S4.T7 — Slow-loris client timeouts

@@ -151,4 +151,13 @@ const (
 	// 499 ("4xx") — reserving the 5xx class for backend-caused failures
 	// (S4.T5).
 	ReasonClientCanceled = "client_canceled"
+
+	// ReasonBackendDiedMidResponse attributes a backend that sent response
+	// headers but died before completing the body. It is the reason on the
+	// proxy's WARN "backend died mid-response" line, which carries the backend,
+	// the path, and the bytes already copied. The death reaches no observer and
+	// records no second outcome: the success recorded when the headers arrived
+	// stands, because a second failure event for the same request would corrupt
+	// the outlier window's counts (S4.T6).
+	ReasonBackendDiedMidResponse = "backend_died_mid_response"
 )

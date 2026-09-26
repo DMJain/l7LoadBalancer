@@ -180,6 +180,15 @@ Example log line per event type (JSON via `slog.NewJSONHandler`):
   observer, records no EWMA latency, releases its active-connection slot, and
   is recorded as 499 (`status_class="4xx"`), reserving the 5xx class for
   backend-caused failures. Added by S4.T5.
+- **Backend died mid-response** (Sprint 4)
+  ```json
+  {"time":"2026-09-01T16:10:00Z","level":"WARN","msg":"backend died mid-response","backend":"backend-a","path":"/api/widgets","bytes_copied":12,"reason":"backend_died_mid_response"}
+  ```
+  A distinct proxy line (not "backend round-trip failed"): the response
+  headers arrived, so the observer recorded a success, and the backend then
+  died before completing the body (a non-EOF body read error). The line
+  carries the bytes copied before the error. The headers-time success stands
+  and no observer is fed a second event. Added by S4.T6.
 
 ## Metric name and label reservations
 
@@ -215,7 +224,7 @@ exist (see S1.T10):
 | `Backend.active` | Proxy: `IncActive()` before dispatch, `DecActive()` on response-body `Close()` (S1.T6) | `LeastConnections` selector (via `ActiveConns()`), metrics (Sprint 3) | `atomic.Int64`, accessed only via `IncActive`/`DecActive`/`ActiveConns()` |
 | `Backend.removed` | `Registry.Apply` (S4.T2), immediately before the snapshot swap | Proxy observer fan-out (via `IsRemoved()`), `ConsistentHashBoundedLoads` admission | `atomic.Bool`, set once, accessed only via `IsRemoved()`; never reset on an instance (a re-added identity is a fresh `Backend`) |
 | `Backend.retiredCtx` | `Backend.Retire()` (S4.T4), on drain-window expiry | Proxy: one `context.AfterFunc` join per in-flight request; tests via `RetiredContext()` | `context.WithCancelCause`, created at construction; never cancelled while the backend is in the fleet. Cancellation cause is `ErrDrainWindowExpired`. See ADR-0016. |
-| Proxy `reqState` (S4.T5) | `ServeHTTP`, on the request goroutine only | `Director`, `ModifyResponse`, `ErrorHandler` — the same goroutine | No lock: `ReverseProxy` handles a request synchronously; `once` guards the exactly-once release. `clientCtx` is the client request context captured before the drain join, used by `ErrorHandler` to tell client-gone from a transport failure. See ADR-0007. |
+| Proxy `reqState` / `releaseBody` (S4.T5, S4.T6) | `ServeHTTP`, on the request goroutine only | `Director`, `ModifyResponse`, `ErrorHandler`, `releaseBody.Read` — the same goroutine | No lock: `ReverseProxy` handles a request synchronously; `once` guards the exactly-once release. `clientCtx` is the client request context captured before the drain join, used by `ErrorHandler` to tell client-gone from a transport failure. `releaseBody.Read` counts the bytes it copies and logs a non-EOF read error as a mid-body death; it runs inside the synchronous body copy. See ADR-0007. |
 | `App` drain goroutines (S4.T4) | `Reload`, one goroutine per removed backend | Read `Backend.ActiveConns()` (polled at 100ms in `waitActiveZero`); call `Backend.Retire()`, `Collector.DeleteActiveConnections`, and the logger | No shared mutable state of their own: they touch only the atomics/collector/logger above, which are goroutine-safe, and exit on the process context. Independent of each other and of later reloads. See ADR-0016. |
 | `Registry`'s backend set | `NewRegistry` at construction (S1.T3); `Registry.Apply` (S4.T2), single writer, called by the reload goroutine (S4.T3) | `All()`, `Selectable()`, `Version()`, `Snapshot()`, all selectors | One `atomic.Pointer` to an immutable `(version, []*Backend)` snapshot; readers load once and never lock. See ADR-0015. |
 | `RoundRobin`'s rotation counter | `RoundRobin.Select`, on every call (S1.T4) | none external | Atomic counter (`atomic.Uint64` or `atomic.Int64`), no mutex |

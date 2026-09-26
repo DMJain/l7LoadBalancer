@@ -49,6 +49,17 @@
 //	reason       - client_canceled, a client-gone cancellation, not a backend
 //	               failure
 //
+// Mid-body-death-scoped fields (Sprint 4; S4.T6). reason
+// backend_died_mid_response appears on the proxy's WARN "backend died
+// mid-response" line when a non-EOF body read error follows the response
+// headers — the backend died before completing the body. The success recorded
+// when the headers arrived stands; no observer is fed a second event:
+//
+//	backend      - backend that died
+//	path         - request path
+//	bytes_copied - response-body bytes copied to the client before the read error
+//	reason       - backend_died_mid_response
+//
 // See docs/design/sprint-1-contracts.md "Log field vocabulary" for an
 // example log line per event type.
 package logger

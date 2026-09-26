@@ -315,6 +315,11 @@ func (p *Proxy) director(r *http.Request) {
 // "done" while a streamed body is still being read. The actual decrement is
 // once-guarded, so ErrorHandler calling release too is safe.
 //
+// The body wrapper also observes read errors, so a backend that dies after the
+// headers but before completing the body leaves a WARN trace instead of a
+// silent truncation (S4.T6). The observer fan-out above runs before the body is
+// streamed, so that death cannot be un-rung: the success recorded here stands.
+//
 // The fan-out runs unconditionally, regardless of the configured selector —
 // like IncActive/DecActive, it is not gated on any observer actually reading
 // it. success is "this response is not a server error": a 5xx still reached
@@ -327,7 +332,13 @@ func (p *Proxy) modifyResponse(resp *http.Response) error {
 	}
 	state.status = resp.StatusCode
 	p.observe(state, time.Since(state.dispatchStart), resp.StatusCode < 500)
-	resp.Body = &releaseBody{ReadCloser: resp.Body, release: state.release}
+	resp.Body = &releaseBody{
+		ReadCloser: resp.Body,
+		release:    state.release,
+		logger:     p.logger,
+		backend:    state.backend.Name,
+		path:       resp.Request.URL.Path,
+	}
 	return nil
 }
 
@@ -396,11 +407,49 @@ func (p *Proxy) errorHandler(w http.ResponseWriter, r *http.Request, err error) 
 	http.Error(w, http.StatusText(state.status), state.status)
 }
 
-// releaseBody releases the request's active-connection slot when the body is
-// closed, then closes the underlying body.
+// releaseBody streams the response body while watching for a mid-body backend
+// death, releases the request's active-connection slot when the body is closed,
+// then closes the underlying body.
+//
+// Read passes every read straight through and counts the bytes delivered. A
+// read error that is not io.EOF means the backend died after the headers — a
+// connection reset, an unexpected end on a Content-Length response — and is
+// logged once at WARN with the bytes copied so far; io.EOF is a clean end and
+// logs nothing. The recorded success is deliberately not revisited: the
+// observer already saw a success when the headers arrived, and a second failure
+// event for the same request would corrupt the outlier window's counts
+// (S4.T6). A backend that consistently dies after headers is therefore never
+// ejected by passive detection — a known limitation, not fixed here.
+//
+// Concurrency: Read and Close run on the request goroutine, in ReverseProxy's
+// synchronous body copy, so bytesCopied needs no synchronization (ADR-0007).
+// Close's release stays once-guarded, so the success path and errorHandler
+// cannot double-decrement.
 type releaseBody struct {
 	io.ReadCloser
 	release func()
+
+	// The mid-body-death fields are captured in ModifyResponse, when the
+	// serving backend and the request path are both known.
+	logger  *slog.Logger
+	backend string
+	path    string
+
+	bytesCopied int64
+}
+
+func (b *releaseBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	b.bytesCopied += int64(n)
+	if err != nil && !errors.Is(err, io.EOF) {
+		b.logger.Warn("backend died mid-response",
+			"backend", b.backend,
+			"path", b.path,
+			"bytes_copied", b.bytesCopied,
+			"reason", logger.ReasonBackendDiedMidResponse,
+		)
+	}
+	return n, err
 }
 
 func (b *releaseBody) Close() error {

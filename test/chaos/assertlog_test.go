@@ -113,6 +113,20 @@ func (h *captureHandler) transitionRecord(event, backend, reason string) (slog.R
 	return out, n == 1
 }
 
+// recordsWithField returns every captured record whose field key equals want.
+// It is the request-scoped-line counterpart to transitionCount: the proxy's
+// mid-body-death line carries no `event`, only a `reason`, so a test selects it
+// by field like the JSON-log capture in internal/proxy does.
+func (h *captureHandler) recordsWithField(key, want string) []slog.Record {
+	var out []slog.Record
+	for _, r := range h.snapshot() {
+		if recordFields(r)[key] == want {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
 // assertTransitionLogged asserts exactly one transition line matching the
 // frozen event/backend/reason triple was captured.
 func assertTransitionLogged(t *testing.T, h *captureHandler, event, backend, reason string) {
