@@ -167,7 +167,15 @@ func (a *App) LoadedConfig() *config.Config { return a.loadedCfg.Load() }
 //     series and seeds an added backend's (active connections 0, healthy 0,
 //     circuit closed). A removed backend's active-connections series is left in
 //     place: its in-flight requests still decrement it by name, and deleting it
-//     now would recreate it negative. S4.T4 deletes it at drain completion.
+//     now would recreate it negative. A name shared with a removed backend
+//     skips the active seed for that same reason — the fresh instance must not
+//     reset a series the removed instance's requests are still decrementing;
+//     the drain (S4.T4) deletes the series only once it is idle and no current
+//     backend shares the name;
+//   - one drain goroutine starts per removed backend (S4.T4), letting its
+//     in-flight requests finish until it is idle or reload.drain_window
+//     expires, then cancelling the rest and logging one backend drained line.
+//     Drains run independently of this call and of later reloads (ADR-0016).
 //
 // Removals are processed before additions so a same-name re-added identity's
 // fresh series are not deleted after being seeded, and the old prober cannot
@@ -206,7 +214,9 @@ func (a *App) Reload(ctx context.Context, cfg *config.Config) error {
 	// (ADR-0015 decision 12).
 	a.loadedCfg.Store(cfg)
 
+	removedNames := make(map[string]bool, len(removed))
 	for _, b := range removed {
+		removedNames[b.Name] = true
 		a.checker.Remove(b)
 		a.outlier.Forget(b)
 		a.collector.DeleteBackendHealthy(b.Name)
@@ -214,7 +224,15 @@ func (a *App) Reload(ctx context.Context, cfg *config.Config) error {
 		go a.drainBackend(ctx, b, *cfg.Reload.DrainWindow)
 	}
 	for _, b := range added {
-		a.collector.SetActiveConnections(b.Name, 0)
+		// A name shared with a removed backend already has an
+		// active-connections series: the removed instance's in-flight requests
+		// still decrement it by name until its drain finishes, so seeding 0
+		// here would leave the shared series negative once they do. The
+		// healthy and circuit-state series, by contrast, were just deleted with
+		// the removed instance and so are seeded fresh for the new one.
+		if !removedNames[b.Name] {
+			a.collector.SetActiveConnections(b.Name, 0)
+		}
 		a.collector.SetBackendHealthy(b.Name, false)
 		a.collector.SetCircuitState(b.Name, metrics.CircuitStateClosed)
 	}

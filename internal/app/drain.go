@@ -9,6 +9,13 @@ import (
 	"github.com/DMJain/l7LoadBalancer/internal/logger"
 )
 
+// This file's concurrency: one goroutine per drain, started by Reload. A drain
+// owns no shared mutable state of its own — it reads Backend's atomics
+// (ActiveConns) and calls its methods (Retire), and writes the collector's
+// gauges and the logger, all of which are themselves goroutine-safe. Drains are
+// independent of each other and of later reloads; the context passed in (the
+// process context in production) is the only shutdown signal they observe.
+//
 // drainPollInterval is how often a drain goroutine checks a removed backend's
 // active-connection count. Polling is chosen over a completion channel so the
 // request path pays nothing for drain bookkeeping — DecActive stays an atomic
@@ -43,7 +50,10 @@ func (a *App) drainBackend(ctx context.Context, b *backend.Backend, window time.
 	}
 
 	// The window elapsed with requests still in flight: cancel them and wait
-	// for their slots to release.
+	// for their slots to release. cancelled is the count still in flight at
+	// expiry — the set the cancellation reaches; a request that slips out
+	// between this read and Retire is at worst counted once more than it was
+	// actually cut off.
 	cancelled := b.ActiveConns()
 	b.Retire()
 	if !a.waitActiveZero(ctx, b, 0) {
@@ -74,6 +84,12 @@ func (a *App) waitActiveZero(ctx context.Context, b *backend.Backend, timeout ti
 		case <-ctx.Done():
 			return false
 		case <-timeoutCh:
+			// Shutdown wins a tie: if ctx is being cancelled as the window
+			// elapses, report "not idle" so the caller returns without cleanup
+			// rather than retiring during shutdown (ADR-0016 decision 8).
+			if ctx.Err() != nil {
+				return false
+			}
 			return b.ActiveConns() == 0
 		case <-ticker.C:
 			if b.ActiveConns() == 0 {
