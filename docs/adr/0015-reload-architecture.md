@@ -164,10 +164,10 @@ classification, and pre-warming follow-ups (spec Out of Scope).
     ticket, not built here.
 
 12. **The loaded config is held on the application as one atomic pointer and
-    replaced by the reload operation last**, so each reload diffs against the
-    currently loaded config rather than the startup config and successive
-    reloads compose. `Build` seeds it; T2 only tests read it, T3's reload
-    replaces it.
+    replaced by the reload operation after the registry apply succeeds**, so
+    each reload diffs against the currently loaded config rather than the
+    startup config and successive reloads compose. `Build` seeds it; T2 only
+    tests read it, T3's reload replaces it.
 
 ## Consequences
 

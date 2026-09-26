@@ -20,6 +20,17 @@
 //	event        - a state transition that occurred, one of the Event* constants
 //	reason       - why it occurred, one of the Reason* constants
 //
+// Reload-scoped fields (Sprint 4; the reload events are in the same Event*
+// vocabulary):
+//
+//	event        - config_reloaded or config_reload_failed
+//	reason       - why a reload failed, one of the Reason* constants
+//	added        - number of backends the reload added (config_reloaded)
+//	removed      - number of backends the reload removed (config_reloaded)
+//	unchanged    - number of backends the reload left untouched (config_reloaded)
+//	fields       - names of the changed non-backend fields (config_reload_failed
+//	               with reason non_backend_change)
+//
 // See docs/design/sprint-1-contracts.md "Log field vocabulary" for an
 // example log line per event type.
 package logger

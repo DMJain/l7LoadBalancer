@@ -252,7 +252,7 @@ func TestRegistryApplyKeepsUnchangedInstancesAndState(t *testing.T) {
 
 	require.Len(t, added, 1)
 	assert.Equal(t, "backend-d", added[0].Name)
-	assert.True(t, added[0].IsHealthy(), "an added backend is constructed healthy")
+	assert.False(t, added[0].IsHealthy(), "a reload-added backend starts unhealthy (ADR-0015 decision 10)")
 	assert.Equal(t, int64(0), added[0].ActiveConns(), "an added backend starts idle")
 	require.Len(t, removed, 1)
 	assert.Equal(t, "backend-c", removed[0].Name)
@@ -293,7 +293,7 @@ func TestRegistryApplyReAddedIdentityIsFresh(t *testing.T) {
 	require.Len(t, added, 1)
 	assert.NotSame(t, original, added[0], "a re-added identity must be a fresh instance")
 	assert.False(t, added[0].IsRemoved(), "the fresh instance must not inherit the removed flag")
-	assert.True(t, added[0].IsHealthy())
+	assert.False(t, added[0].IsHealthy(), "a reload-added backend starts unhealthy until its first probe")
 }
 
 func TestRegistryConcurrentApplyAndRead(t *testing.T) {

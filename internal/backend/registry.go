@@ -77,10 +77,12 @@ func NewRegistry(cfgs []config.BackendConfig) (*Registry, error) {
 	return r, nil
 }
 
-// newBackend parses one validated backend config into a fresh, healthy Backend
-// (see NewRegistry for why healthy is the construction default). It is shared
-// by NewRegistry and Apply, so a reload-added backend is built exactly like a
-// startup backend.
+// newBackend parses one validated backend config into a fresh Backend. The
+// caller decides the initial health: NewRegistry leaves a backend healthy (at
+// process startup there is no serving fleet to protect — ADR-0015 decision 10),
+// while Apply marks a reload-added instance unhealthy before publishing it. It
+// is shared by NewRegistry and Apply so a reload-added backend is built exactly
+// like a startup backend apart from that initial health.
 func newBackend(cfg config.BackendConfig) (*Backend, error) {
 	u, err := url.Parse(cfg.URL)
 	if err != nil {
@@ -176,7 +178,9 @@ func (r *Registry) Allow(b *Backend) bool {
 // (ADR-0015 decision 7). Removed backends then leave All and Selectable at the
 // swap. A re-added identity is always fresh: it is in diff.Added, so it never
 // matches an unchanged entry and never inherits the old instance's state
-// (ADR-0015 decision 6).
+// (ADR-0015 decision 6). Added instances are marked unhealthy before the swap
+// too, so they are never selectable until the active checker admits them with
+// one successful probe (ADR-0015 decision 10).
 //
 // The errors are an unparseable URL and an inconsistent diff (a newBackends
 // entry in neither Added nor Unchanged, or an unchanged entry absent from the
@@ -203,6 +207,12 @@ func (r *Registry) Apply(diff config.BackendDiff, newBackends []config.BackendCo
 			if err != nil {
 				return nil, nil, err
 			}
+			// A reload-added backend starts unhealthy, and the mark happens
+			// before the snapshot is published, so a request can never be
+			// routed to an unproven URL in the window between the swap and the
+			// active checker's first probe (ADR-0015 decision 10). The proxy's
+			// checker.Add also marks it, but only after this snapshot is live.
+			b.MarkUnhealthy()
 			next = append(next, b)
 			added = append(added, b)
 		case inSet(unchangedIdentities, id):

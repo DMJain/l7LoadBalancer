@@ -74,9 +74,9 @@ func reloadLoop(ctx context.Context, configPath string, sigCh <-chan os.Signal, 
 			)
 			continue
 		}
-		if err := application.Reload(ctx, cfg); err != nil {
-			continue
-		}
+		// Reload logs its own rejection reason (non-backend change, apply
+		// error); the loop only has to keep serving the previous config.
+		_ = application.Reload(ctx, cfg)
 	}
 }
 

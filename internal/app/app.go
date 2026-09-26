@@ -200,6 +200,10 @@ func (a *App) Reload(ctx context.Context, cfg *config.Config) error {
 		return fmt.Errorf("app: reload apply failed: %w", err)
 	}
 
+	// The record is replaced after the apply succeeds, so it never names a
+	// config the registry has not published; it is the baseline the next reload
+	// diffs against, which is what makes successive reloads compose
+	// (ADR-0015 decision 12).
 	a.loadedCfg.Store(cfg)
 
 	for _, b := range removed {
@@ -221,17 +225,12 @@ func (a *App) Reload(ctx context.Context, cfg *config.Config) error {
 	if len(diff.Unchanged) == 0 {
 		level = slog.LevelWarn
 	}
-	attrs := []any{
+	a.log.Log(ctx, level, "config reloaded",
 		"event", logger.EventConfigReloaded,
 		"added", len(added),
 		"removed", len(removed),
 		"unchanged", len(diff.Unchanged),
-	}
-	if level == slog.LevelWarn {
-		a.log.Warn("config reloaded", attrs...)
-	} else {
-		a.log.Info("config reloaded", attrs...)
-	}
+	)
 	return nil
 }
 
