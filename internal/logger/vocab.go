@@ -48,6 +48,18 @@ const (
 	// by a Registry.Selectable() scan is never logged — a documented, permanent
 	// gap (ADR-0013 decision 13).
 	EventCircuitHalfOpened = "circuit_half_opened"
+
+	// EventConfigReloaded is emitted once per successful SIGHUP reload,
+	// carrying the added, removed, and unchanged backend counts. It is logged
+	// at WARN when unchanged is zero (a blue/green reload with a brief
+	// empty-selectable window) and INFO otherwise (ADR-0015 decision 11).
+	EventConfigReloaded = "config_reloaded"
+
+	// EventConfigReloadFailed is emitted once per rejected reload, carrying a
+	// reason: ReasonParseError, ReasonValidationError, ReasonNonBackendChange,
+	// or the defensive ReasonApplyError. A non-backend change additionally
+	// carries the changed field names under a `fields` attribute.
+	EventConfigReloadFailed = "config_reload_failed"
 )
 
 // Transition reason names — the closed value vocabulary for the canonical
@@ -87,4 +99,24 @@ const (
 	// ReasonCooldownElapsed is paired with EventCircuitHalfOpened: the Open
 	// circuit's cooldown elapsed, admitting a trial request.
 	ReasonCooldownElapsed = "cooldown_elapsed"
+
+	// ReasonParseError is paired with EventConfigReloadFailed: the reloaded
+	// file could not be strictly decoded.
+	ReasonParseError = "parse_error"
+
+	// ReasonValidationError is paired with EventConfigReloadFailed: the
+	// reloaded config failed Validate.
+	ReasonValidationError = "validation_error"
+
+	// ReasonNonBackendChange is paired with EventConfigReloadFailed: the
+	// reloaded config changed a field other than the backend list, so the
+	// reload is rejected whole (ADR-0015 decision 4). The changed field names
+	// ride a `fields` attribute.
+	ReasonNonBackendChange = "non_backend_change"
+
+	// ReasonApplyError is paired with EventConfigReloadFailed: applying the
+	// diff to the registry failed. Defensive only — config validation rules
+	// out the inconsistent diffs Apply rejects, so production should never
+	// emit it.
+	ReasonApplyError = "apply_error"
 )

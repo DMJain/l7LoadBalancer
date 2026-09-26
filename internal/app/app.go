@@ -30,6 +30,7 @@ import (
 	"github.com/DMJain/l7LoadBalancer/internal/circuit"
 	"github.com/DMJain/l7LoadBalancer/internal/config"
 	"github.com/DMJain/l7LoadBalancer/internal/health"
+	"github.com/DMJain/l7LoadBalancer/internal/logger"
 	"github.com/DMJain/l7LoadBalancer/internal/metrics"
 	"github.com/DMJain/l7LoadBalancer/internal/proxy"
 )
@@ -56,6 +57,7 @@ type App struct {
 	collector  *metrics.Collector
 	reg        *backend.Registry
 	checker    *health.Checker
+	outlier    *health.OutlierDetector
 	srv        *http.Server
 	metricsSrv *http.Server
 	healthSrv  *http.Server
@@ -94,7 +96,8 @@ func Build(cfg *config.Config, log *slog.Logger) (*App, error) {
 	p := proxy.New(reg, sel)
 	p.SetMetrics(collector)
 	p.RegisterObserver(proxy.NewLatencyObserver())
-	p.RegisterObserver(health.NewOutlierDetector(log, collector))
+	outlier := health.NewOutlierDetector(log, collector)
+	p.RegisterObserver(outlier)
 	p.RegisterObserver(breaker)
 
 	checker := health.New(reg, *cfg.Health.ProbeInterval, *cfg.Health.ProbeTimeout, log, collector)
@@ -104,6 +107,7 @@ func Build(cfg *config.Config, log *slog.Logger) (*App, error) {
 		collector: collector,
 		reg:       reg,
 		checker:   checker,
+		outlier:   outlier,
 		srv: &http.Server{
 			Addr:              cfg.Listen,
 			Handler:           p,
@@ -136,10 +140,100 @@ func (a *App) Collector() *metrics.Collector { return a.collector }
 func (a *App) Registry() *backend.Registry { return a.reg }
 
 // LoadedConfig returns the config the running system was last built or reloaded
-// from. It is the baseline the reload operation (S4.T3) diffs a new config
-// against; in T2 only tests read it. It is safe to call concurrently with a
-// reload.
+// from. It is the baseline the reload operation diffs a new config against, so
+// successive reloads compose; it is safe to call concurrently with a reload.
 func (a *App) LoadedConfig() *config.Config { return a.loadedCfg.Load() }
+
+// Reload replaces the running backend set with the one in cfg, an already
+// parsed and validated config, while traffic flows. It is the application's
+// reload operation (S4.T3); main's SIGHUP loop is its only production caller,
+// and it is called by one goroutine at a time (ADR-0015 decision 6).
+//
+// Only the backend list is reloadable: a change to any non-backend field
+// rejects the reload whole, logged as config_reload_failed/non_backend_change
+// with the changed fields named, and the previously loaded config keeps serving
+// (ADR-0015 decision 4). Otherwise the diff is taken against the currently
+// loaded config (not the startup config), applied to the registry, and the
+// loaded-config record is replaced; unchanged backends keep their instance and
+// all their state (ADR-0015 decisions 2, 6, 12).
+//
+// Subsystem hook-up mirrors what a backend's membership implies:
+//   - the active checker stops probing a removed backend and starts probing an
+//     added one, which begins unhealthy and is admitted by one successful probe
+//     with reason initial_probe (ADR-0015 decision 10);
+//   - the outlier detector forgets a removed backend's window, so a same-name
+//     backend added later cannot inherit a stale one;
+//   - the collector deletes a removed backend's healthy and circuit-state
+//     series and seeds an added backend's (active connections 0, healthy 0,
+//     circuit closed). A removed backend's active-connections series is left in
+//     place: its in-flight requests still decrement it by name, and deleting it
+//     now would recreate it negative. S4.T4 deletes it at drain completion.
+//
+// Removals are processed before additions so a same-name re-added identity's
+// fresh series are not deleted after being seeded, and the old prober cannot
+// write the health gauge once Remove returns. Added series are seeded before
+// their prober starts, so a first successful probe cannot race the seed.
+//
+// The one config-reloaded line carries added/removed/unchanged counts, at WARN
+// when unchanged is zero (the blue/green empty-selectable window) and INFO
+// otherwise (ADR-0015 decision 11).
+func (a *App) Reload(ctx context.Context, cfg *config.Config) error {
+	oldCfg := a.loadedCfg.Load()
+
+	if changed := config.NonBackendChanges(oldCfg, cfg); len(changed) > 0 {
+		a.log.Warn("config reload failed",
+			"event", logger.EventConfigReloadFailed,
+			"reason", logger.ReasonNonBackendChange,
+			"fields", changed,
+		)
+		return fmt.Errorf("app: reload rejected: non-backend fields changed: %v", changed)
+	}
+
+	diff := config.DiffBackends(oldCfg, cfg)
+	added, removed, err := a.reg.Apply(diff, cfg.Backends)
+	if err != nil {
+		a.log.Error("config reload failed",
+			"event", logger.EventConfigReloadFailed,
+			"reason", logger.ReasonApplyError,
+			"err", err,
+		)
+		return fmt.Errorf("app: reload apply failed: %w", err)
+	}
+
+	a.loadedCfg.Store(cfg)
+
+	for _, b := range removed {
+		a.checker.Remove(b)
+		a.outlier.Forget(b)
+		a.collector.DeleteBackendHealthy(b.Name)
+		a.collector.DeleteCircuitState(b.Name)
+	}
+	for _, b := range added {
+		a.collector.SetActiveConnections(b.Name, 0)
+		a.collector.SetBackendHealthy(b.Name, false)
+		a.collector.SetCircuitState(b.Name, metrics.CircuitStateClosed)
+	}
+	for _, b := range added {
+		a.checker.Add(ctx, b)
+	}
+
+	level := slog.LevelInfo
+	if len(diff.Unchanged) == 0 {
+		level = slog.LevelWarn
+	}
+	attrs := []any{
+		"event", logger.EventConfigReloaded,
+		"added", len(added),
+		"removed", len(removed),
+		"unchanged", len(diff.Unchanged),
+	}
+	if level == slog.LevelWarn {
+		a.log.Warn("config reloaded", attrs...)
+	} else {
+		a.log.Info("config reloaded", attrs...)
+	}
+	return nil
+}
 
 // Run serves until ctx is cancelled, then performs the graceful shutdown of
 // the client, metrics, and health-endpoint servers in that order, each under

@@ -35,14 +35,15 @@ const (
 	eventuallyTick     = 10 * time.Millisecond
 )
 
-// assembly is the handle assemble hands back: the proxy under test, the
-// collector whose gauges the tests read, the captured transition logs, and the
-// registry for backend lookup.
+// assembly is the handle assemble hands back: the application value, the proxy
+// under test, the collector whose gauges the tests read, the captured
+// transition logs, and the registry for backend lookup.
 type assembly struct {
-	handler   http.Handler
-	collector *metrics.Collector
-	logs      *captureHandler
-	reg       *backend.Registry
+	application *app.App
+	handler     http.Handler
+	collector   *metrics.Collector
+	logs        *captureHandler
+	reg         *backend.Registry
 }
 
 // backendConfigs maps flippable backends to their config entries, preserving
@@ -118,9 +119,10 @@ func assemble(t *testing.T, cfg *config.Config) *assembly {
 	})
 
 	return &assembly{
-		handler:   application.Handler(),
-		collector: application.Collector(),
-		logs:      logs,
-		reg:       application.Registry(),
+		application: application,
+		handler:     application.Handler(),
+		collector:   application.Collector(),
+		logs:        logs,
+		reg:         application.Registry(),
 	}
 }

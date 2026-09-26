@@ -29,6 +29,69 @@ var (
 // config knob: the only caller is the container HEALTHCHECK.
 const probeTimeout = 2 * time.Second
 
+// reloadSignalBuffer is the SIGHUP channel's depth. One is deliberate: the
+// reload loop drains any pending signal before reloading, so a burst of
+// SIGHUPs collapses into at most one pending reload and can never pile up
+// (ADR-0015 decision 1).
+const reloadSignalBuffer = 1
+
+// reloadLoop consumes SIGHUP signals and reloads the running application from
+// configPath, one reload at a time. It is main's whole reload policy (S4.T3):
+// for each delivered signal it strictly parses the file, validates it, and asks
+// the application to reload; a parse or validation failure is logged as
+// config_reload_failed and the loop keeps serving the previous config. Before
+// reloading it drains any further signals already queued, so several SIGHUPs in
+// quick succession collapse into one reload. It returns when ctx is cancelled
+// (SIGINT/SIGTERM), so a reload never blocks shutdown.
+//
+// It is a standalone function rather than an inline goroutine so tests can
+// drive it with a fake signal channel, a temp config file, and a captured
+// logger. application.Reload logs its own rejection reasons (non-backend
+// change, apply error), so the loop only has to keep going.
+func reloadLoop(ctx context.Context, configPath string, sigCh <-chan os.Signal, application *app.App, log *slog.Logger) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-sigCh:
+		}
+		drainSignals(sigCh)
+
+		cfg, err := config.Load(configPath)
+		if err != nil {
+			log.Warn("config reload failed",
+				"event", logger.EventConfigReloadFailed,
+				"reason", logger.ReasonParseError,
+				"err", err,
+			)
+			continue
+		}
+		if err := cfg.Validate(); err != nil {
+			log.Warn("config reload failed",
+				"event", logger.EventConfigReloadFailed,
+				"reason", logger.ReasonValidationError,
+				"err", err,
+			)
+			continue
+		}
+		if err := application.Reload(ctx, cfg); err != nil {
+			continue
+		}
+	}
+}
+
+// drainSignals consumes every signal already queued on ch without blocking, so
+// a burst of SIGHUPs becomes a single reload.
+func drainSignals(ch <-chan os.Signal) {
+	for {
+		select {
+		case <-ch:
+		default:
+			return
+		}
+	}
+}
+
 // probeCommand inspects the process arguments and, when the invocation is the
 // `l7lb probe <url>` subcommand, runs a one-shot HTTP probe and reports the
 // process exit code. The grammar is a positional subcommand
@@ -131,6 +194,14 @@ func main() {
 	// checker (ADR-0011 decision 13) and the three servers' graceful shutdown.
 	sigCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+
+	// SIGHUP reloads the backend list in place (S4.T3). It is registered
+	// separately from the SIGINT/SIGTERM shutdown context, and the loop shares
+	// sigCtx, so a reload never races shutdown and stops with it.
+	reloadCh := make(chan os.Signal, reloadSignalBuffer)
+	signal.Notify(reloadCh, syscall.SIGHUP)
+	defer signal.Stop(reloadCh)
+	go reloadLoop(sigCtx, *configPath, reloadCh, application, log)
 
 	// Run logs its own server/shutdown failures, so main only owns the exit
 	// code: a serve failure is fatal, and a clean shutdown returns nil.

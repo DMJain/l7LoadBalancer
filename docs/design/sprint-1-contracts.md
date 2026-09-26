@@ -137,8 +137,18 @@ Example log line per event type (JSON via `slog.NewJSONHandler`):
   ```
 - **Config reloaded** (Sprint 4)
   ```json
-  {"time":"2026-09-01T16:10:00Z","level":"INFO","msg":"config reloaded"}
+  {"time":"2026-09-01T16:10:00Z","level":"INFO","msg":"config reloaded","event":"config_reloaded","added":1,"removed":1,"unchanged":2}
   ```
+  Logged at WARN instead of INFO when `unchanged` is zero (a blue/green
+  reload's brief empty-selectable window). S4.T3 extended this frozen line
+  with the event and the three counts.
+- **Config reload failed** (Sprint 4)
+  ```json
+  {"time":"2026-09-01T16:10:00Z","level":"WARN","msg":"config reload failed","event":"config_reload_failed","reason":"non_backend_change","fields":["listen"]}
+  ```
+  `reason` is one of `parse_error`, `validation_error`, `non_backend_change`,
+  or the defensive `apply_error`; a non-backend change names the changed
+  fields under `fields`. Added by S4.T3.
 
 ## Metric name and label reservations
 

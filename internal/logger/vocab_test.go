@@ -32,6 +32,8 @@ var eventCases = []vocabCase{
 	{"circuit opened", EventCircuitOpened, "circuit_opened", "circuit"},
 	{"circuit closed", EventCircuitClosed, "circuit_closed", "circuit"},
 	{"circuit half opened", EventCircuitHalfOpened, "circuit_half_opened", "circuit"},
+	{"config reloaded", EventConfigReloaded, "config_reloaded", "reload"},
+	{"config reload failed", EventConfigReloadFailed, "config_reload_failed", "reload"},
 }
 
 var reasonCases = []vocabCase{
@@ -43,6 +45,10 @@ var reasonCases = []vocabCase{
 	{"trial success", ReasonTrialSuccess, "trial_success", "circuit"},
 	{"trial failure", ReasonTrialFailure, "trial_failure", "circuit"},
 	{"cooldown elapsed", ReasonCooldownElapsed, "cooldown_elapsed", "circuit"},
+	{"parse error", ReasonParseError, "parse_error", "reload"},
+	{"validation error", ReasonValidationError, "validation_error", "reload"},
+	{"non-backend change", ReasonNonBackendChange, "non_backend_change", "reload"},
+	{"apply error", ReasonApplyError, "apply_error", "reload"},
 }
 
 func TestEventVocabulary(t *testing.T) {
@@ -52,7 +58,7 @@ func TestEventVocabulary(t *testing.T) {
 			assert.Regexp(t, snakeCasePattern, tc.value)
 		})
 	}
-	assertClosed(t, "event", eventCases, 5)
+	assertClosed(t, "event", eventCases, 7)
 }
 
 func TestReasonVocabulary(t *testing.T) {
@@ -62,7 +68,7 @@ func TestReasonVocabulary(t *testing.T) {
 			assert.Regexp(t, snakeCasePattern, tc.value)
 		})
 	}
-	assertClosed(t, "reason", reasonCases, 8)
+	assertClosed(t, "reason", reasonCases, 12)
 }
 
 // assertClosed guards the "closed vocabulary" property: a value colliding with
