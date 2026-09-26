@@ -63,7 +63,7 @@ Every task, without exception, follows this order. **TDD is not optional.** Test
 
 Before writing a single test or line of implementation, write down — in the ADR, the commit message, or a scratch note — two lists for the task you claimed in Step 1:
 
-- **In scope**: the exact acceptance criteria from `PROGRESS.md` for *this* task ID, nothing else.
+- **In scope**: the acceptance criteria in the task's issue file (linked from `PROGRESS.md`), or `PROGRESS.md` if no issue file exists — for *this* task ID, nothing else.
 - **Out of scope**: anything adjacent that a grilling/spec/design session surfaced but that belongs to a *different* task ID, a later sprint, or `MILESTONES.md` items not yet approved.
 
 If something in "out of scope" is tempting to build inline because it's convenient while you're already in that file — don't. Add it as a proposed ticket in `PROGRESS.md`/`MILESTONES.md` for the user to approve, and stop there. This applies especially right after a grilling or spec-design session, which routinely surfaces a whole backlog of future tickets in one sitting — that backlog is a plan, not a to-do list to execute unattended.
