@@ -12,7 +12,7 @@ Live state of the project. Every agent updates this file per the protocol in `AG
 
 **Sprint 4 in progress.** The zero-downtime reload bundle is scoped in `.scratch/s4-t0-t4-reload/` as one spec plus eight strictly serial tickets (each `Blocked by:` the one before): S4.D0 (tracking amendment), S4.T0 (application seam), S4.T1 (config diffing + ADR-0015), S4.T2 (registry snapshot swap), S4.T3.0 (reload hook-up APIs), S4.T3 (SIGHUP orchestration), S4.T4.0 (drain-cancel join + ADR-0016), and S4.T4 (drain lifecycle). S4.D0, S4.T0, S4.T1, S4.T2, S4.T3.0, S4.T3, S4.T4.0, and S4.T4 are [DONE]. The bundle's Sprint 4 exit criterion — SIGHUP with 1000 in-flight requests drops zero — is met, demonstrated by `TestChaosReloadDrainExitCriterion1000` (see the S4.T4 entry).
 
-The connection-lifecycle bundle is scoped in `.scratch/s4-t5-t10-connection-lifecycle/` as one spec plus eight tickets: S4.D1 (tracking amendment), S4.T5 (cancellation correctness), S4.T6 (mid-body death), S4.T7 (slow-loris timeouts), S4.T8 (transport tuning), S4.T9 (pprof audit), S4.T10 (soak test), S4.T11 (retry-policy ADR). T7 and T8 are parallel (both blocked by D1 alone); the rest are serial. S4.D1, S4.T5, S4.T6, and S4.T7 are [DONE]; S4.T8–T11 are pending.
+The connection-lifecycle bundle is scoped in `.scratch/s4-t5-t10-connection-lifecycle/` as one spec plus eight tickets: S4.D1 (tracking amendment), S4.T5 (cancellation correctness), S4.T6 (mid-body death), S4.T7 (slow-loris timeouts), S4.T8 (transport tuning), S4.T9 (pprof audit), S4.T10 (soak test), S4.T11 (retry-policy ADR). T7 and T8 are parallel (both blocked by D1 alone); the rest are serial. S4.D1, S4.T5, S4.T6, S4.T7, S4.T8, and S4.T9 are [DONE]; S4.T10 and S4.T11 are pending.
 
 ## Proposed tickets (awaiting owner approval)
 
@@ -93,10 +93,11 @@ Scoped in `.scratch/s4-t5-t10-connection-lifecycle/` as one bundle spec plus eig
   - Completed: `Config` gains a top-level `transport:` section with four pointer fields and exported defaults — `dial_timeout` (5s), `response_header_timeout` (30s), `max_idle_conns_per_host` (100), `idle_conn_timeout` (90s); duration/positive-int validation follows the nil-means-omitted convention and names each field. `proxy.SetTransport` installs an app-built `*http.Transport` (dial timeout, response-header timeout, per-host idle pool, total `MaxIdleConns = per-host × backend count` so the knob is not capped at 100) in place of `http.DefaultTransport`. `NonBackendChanges` names `transport`, so a reload that changes it is rejected whole. Behavior tests prove a non-accepting address fails at the dial bound and a gated backend fails at the response-header bound; `make test`, `make test-race`, `go vet`, and `make fmt` are green.
   - Acceptance: config gains a `transport:` section with `dial_timeout` (default 5s), `response_header_timeout` (default 30s), `max_idle_conns_per_host` (default 100), and `idle_conn_timeout` (default 90s); the proxy runs on a configured `http.Transport` replacing `http.DefaultTransport`, with total `MaxIdleConns` sized from the per-host value and the backend count; a reload that changes `transport` is rejected naming it.
 
-- [IN_PROGRESS] S4.T9 — pprof audit
+- [DONE] S4.T9 — pprof audit
   - Spec: `.scratch/s4-t5-t10-connection-lifecycle/issues/06-t9-pprof-audit.md`
   - Depends: S4.T5–T8
-  - Claimed 2026-09-27T11:42:11Z by OpenCode (deepseek-v4.1-flash): mount pprof on the metrics listener and add the goroutine-leak audit test.
+  - Claimed 2026-09-27T11:42:11Z by OpenCode (deepseek-v4.1-flash); completed 2026-09-27T11:44:51Z.
+  - Completed: `buildMetricsHandler` mounts `net/http/pprof`'s index, cmdline, profile, symbol, and trace endpoints on the metrics listener's mux beside `/metrics` — no new listener, no new config (ADR-0005 puts security hardening out of scope). A listener test drives each endpoint through the same handler and asserts its actual body, not just a 200, because the bare Prometheus handler answers every path. The goroutine-leak audit (`TestChaosGoroutineLeakAudit`) warms the system, captures a settled baseline, drives cancellations against a gated backend and backend deaths, then asserts the count settles back within a delta of 10; run five times under `-race`. `make test`, `make test-race`, `go vet`, and `make fmt` are green.
   - Acceptance: `net/http/pprof` is mounted on the metrics listener; a goroutine-leak audit test through the app seam asserts the goroutine count returns to baseline within a small delta after a failure-laden load burst.
 
 - [PENDING] S4.T10 — Soak test

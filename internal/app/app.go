@@ -21,6 +21,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/http/pprof"
 	"sync/atomic"
 	"time"
 
@@ -122,7 +123,7 @@ func Build(cfg *config.Config, log *slog.Logger) (*App, error) {
 		},
 		metricsSrv: &http.Server{
 			Addr:              *cfg.Metrics.Listen,
-			Handler:           promhttp.HandlerFor(collector.Registry(), promhttp.HandlerOpts{}),
+			Handler:           buildMetricsHandler(collector),
 			ReadHeaderTimeout: readHeaderTimeout,
 		},
 		healthSrv: &http.Server{
@@ -328,6 +329,22 @@ func serve(srv *http.Server, label string, errCh chan<- runError) {
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		errCh <- runError{label: label, err: err}
 	}
+}
+
+// buildMetricsHandler returns the metrics listener's handler: the Prometheus
+// /metrics endpoint plus net/http/pprof's profile endpoints on the same mux
+// (S4.T9). pprof shares the already-on, unauthenticated operational listener
+// rather than adding a second port, so it adds no attack surface the project
+// has not already accepted; security hardening is out of scope (ADR-0005).
+func buildMetricsHandler(c *metrics.Collector) http.Handler {
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", promhttp.HandlerFor(c.Registry(), promhttp.HandlerOpts{}))
+	mux.HandleFunc("/debug/pprof/", pprof.Index)
+	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+	return mux
 }
 
 // buildTransport constructs the tuned *http.Transport the proxy uses for
