@@ -1,6 +1,7 @@
 BINARY := l7LoadBalancer
 BIN_DIR := bin
 PKG := ./...
+SOAK_DURATION ?= 1h
 
 .DEFAULT_GOAL := help
 
@@ -28,6 +29,14 @@ test-race: ## Run tests with race detector
 .PHONY: bench
 bench: ## Run Go benchmarks
 	go test -bench=. -benchmem $(PKG)
+
+.PHONY: soak
+soak: ## Run the S4.T10 soak test, non-race, both tolerances (SOAK_DURATION=2m to shorten)
+	go test ./test/chaos -run TestChaosSoakConnectionLifecycle -soak -soak-duration=$(SOAK_DURATION) -timeout 2h -v
+
+.PHONY: soak-race
+soak-race: ## Run the soak under the race detector (goroutine tolerance only)
+	go test -race ./test/chaos -run TestChaosSoakConnectionLifecycle -soak -soak-duration=$(SOAK_DURATION) -timeout 2h -v
 
 .PHONY: fmt
 fmt: ## Format code

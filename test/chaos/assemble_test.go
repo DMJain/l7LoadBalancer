@@ -101,18 +101,26 @@ func chaosConfig(fbs []*flippableBackend) *config.Config {
 
 // assemble builds the system through internal/app's Build seam — production
 // and test wiring now converge, closing the Sprint 3 retro's assemble debt —
-// and starts it with Run on a context cancelled at test cleanup. The returned
-// handle keeps the same shape the chaos assertions read before the swap.
+// and starts it with Run on a context cancelled at test cleanup. It retains
+// every log record (see assembleWith).
 func assemble(t *testing.T, cfg *config.Config) *assembly {
+	t.Helper()
+	logs := &captureHandler{}
+	return assembleWith(t, cfg, slog.New(logs), logs)
+}
+
+// assembleWith is assemble for a caller that supplies its own logger. logs
+// backs the assembly's log assertions; a caller that only needs the wiring
+// (the soak, which runs for an hour and cannot retain a record per request)
+// passes a discarding logger and nil. The returned handle keeps the same shape
+// the chaos assertions read.
+func assembleWith(t *testing.T, cfg *config.Config, log *slog.Logger, logs *captureHandler) *assembly {
 	t.Helper()
 	require.NoError(t, cfg.Validate())
 
-	logs := &captureHandler{}
-	log := slog.New(logs)
-
 	// proxy.New captures slog.Default() at construction (its frozen two-arg
-	// signature takes no logger), so route the default at the capture handler
-	// for the duration of the test: request lines are then retained instead of
+	// signature takes no logger), so route the default at log for the duration
+	// of the test: request lines are then captured (or discarded) instead of
 	// spamming the test output, and nothing else can observe them.
 	prevDefault := slog.Default()
 	slog.SetDefault(log)
