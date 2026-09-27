@@ -61,6 +61,14 @@ func configWithServerYAML(server string) string {
 		"backends:\n" + backendYAML("backend-a", "http://127.0.0.1:9001")
 }
 
+// configWithTransportYAML builds a minimal otherwise-valid config with the
+// supplied transport YAML block (which may be empty) spliced in before the
+// backends section.
+func configWithTransportYAML(transport string) string {
+	return "listen: \":8080\"\n" + transport +
+		"backends:\n" + backendYAML("backend-a", "http://127.0.0.1:9001")
+}
+
 // loadAndValidate is the end-to-end seam under test: YAML -> Load -> Validate.
 func loadAndValidate(t *testing.T, contents string) (*Config, error) {
 	t.Helper()
@@ -435,6 +443,80 @@ func TestValidate(t *testing.T) {
 			yaml:      configWithServerYAML("server:\n  read_timeout: \"-1s\"\n"),
 			wantErr:   true,
 			errSubstr: "read_timeout",
+		},
+		{
+			name: "transport fields omitted fall back to documented defaults",
+			yaml: threeBackendYAML(),
+			check: func(t *testing.T, cfg *Config) {
+				t.Helper()
+				require.NotNil(t, cfg.Transport.DialTimeout)
+				require.NotNil(t, cfg.Transport.ResponseHeaderTimeout)
+				require.NotNil(t, cfg.Transport.MaxIdleConnsPerHost)
+				require.NotNil(t, cfg.Transport.IdleConnTimeout)
+				assert.Equal(t, DefaultDialTimeout, *cfg.Transport.DialTimeout)
+				assert.Equal(t, DefaultResponseHeaderTimeout, *cfg.Transport.ResponseHeaderTimeout)
+				assert.Equal(t, DefaultMaxIdleConnsPerHost, *cfg.Transport.MaxIdleConnsPerHost)
+				assert.Equal(t, DefaultIdleConnTimeout, *cfg.Transport.IdleConnTimeout)
+			},
+		},
+		{
+			name: "transport fields set explicitly are kept",
+			yaml: configWithTransportYAML(
+				"transport:\n  dial_timeout: \"2s\"\n  response_header_timeout: \"10s\"\n  max_idle_conns_per_host: 42\n  idle_conn_timeout: \"45s\"\n",
+			),
+			check: func(t *testing.T, cfg *Config) {
+				t.Helper()
+				require.NotNil(t, cfg.Transport.DialTimeout)
+				require.NotNil(t, cfg.Transport.ResponseHeaderTimeout)
+				require.NotNil(t, cfg.Transport.MaxIdleConnsPerHost)
+				require.NotNil(t, cfg.Transport.IdleConnTimeout)
+				assert.Equal(t, 2*time.Second, *cfg.Transport.DialTimeout)
+				assert.Equal(t, 10*time.Second, *cfg.Transport.ResponseHeaderTimeout)
+				assert.Equal(t, 42, *cfg.Transport.MaxIdleConnsPerHost)
+				assert.Equal(t, 45*time.Second, *cfg.Transport.IdleConnTimeout)
+			},
+		},
+		{
+			name:      "transport dial_timeout of zero is rejected naming the field",
+			yaml:      configWithTransportYAML("transport:\n  dial_timeout: \"0s\"\n"),
+			wantErr:   true,
+			errSubstr: "dial_timeout",
+		},
+		{
+			name:      "transport dial_timeout negative is rejected naming the field",
+			yaml:      configWithTransportYAML("transport:\n  dial_timeout: \"-1s\"\n"),
+			wantErr:   true,
+			errSubstr: "dial_timeout",
+		},
+		{
+			name:      "transport response_header_timeout of zero is rejected naming the field",
+			yaml:      configWithTransportYAML("transport:\n  response_header_timeout: \"0s\"\n"),
+			wantErr:   true,
+			errSubstr: "response_header_timeout",
+		},
+		{
+			name:      "transport response_header_timeout negative is rejected naming the field",
+			yaml:      configWithTransportYAML("transport:\n  response_header_timeout: \"-1s\"\n"),
+			wantErr:   true,
+			errSubstr: "response_header_timeout",
+		},
+		{
+			name:      "transport max_idle_conns_per_host of zero is rejected naming the field",
+			yaml:      configWithTransportYAML("transport:\n  max_idle_conns_per_host: 0\n"),
+			wantErr:   true,
+			errSubstr: "max_idle_conns_per_host",
+		},
+		{
+			name:      "transport max_idle_conns_per_host negative is rejected naming the field",
+			yaml:      configWithTransportYAML("transport:\n  max_idle_conns_per_host: -5\n"),
+			wantErr:   true,
+			errSubstr: "max_idle_conns_per_host",
+		},
+		{
+			name:      "transport idle_conn_timeout of zero is rejected naming the field",
+			yaml:      configWithTransportYAML("transport:\n  idle_conn_timeout: \"0s\"\n"),
+			wantErr:   true,
+			errSubstr: "idle_conn_timeout",
 		},
 	}
 

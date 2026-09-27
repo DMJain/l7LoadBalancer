@@ -1,6 +1,7 @@
 package config
 
 import (
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -183,6 +184,18 @@ func TestNonBackendChanges(t *testing.T) {
 			want: []string{"server"},
 		},
 		{
+			name: "transport dial_timeout differs",
+			old:  oneBackendConfigYAML(base),
+			new:  oneBackendConfigYAML(base + "transport:\n  dial_timeout: \"2s\"\n"),
+			want: []string{"transport"},
+		},
+		{
+			name: "transport max_idle_conns_per_host differs",
+			old:  oneBackendConfigYAML(base),
+			new:  oneBackendConfigYAML(base + "transport:\n  max_idle_conns_per_host: 5\n"),
+			want: []string{"transport"},
+		},
+		{
 			name: "omitted fields equal explicit defaults",
 			old:  oneBackendConfigYAML(base),
 			new: oneBackendConfigYAML(base +
@@ -192,7 +205,8 @@ func TestNonBackendChanges(t *testing.T) {
 				"metrics:\n  listen: \"" + DefaultMetricsListen + "\"\n" +
 				"health_endpoint:\n  listen: \"" + DefaultHealthEndpointListen + "\"\n" +
 				"reload:\n  drain_window: \"" + DefaultDrainWindow.String() + "\"\n" +
-				"server:\n  read_timeout: \"" + DefaultReadTimeout.String() + "\"\n"),
+				"server:\n  read_timeout: \"" + DefaultReadTimeout.String() + "\"\n" +
+				"transport:\n  dial_timeout: \"" + DefaultDialTimeout.String() + "\"\n  response_header_timeout: \"" + DefaultResponseHeaderTimeout.String() + "\"\n  max_idle_conns_per_host: " + strconv.Itoa(DefaultMaxIdleConnsPerHost) + "\n  idle_conn_timeout: \"" + DefaultIdleConnTimeout.String() + "\"\n"),
 		},
 		{
 			name: "multiple fields come back in fixed order",
