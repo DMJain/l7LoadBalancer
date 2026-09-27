@@ -25,17 +25,20 @@ backend round trip**. Two mechanisms encode it:
    and exactly one must. The selection algorithms read that counter as live
    load: `LeastConnections` picks the minimum `ActiveConns()`
    (`internal/balancer/leastconn.go:37`), `ConsistentHashBoundedLoads` derives
-   its capacity from the mean `ActiveConns()` over healthy backends
-   (`internal/balancer/consistent_hash.go:24`, `:159`).
+   its capacity from the mean `ActiveConns()` over **selectable** backends —
+   healthy *and* circuit-not-open (`internal/balancer/consistent_hash.go:23`,
+   `:159`).
 
-2. **The observer fan-out fires once per terminal round trip.** A success is fed
-   in `modifyResponse` (`proxy.go:349`), a failure in `errorHandler`
-   (`proxy.go:407`, `:419`), both through the single `observe()` path
-   (`proxy.go:242`). The registered observers are the passive outlier detector
-   (a sliding window of failures that ejects at threshold), the circuit breaker,
-   and the EWMA latency observer. ADR-0011 decision 9 is explicit that this
-   fan-out "is the only path that feeds a half-open trial's result back into the
-   circuit's decision".
+2. **The observer fan-out fires once per observed terminal round trip.** A
+   success is fed in `modifyResponse` (`proxy.go:349`), a failure in
+   `errorHandler` (`proxy.go:407`, `:419`), both through the single `observe()`
+   path (`proxy.go:242`). The registered observers are the passive outlier
+   detector (a sliding window of failures that ejects at threshold), the circuit
+   breaker, and the EWMA latency observer. Client-gone is deliberately the one
+   terminal tier that feeds no observer (ADR-0017), so "observed" is part of the
+   invariant. ADR-0011 decision 9 is explicit that this fan-out "is the only
+   mechanism that feeds a half-open trial's result back into the Closed/Open
+   decision"; `proxy.go:120` records the same in code.
 
 S4.T5 makes a failed round trip legible: it is classified into exactly one of
 three tiers — drain cancellation, client-gone, genuine transport failure — and
@@ -67,13 +70,14 @@ missing feature.
    changed, the decrement would land on the wrong series.
 
 2. **It corrupts the outlier window.** `observe()` fans out one outcome per
-   round trip. If one logical client request fails against backend A and is
-   retried against B, the passive outlier detector's sliding window receives one
-   failure per attempt — two failures recorded for one client-visible failure.
-   The detector ejects at N failures within a window, so a retry lets a single
-   bad request pattern reach that threshold sooner than N distinct requests
-   would, and the circuit breaker sees failures for attempts the client never
-   observed. The EWMA observer is fed a second fixed 2s penalty
+   observed round trip. If one logical client request fails against backend A
+   and is retried against B, the passive outlier detector's sliding window
+   receives one failure per attempt — two failures recorded for one
+   client-visible failure. The detector ejects on 5 failures in its 10-outcome
+   window (`internal/health/outlier.go:21`, `:29`; CONTEXT.md "Ejection"), so a
+   retry lets a single bad request pattern reach that threshold sooner than 5
+   distinct requests would, and the circuit breaker sees failures for attempts
+   the client never observed. The EWMA observer is fed a second fixed 2s penalty
    (`p2cFailurePenalty`, `proxy.go:30`) for one logical failure, skewing a
    backend's latency estimate.
 
@@ -111,10 +115,11 @@ idempotency.
 
 ## Consequences
 
-- Positive: the invariant "one client request = one active-connection slot = one
-  observer outcome" holds by construction, so selection load, outlier windows,
-  circuit state, and EWMA latency all describe exactly the traffic that
-  happened.
+- Positive: the invariant holds by construction — one client request claims
+  exactly one active-connection slot, and each observed round trip feeds exactly
+  one observer outcome (client-gone feeds none, by design) — so selection load,
+  outlier windows, circuit state, and EWMA latency all describe exactly the
+  traffic that happened.
 - Positive: the failure signal stays honest — a 5xx always means a
   backend-caused failure, a 499 always means client churn, and nothing is hidden
   behind an internal retry.

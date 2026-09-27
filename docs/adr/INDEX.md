@@ -21,7 +21,7 @@ One-line decision summaries. Read the full ADR when your task touches that subsy
 | [0015](0015-reload-architecture.md) | Zero-downtime reload architecture: in-process snapshot swap, backend identity, and admission | Accepted | Reload swaps an immutable versioned snapshot in process; identity is `(name, URL)`; only backends are reloadable. |
 | [0016](0016-drain-lifecycle.md) | Drain lifecycle: retired-context join, two-phase drain, and cancel-at-window | Accepted | Per-backend retired context joined via `context.AfterFunc`; drain window is config; cut-off signal is structural. |
 | [0017](0017-client-gone-classification-and-trial-rearm.md) | Client-gone classification and half-open trial re-arm | Accepted | Error handler classifies client-gone to 499/INFO with no observer; `Backend.RearmTrial()` re-arms a half-open trial a cancelled client held. |
-| [0018](0018-no-retry-ever.md) | No retry, ever: a failed round trip is classified and surfaced, never repeated | Accepted | The LB never retries; one client request = one active-connection slot = one observer outcome, so a retry would double-count load and corrupt the outlier window. Retry is the client's job. |
+| [0018](0018-no-retry-ever.md) | No retry, ever: a failed round trip is classified and surfaced, never repeated | Accepted | The LB never retries — a retry would double-count active connections and corrupt the outlier window for one client request — so retry is left to the client, which alone knows idempotency. |
 
 ## Decisions without a dedicated ADR
 
