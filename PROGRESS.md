@@ -126,7 +126,7 @@ Scoped in `.scratch/s4-t12-t15-closeout/` as one bundle spec plus ten tickets. T
   - Acceptance: PROGRESS.md gains the "Sprint 4 — Close-out" section with the ten ticket rows (S4.T12–S4.T21) and their acceptance criteria; MILESTONES.md Sprint 4 deliverables gain the interpolation line; the stale hot-reload proposed ticket is closed with the reason recorded; the reload-outcome counter metric is deferred to Sprint 5 with the reason recorded; the amendment lands as one commit touching only PROGRESS.md and MILESTONES.md.
   - Test approach: none — docs-only (AGENTS.md TDD exception).
 
-- [PENDING] S4.T13 — Harness: gated counting backends
+- [IN_PROGRESS] S4.T13 — Harness: gated counting backends (opencode, started 2026-09-27T16:44:01Z: additive per-backend atomic request counter in the chaos harness)
   - Spec: `.scratch/s4-t12-t15-closeout/issues/02-t13-harness-gated-counting-backends.md`
   - Depends: S4.T12
   - Acceptance: the harness backend type gains an atomic request counter incremented at entry, before gating, readable by tests; existing chaos tests are untouched and stay green (`make test`, `make test-race`); a test proves the counter increments once per request and is readable without touching proxy or registry internals.
