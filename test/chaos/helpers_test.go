@@ -41,8 +41,7 @@ type flippableBackend struct {
 	// requests counts every request that reaches the backend. It is
 	// incremented in serve before the installed handler runs — before any
 	// gating — so a test can assert that traffic shifted to one backend or
-	// froze on another without reading proxy internals. Additive: no existing
-	// handler or test changes because of it.
+	// froze on another without reading proxy internals.
 	requests atomic.Int64
 
 	mu  sync.Mutex
