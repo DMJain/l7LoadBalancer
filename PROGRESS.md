@@ -14,6 +14,8 @@ Live state of the project. Every agent updates this file per the protocol in `AG
 
 The connection-lifecycle bundle is scoped in `.scratch/s4-t5-t10-connection-lifecycle/` as one spec plus eight tickets: S4.D1 (tracking amendment), S4.T5 (cancellation correctness), S4.T6 (mid-body death), S4.T7 (slow-loris timeouts), S4.T8 (transport tuning), S4.T9 (pprof audit), S4.T10 (soak test), S4.T11 (retry-policy ADR). T7 and T8 are parallel (both blocked by D1 alone); the rest are serial. All eight are [DONE] — S4.T11 closes the bundle.
 
+The close-out bundle is scoped in `.scratch/s4-t12-t15-closeout/` as one spec plus ten tickets: S4.T12 (amendment-first tracking), S4.T13 (gated counting harness), S4.T14 (SIGHUP e2e zero-drop), S4.T15 (`make e2e` target), S4.T16 (env interpolation), S4.T17 (redaction), S4.T18 (example config), S4.T19 (deployment ADR), S4.T20 (retro), S4.T21 (architecture doc). T12→T13→T14 are serial; T15 and T16 both follow T14; T17–T19 follow T16; T20–T21 follow T19. S4.T12 is in progress; S4.T13–S4.T21 are pending.
+
 ## Proposed tickets (awaiting owner approval)
 
 Not approved, not claimed, not implemented. Surfaced by the S4 reload grilling (`.scratch/s4-t0-t4-reload/spec.md`, *Out of Scope*; decisions D1–D2) and recorded per AGENTS.md Step 2.5. (Prior S3 entries were approved and promoted into the `.scratch/s3-t6-5-t8-t9-chaos/` bundle: S3.T6.5, S3.T8 landed from that bundle and live in the Sprint 3 list above, and S3.T9 was approved and promoted into the same bundle and is claimed above.)
@@ -113,6 +115,23 @@ Scoped in `.scratch/s4-t5-t10-connection-lifecycle/` as one bundle spec plus eig
   - Claimed 2026-09-27T14:31:23Z by OpenCode (deepseek-v4.1-flash); completed 2026-09-27T14:32:26Z.
   - Completed: `docs/adr/0018-no-retry-ever.md` records "no retry, ever" as a consequence of the observer and active-connection design, citing the T5/T6 code that forces it — `reqState.activate()`/`release()` (exactly-once slot), the `observe()` fan-out to circuit/outlier/EWMA, and the terminal three-tier `errorHandler`. It states the two harms (a retry double-counts `ActiveConns` and feeds two failures into the outlier window for one client failure), why it cannot be added later without redesign (bodies are unreplayable streams, idempotency is unknowable to a method-agnostic LB), and what replaces it (classified fast failure, retry owned by the client). The `docs/adr/INDEX.md` row is added. Docs-only, no code; the Sprint 4 retry-policy MILESTONES deliverable.
   - Acceptance: the ADR records "no retry, ever" as a consequence of the observer and active-connection design, citing the T5/T6 code that forces it.
+
+## Sprint 4 — Close-out
+
+Scoped in `.scratch/s4-t12-t15-closeout/` as one bundle spec plus ten tickets. The bundle's `spec.md` is the authoritative scope boundary; every story and implementation decision is tagged with exactly one ticket there. T12→T13→T14 are serial; T15 and T16 both follow T14; T17–T19 follow T16; T20–T21 follow T19.
+
+- [IN_PROGRESS] S4.T12 — Amendment-first: tracking for the close-out (opencode, started 2026-09-27T21:50:00+05:30)
+  - Goal: land the close-out tracking amendment alone before any close-out code, per the S4.D0/S4.D1 amendment-first precedent.
+
+- [PENDING] S4.T13 — Harness: gated counting backends
+- [PENDING] S4.T14 — SIGHUP end-to-end zero-drop test
+- [PENDING] S4.T15 — `make e2e` target
+- [PENDING] S4.T16 — Env interpolation in the loader
+- [PENDING] S4.T17 — Redaction: validation errors never contain the expanded URL
+- [PENDING] S4.T18 — Example config documents interpolation
+- [PENDING] S4.T19 — ADR: deployment target decision
+- [PENDING] S4.T20 — Sprint 4 retro
+- [PENDING] S4.T21 — Architecture doc update
 
 ## Sprint 5
 
