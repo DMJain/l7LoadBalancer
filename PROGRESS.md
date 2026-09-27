@@ -86,9 +86,10 @@ Scoped in `.scratch/s4-t5-t10-connection-lifecycle/` as one bundle spec plus eig
   - Acceptance: config gains a `server:` section with `read_timeout` (default 60s when omitted, explicitly non-positive rejected naming the field); a slow-loris client is disconnected at the read timeout; `WriteTimeout` is deliberately omitted with the rationale documented; a reload that changes `server` is rejected naming it.
   - Acceptance: config gains a `server:` section with `read_timeout` (default 60s when omitted, explicitly non-positive rejected naming the field); a slow-loris client is disconnected at the read timeout; `WriteTimeout` is deliberately omitted with the rationale documented; a reload that changes `server` is rejected naming it.
 
-- [PENDING] S4.T8 — Transport tuning
+- [IN_PROGRESS] S4.T8 — Transport tuning
   - Spec: `.scratch/s4-t5-t10-connection-lifecycle/issues/05-t8-transport-tuning.md`
   - Depends: S4.D1
+  - Claimed 2026-09-27T11:24:07Z by OpenCode (deepseek-v4.1-flash).
   - Acceptance: config gains a `transport:` section with `dial_timeout` (default 5s), `response_header_timeout` (default 30s), `max_idle_conns_per_host` (default 100), and `idle_conn_timeout` (default 90s); the proxy runs on a configured `http.Transport` replacing `http.DefaultTransport`, with total `MaxIdleConns` sized from the per-host value and the backend count; a reload that changes `transport` is rejected naming it.
 
 - [PENDING] S4.T9 — pprof audit
