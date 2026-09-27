@@ -22,6 +22,17 @@ health_endpoint:
 reload:
   drain_window: "30s"
 
+# Client-facing HTTP server. `read_timeout` bounds reading a full request
+# including the body, so a slow-loris client cannot pin a server goroutine; it
+# also bounds idle keep-alive connections (net/http derives the idle timeout
+# from it when IdleTimeout is unset). Optional; defaults to "60s". Not
+# reloadable: changing it rejects the reload.
+# WriteTimeout is deliberately NOT exposed: the stdlib's WriteTimeout spans the
+# entire response body copy, so a slow-but-healthy upstream would trip it. Do
+# not add it without revisiting that reasoning (S4.T7).
+server:
+  read_timeout: "60s"
+
 # Upstream backends. At least one required. Names must be unique.
 backends:
   - name: "backend-a"

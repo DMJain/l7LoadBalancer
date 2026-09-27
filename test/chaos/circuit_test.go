@@ -36,6 +36,7 @@ func circuitChaosConfig(fbs []*flippableBackend) *config.Config {
 	probeInterval := circuitIsolationProbeInterval
 	probeTimeout := time.Second
 	cooldown := circuitChaosCooldown
+	readTimeout := config.DefaultReadTimeout
 	return &config.Config{
 		Listen:    ":0",
 		Algorithm: config.AlgorithmRoundRobin,
@@ -46,6 +47,7 @@ func circuitChaosConfig(fbs []*flippableBackend) *config.Config {
 		Circuit:        config.CircuitConfig{Cooldown: &cooldown},
 		Metrics:        config.MetricsConfig{Listen: zeroListen()},
 		HealthEndpoint: config.HealthEndpointConfig{Listen: zeroListen()},
+		Server:         config.ServerConfig{ReadTimeout: &readTimeout},
 		Backends:       backendConfigs(fbs),
 	}
 }

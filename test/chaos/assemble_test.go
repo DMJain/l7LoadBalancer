@@ -72,6 +72,7 @@ func chaosConfig(fbs []*flippableBackend) *config.Config {
 	probeTimeout := chaosProbeTimeout
 	cooldown := chaosCooldown
 	drainWindow := config.DefaultDrainWindow
+	readTimeout := config.DefaultReadTimeout
 	return &config.Config{
 		Listen:    ":0",
 		Algorithm: config.AlgorithmRoundRobin,
@@ -83,6 +84,7 @@ func chaosConfig(fbs []*flippableBackend) *config.Config {
 		Metrics:        config.MetricsConfig{Listen: zeroListen()},
 		HealthEndpoint: config.HealthEndpointConfig{Listen: zeroListen()},
 		Reload:         config.ReloadConfig{DrainWindow: &drainWindow},
+		Server:         config.ServerConfig{ReadTimeout: &readTimeout},
 		Backends:       backendConfigs(fbs),
 	}
 }

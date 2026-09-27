@@ -74,6 +74,12 @@ const (
 	// requests before they are cancelled, when reload.drain_window is omitted.
 	// See ADR-0016 decision 1.
 	DefaultDrainWindow = 30 * time.Second
+	// DefaultReadTimeout is how long the client-facing server may take to read
+	// a full request, including the body, when server.read_timeout is omitted.
+	// Generous enough for slow-but-legitimate uploads while still bounding a
+	// slow-loris body; the server's ReadHeaderTimeout covers slow headers.
+	// S4.T7.
+	DefaultReadTimeout = 60 * time.Second
 )
 
 // Config is the top-level load balancer configuration, loaded from YAML.
@@ -89,6 +95,7 @@ type Config struct {
 	Metrics        MetricsConfig        `yaml:"metrics"`
 	HealthEndpoint HealthEndpointConfig `yaml:"health_endpoint"`
 	Reload         ReloadConfig         `yaml:"reload"`
+	Server         ServerConfig         `yaml:"server"`
 	Backends       []BackendConfig      `yaml:"backends"`
 }
 
@@ -136,6 +143,31 @@ type HealthEndpointConfig struct {
 	// Listen is the host:port the /livez, /readyz, and /startupz endpoints
 	// bind. Omitted → DefaultHealthEndpointListen.
 	Listen *string `yaml:"listen"`
+}
+
+// ServerConfig holds the client-facing HTTP server's tunables. It is one field
+// today, nested like the other subsystems so its shape can grow without a flat
+// top-level key, and follows the same nil-means-omitted convention.
+//
+// WriteTimeout is deliberately absent: the standard library's WriteTimeout
+// spans end-of-request-headers through the entire response body copy, so a
+// slow-but-healthy upstream (large response, slow client) would trip it even
+// though nothing is wrong. It is not symmetric with ReadTimeout and must not be
+// added without revisiting this reasoning (S4.T7). The residual exposure — a
+// client that stalls reading while the proxy still has buffered data to send
+// pins one goroutine until the OS TCP retry window, but only while data
+// remains to write — is recorded in the bundle spec and is out of scope here.
+type ServerConfig struct {
+	// ReadTimeout bounds reading a full client request, including the body.
+	// Omitted → DefaultReadTimeout. Not reloadable: NonBackendChanges names
+	// "server" when it differs, so a reload that would silently change it is
+	// rejected (S4.T7).
+	//
+	// It also bounds an idle keep-alive connection: net/http derives the idle
+	// timeout as IdleTimeout else ReadTimeout, so with no IdleTimeout set this
+	// value is the idle bound too — dead clients cannot accumulate idle
+	// connections past it.
+	ReadTimeout *time.Duration `yaml:"read_timeout"`
 }
 
 // ReloadConfig holds the zero-downtime-reload tunables. It is one field today,
@@ -197,7 +229,8 @@ func Load(path string) (*Config, error) {
 //
 // Validation is fail-fast: the first problem is returned. The order is
 // Listen → backends count → per-backend name/URL → name uniqueness →
-// algorithm → health/circuit durations → metrics/health_endpoint listen.
+// algorithm → health/circuit/reload/server durations →
+// metrics/health_endpoint listen.
 func (c *Config) Validate() error {
 	if c.Algorithm == "" {
 		c.Algorithm = AlgorithmRoundRobin
@@ -246,9 +279,9 @@ func (c *Config) Validate() error {
 	return normalizeListen("health_endpoint listen", &c.HealthEndpoint.Listen, DefaultHealthEndpointListen)
 }
 
-// normalizeAndValidateDurations applies the Sprint 3 defaults to every omitted
-// duration and rejects an explicitly-set non-positive one. Called last so the
-// pre-Sprint-3 checks keep their fail-fast order.
+// normalizeAndValidateDurations applies the Sprint 3 and S4.T7 defaults to
+// every omitted duration and rejects an explicitly-set non-positive one. Called
+// last so the pre-Sprint-3 checks keep their fail-fast order.
 func (c *Config) normalizeAndValidateDurations() error {
 	if err := normalizeDuration("health probe_interval", &c.Health.ProbeInterval, DefaultProbeInterval); err != nil {
 		return err
@@ -259,7 +292,10 @@ func (c *Config) normalizeAndValidateDurations() error {
 	if err := normalizeDuration("circuit cooldown", &c.Circuit.Cooldown, DefaultCircuitCooldown); err != nil {
 		return err
 	}
-	return normalizeDuration("reload drain_window", &c.Reload.DrainWindow, DefaultDrainWindow)
+	if err := normalizeDuration("reload drain_window", &c.Reload.DrainWindow, DefaultDrainWindow); err != nil {
+		return err
+	}
+	return normalizeDuration("server read_timeout", &c.Server.ReadTimeout, DefaultReadTimeout)
 }
 
 // normalizeListen defaults an omitted listen address to def and rejects an

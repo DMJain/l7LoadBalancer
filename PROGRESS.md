@@ -12,7 +12,7 @@ Live state of the project. Every agent updates this file per the protocol in `AG
 
 **Sprint 4 in progress.** The zero-downtime reload bundle is scoped in `.scratch/s4-t0-t4-reload/` as one spec plus eight strictly serial tickets (each `Blocked by:` the one before): S4.D0 (tracking amendment), S4.T0 (application seam), S4.T1 (config diffing + ADR-0015), S4.T2 (registry snapshot swap), S4.T3.0 (reload hook-up APIs), S4.T3 (SIGHUP orchestration), S4.T4.0 (drain-cancel join + ADR-0016), and S4.T4 (drain lifecycle). S4.D0, S4.T0, S4.T1, S4.T2, S4.T3.0, S4.T3, S4.T4.0, and S4.T4 are [DONE]. The bundle's Sprint 4 exit criterion — SIGHUP with 1000 in-flight requests drops zero — is met, demonstrated by `TestChaosReloadDrainExitCriterion1000` (see the S4.T4 entry).
 
-The connection-lifecycle bundle is scoped in `.scratch/s4-t5-t10-connection-lifecycle/` as one spec plus eight tickets: S4.D1 (tracking amendment), S4.T5 (cancellation correctness), S4.T6 (mid-body death), S4.T7 (slow-loris timeouts), S4.T8 (transport tuning), S4.T9 (pprof audit), S4.T10 (soak test), S4.T11 (retry-policy ADR). T7 and T8 are parallel (both blocked by D1 alone); the rest are serial. S4.D1 is [DONE] (2026-09-26T18:03:24Z); S4.T5–T11 are pending.
+The connection-lifecycle bundle is scoped in `.scratch/s4-t5-t10-connection-lifecycle/` as one spec plus eight tickets: S4.D1 (tracking amendment), S4.T5 (cancellation correctness), S4.T6 (mid-body death), S4.T7 (slow-loris timeouts), S4.T8 (transport tuning), S4.T9 (pprof audit), S4.T10 (soak test), S4.T11 (retry-policy ADR). T7 and T8 are parallel (both blocked by D1 alone); the rest are serial. S4.D1, S4.T5, S4.T6, and S4.T7 are [DONE]; S4.T8–T11 are pending.
 
 ## Proposed tickets (awaiting owner approval)
 
@@ -78,10 +78,12 @@ Scoped in `.scratch/s4-t5-t10-connection-lifecycle/` as one bundle spec plus eig
   - Completed: 2026-09-26T18:34:00Z. `releaseBody` gains a `Read` that counts copied bytes and logs a non-EOF read error at WARN with reason `backend_died_mid_response`, backend, path, and `bytes_copied`; the headers-time success stands and no observer is fed a second event. A drain or client-gone cancellation on the same body path is recognised via the same discriminators and is not misreported as a backend death. Chaos tests cover a mid-body death (WARN line, gauges unchanged, slot released) and a pre-headers death (clean 502, failure observed, no leak); the mid-body ejection gap is documented as a known limitation in the session log.
   - Acceptance: the response-body wrapper observes read errors — any non-EOF error after headers is logged at WARN with the new `backend_died_mid_response` reason carrying the backend name, the path, and the bytes already copied; the success recorded when headers arrives stands; no observer is fed; the mid-body ejection gap is documented as a known limitation.
 
-- [IN_PROGRESS] S4.T7 — Slow-loris client timeouts
+- [DONE] S4.T7 — Slow-loris client timeouts
   - Spec: `.scratch/s4-t5-t10-connection-lifecycle/issues/04-t7-slow-loris-client-timeouts.md`
   - Depends: S4.D1
-  - Claimed 2026-09-26T18:42:21Z by OpenCode (deepseek-v4.1-flash): add `server.read_timeout` config (default 60s, non-positive rejected), wire it to the client-facing ReadTimeout, reject reloads that change it, document the WriteTimeout omission, and prove a slow-body client is disconnected at the bound.
+  - Claimed 2026-09-26T18:42:21Z by OpenCode (deepseek-v4.1-flash); completed 2026-09-27T09:57:34Z.
+  - Completed: `Config` gains a top-level `server:` section with `read_timeout` (pointer duration, default 60s via `DefaultReadTimeout`, explicitly non-positive rejected naming the field). `Build` wires it to the client-facing server's `ReadTimeout`; `WriteTimeout` is deliberately omitted and the rationale documented in `ServerConfig` and `configs/example.yaml`. `NonBackendChanges` names `server`, so a reload that changes it is rejected whole. A behavioral test proves a stalled slow-body client is cut off at the bound; `make test`, `make test-race`, `go vet`, and `make fmt` are green.
+  - Acceptance: config gains a `server:` section with `read_timeout` (default 60s when omitted, explicitly non-positive rejected naming the field); a slow-loris client is disconnected at the read timeout; `WriteTimeout` is deliberately omitted with the rationale documented; a reload that changes `server` is rejected naming it.
   - Acceptance: config gains a `server:` section with `read_timeout` (default 60s when omitted, explicitly non-positive rejected naming the field); a slow-loris client is disconnected at the read timeout; `WriteTimeout` is deliberately omitted with the rationale documented; a reload that changes `server` is rejected naming it.
 
 - [PENDING] S4.T8 — Transport tuning

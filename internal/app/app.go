@@ -112,6 +112,11 @@ func Build(cfg *config.Config, log *slog.Logger) (*App, error) {
 			Addr:              cfg.Listen,
 			Handler:           p,
 			ReadHeaderTimeout: readHeaderTimeout,
+			// ReadTimeout bounds the full client request read including the
+			// body, the slow-body slow-loris vector (S4.T7). WriteTimeout is
+			// deliberately omitted: it would span the whole response copy and
+			// trip on a slow-but-healthy upstream. See Config.ServerConfig.
+			ReadTimeout: *cfg.Server.ReadTimeout,
 		},
 		metricsSrv: &http.Server{
 			Addr:              *cfg.Metrics.Listen,
