@@ -93,9 +93,10 @@ Scoped in `.scratch/s4-t5-t10-connection-lifecycle/` as one bundle spec plus eig
   - Completed: `Config` gains a top-level `transport:` section with four pointer fields and exported defaults — `dial_timeout` (5s), `response_header_timeout` (30s), `max_idle_conns_per_host` (100), `idle_conn_timeout` (90s); duration/positive-int validation follows the nil-means-omitted convention and names each field. `proxy.SetTransport` installs an app-built `*http.Transport` (dial timeout, response-header timeout, per-host idle pool, total `MaxIdleConns = per-host × backend count` so the knob is not capped at 100) in place of `http.DefaultTransport`. `NonBackendChanges` names `transport`, so a reload that changes it is rejected whole. Behavior tests prove a non-accepting address fails at the dial bound and a gated backend fails at the response-header bound; `make test`, `make test-race`, `go vet`, and `make fmt` are green.
   - Acceptance: config gains a `transport:` section with `dial_timeout` (default 5s), `response_header_timeout` (default 30s), `max_idle_conns_per_host` (default 100), and `idle_conn_timeout` (default 90s); the proxy runs on a configured `http.Transport` replacing `http.DefaultTransport`, with total `MaxIdleConns` sized from the per-host value and the backend count; a reload that changes `transport` is rejected naming it.
 
-- [PENDING] S4.T9 — pprof audit
+- [IN_PROGRESS] S4.T9 — pprof audit
   - Spec: `.scratch/s4-t5-t10-connection-lifecycle/issues/06-t9-pprof-audit.md`
   - Depends: S4.T5–T8
+  - Claimed 2026-09-27T11:42:11Z by OpenCode (deepseek-v4.1-flash): mount pprof on the metrics listener and add the goroutine-leak audit test.
   - Acceptance: `net/http/pprof` is mounted on the metrics listener; a goroutine-leak audit test through the app seam asserts the goroutine count returns to baseline within a small delta after a failure-laden load burst.
 
 - [PENDING] S4.T10 — Soak test
