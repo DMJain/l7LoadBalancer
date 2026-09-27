@@ -30,8 +30,9 @@ const (
 // drives a failure-laden burst — client cancellations against a gated backend
 // (S4.T5's suppression path) followed by backend deaths (S4.T6's transport
 // path) — and asserts the goroutine count settles back within a small delta of
-// the baseline. The checker is neutralized (circuitChaosConfig) so the only
-// traffic is the burst the test drives.
+// the baseline. circuitChaosConfig pushes the checker's cadence past the test
+// window (one initial probe still fires), so the only traffic is the burst the
+// test drives.
 func TestChaosGoroutineLeakAudit(t *testing.T) {
 	fbs := newFlippableBackends(t, 1)
 	a := assemble(t, circuitChaosConfig(fbs))

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/DMJain/l7LoadBalancer/internal/config"
@@ -47,8 +48,8 @@ func TestMetricsListenerServesPprofAndMetrics(t *testing.T) {
 	} {
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, tc.path, nil))
-		require.Equalf(t, http.StatusOK, rec.Code, "GET %s must be served on the metrics listener", tc.path)
-		require.Truef(t, strings.Contains(rec.Body.String(), tc.want),
+		assert.Equalf(t, http.StatusOK, rec.Code, "GET %s must be served on the metrics listener", tc.path)
+		assert.Truef(t, strings.Contains(rec.Body.String(), tc.want),
 			"GET %s body must be the %q response, got %q", tc.path, tc.want, rec.Body.String())
 	}
 }
