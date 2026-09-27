@@ -38,6 +38,13 @@ type flippableBackend struct {
 	// (the race-detector surface this helper exists to keep clean).
 	handler atomic.Pointer[http.Handler]
 
+	// requests counts every request that reaches the backend. It is
+	// incremented in serve before the installed handler runs — before any
+	// gating — so a test can assert that traffic shifted to one backend or
+	// froze on another without reading proxy internals. Additive: no existing
+	// handler or test changes because of it.
+	requests atomic.Int64
+
 	mu  sync.Mutex
 	srv *http.Server
 }
@@ -126,8 +133,13 @@ func (fb *flippableBackend) Restart() {
 
 // serve dispatches to the currently-installed handler.
 func (fb *flippableBackend) serve(w http.ResponseWriter, r *http.Request) {
+	fb.requests.Add(1)
 	(*fb.handler.Load()).ServeHTTP(w, r)
 }
+
+// RequestCount is the number of requests that have reached the backend,
+// including requests still held open by a gate.
+func (fb *flippableBackend) RequestCount() int64 { return fb.requests.Load() }
 
 // start binds the first listener and records the address.
 func (fb *flippableBackend) start() {
