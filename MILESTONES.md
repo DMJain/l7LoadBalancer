@@ -69,6 +69,7 @@ Strategic plan. Each sprint = one weekend of focused work. Tasks under each spri
 - Zero-downtime SIGHUP reload: `atomic.Pointer[Config]` swap, diff-based backend add/remove, draining state for removed backends with configurable drain window.
 - Connection lifecycle correctness: context propagation client→backend, clean handling of client cancellation mid-stream, backend death mid-response, slow-loris timeouts. `pprof` audit — no goroutine leaks under sustained load.
 - Backend connection pool tuning via `http.Transport`: `MaxIdleConnsPerHost`, `IdleConnTimeout`, `DialContext` with timeout, `ResponseHeaderTimeout`.
+- Config env-var interpolation for backend URLs (`${VAR}`), so deployment secrets stay out of the config file and validation errors never echo resolved values.
 - ADR: reload architecture (atomic pointer swap vs SO_REUSEPORT — trade-offs).
 - ADR: retry policy (or the deliberate absence of one) and why.
 - ADR: deployment target decision (bare binary vs. Docker vs. Kubernetes), informed by the reload/health-check/connection-lifecycle work above rather than decided ahead of it. Deferred from Sprint 1 — see `docs/adr/0005-scope-of-production-grade.md`.

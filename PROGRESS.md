@@ -20,9 +20,9 @@ The close-out bundle is scoped in `.scratch/s4-t12-t15-closeout/` as one spec pl
 
 Not approved, not claimed, not implemented. Surfaced by the S4 reload grilling (`.scratch/s4-t0-t4-reload/spec.md`, *Out of Scope*; decisions D1–D2) and recorded per AGENTS.md Step 2.5. (Prior S3 entries were approved and promoted into the `.scratch/s3-t6-5-t8-t9-chaos/` bundle: S3.T6.5, S3.T8 landed from that bundle and live in the Sprint 3 list above, and S3.T9 was approved and promoted into the same bundle and is claimed above.)
 
-- A reload-outcome counter metric, `lb_config_reloads_total{result}`.
+- ~~A reload-outcome counter metric, `lb_config_reloads_total{result}`.~~ **Deferred to Sprint 5 (2026-09-27): benchmarking scope** — a richer reload-observability story may want more than one counter; recorded per the close-out grilling (spec R1, Q7).
 - ~~Fix the pre-existing misclassification where a client cancellation is reported to observers as a backend failure (same cancellation-cause mechanism; belongs to Sprint 4's connection-lifecycle deliverable). On removed backends T2's suppression already hides it; on live backends it is unchanged.~~ **Closed by S4.D1 (2026-09-26): absorbed into S4.T5**, its owner in the connection-lifecycle bundle.
-- Hot-reload of the algorithm, health timing, circuit cooldown, listen addresses, or the drain window — changing them is rejected, not ignored.
+- ~~Hot-reload of the algorithm, health timing, circuit cooldown, listen addresses, or the drain window — changing them is rejected, not ignored.~~ **Closed by S4.T12 (2026-09-27): already implemented** — `NonBackendChanges` (`internal/config/diff.go`) names `reload`, `server`, `transport` and every original non-backend field (`listen`, `algorithm`, `health`, `circuit`, `metrics`, `health_endpoint`), so a reload that changes any of them is rejected whole with the fields named (ADR-0015 decision 4; ADR-0016 decision 1; S4.T7; S4.T8).
 - Pre-warming added backends (probing before the swap, so a blue/green reload has no empty-selectable window).
 
 ## Sprint 4 — Hard Subsystems
@@ -120,18 +120,56 @@ Scoped in `.scratch/s4-t5-t10-connection-lifecycle/` as one bundle spec plus eig
 
 Scoped in `.scratch/s4-t12-t15-closeout/` as one bundle spec plus ten tickets. The bundle's `spec.md` is the authoritative scope boundary; every story and implementation decision is tagged with exactly one ticket there. T12→T13→T14 are serial; T15 and T16 both follow T14; T17–T19 follow T16; T20–T21 follow T19.
 
-- [IN_PROGRESS] S4.T12 — Amendment-first: tracking for the close-out (opencode, started 2026-09-27T21:50:00+05:30)
-  - Goal: land the close-out tracking amendment alone before any close-out code, per the S4.D0/S4.D1 amendment-first precedent.
+- [DONE] S4.T12 — Amendment-first: tracking for the close-out (opencode, started 2026-09-27T21:50:00+05:30, completed 2026-09-27T21:55:00+05:30)
+  - Spec: `.scratch/s4-t12-t15-closeout/issues/01-t12-amendment-first-tracking.md`
+  - Depends: S4.T11
+  - Acceptance: PROGRESS.md gains the "Sprint 4 — Close-out" section with the ten ticket rows (S4.T12–S4.T21) and their acceptance criteria; MILESTONES.md Sprint 4 deliverables gain the interpolation line; the stale hot-reload proposed ticket is closed with the reason recorded; the reload-outcome counter metric is deferred to Sprint 5 with the reason recorded; the amendment lands as one commit touching only PROGRESS.md and MILESTONES.md.
+  - Test approach: none — docs-only (AGENTS.md TDD exception).
 
 - [PENDING] S4.T13 — Harness: gated counting backends
+  - Spec: `.scratch/s4-t12-t15-closeout/issues/02-t13-harness-gated-counting-backends.md`
+  - Depends: S4.T12
+  - Acceptance: the harness backend type gains an atomic request counter incremented at entry, before gating, readable by tests; existing chaos tests are untouched and stay green (`make test`, `make test-race`); a test proves the counter increments once per request and is readable without touching proxy or registry internals.
+
 - [PENDING] S4.T14 — SIGHUP end-to-end zero-drop test
+  - Spec: `.scratch/s4-t12-t15-closeout/issues/03-t14-sighup-e2e-zero-drop.md`
+  - Depends: S4.T13
+  - Acceptance: build the binary under test with `go build -C` pointed at the module root, output in `t.TempDir()`; skip cleanly via `exec.LookPath("go")` when no toolchain is present; spawn the binary with `-config` pointing at a temp config; capture stdout/stderr and replay through `t.Logf` on failure; poll the client listener until it answers (any HTTP response means up); grab a free `127.0.0.1:0` port for the config's `listen` (metrics and health-endpoint listens use `:0`); raise `RLIMIT_NOFILE` soft-to-hard best-effort at start; fire 1000 concurrent GETs through one `http.Client`; confirm via the per-backend counters (sum == 1000) that all are held before the signal; rewrite the config atomically (temp file + `os.Rename`): one backend added, one removed, `drain_window` unchanged (not reloadable, ADR-0016); send `syscall.Kill(pid, syscall.SIGHUP)`; while the 1000 are held, fire probe requests and assert they land on the added backend (counter grows past its admission-probe baseline) and never on the removed one (counter frozen); release the gates; assert all 1000 return 200, the removed backend's counter equals its pre-signal value, and the process is still alive; teardown: `SIGTERM`, wait with a timeout, assert exit status 0; the in-flight wait uses a 30s deadline constant sized for process spawn and socket setup, never sleeps; the test's doc comment states the in-process/e2e division of labor (registry views stay in-process, the e2e asserts externally visible outcomes only); the PROGRESS entry marks the exit criterion as evidenced at the OS boundary, citing both tests; `make test`, `make test-race`, vet, fmt clean.
+
 - [PENDING] S4.T15 — `make e2e` target
+  - Spec: `.scratch/s4-t12-t15-closeout/issues/04-t15-make-e2e-target.md`
+  - Depends: S4.T14
+  - Acceptance: `make e2e` runs the single e2e test with a generous `-timeout`; the target's help text documents a `ulimit -n` invocation for restrained environments; `make test` and `make test-race` are unchanged; `make e2e` passes locally.
+
 - [PENDING] S4.T16 — Env interpolation in the loader
+  - Spec: `.scratch/s4-t12-t15-closeout/issues/05-t16-env-interpolation-loader.md`
+  - Depends: S4.T14
+  - Acceptance: `Load` gains the expansion step between decode and return; its doc comment states the expansion rule (it was "pure deserialization"); syntax `${VAR}` where `VAR` matches `[A-Za-z_][A-Za-z0-9_]*`; no default syntax; non-backend fields pass through untouched; unset or empty variable → load error naming the backend and the variable; malformed references (unterminated `${`, empty `${}`, invalid name characters) → load error naming the backend; errors never contain the expanded value; the resolved URL is validated by the existing `validateBackendURL`; reload semantics: interpolation re-runs on every `Load`, and since backend identity is `(name, URL)` (ADR-0015) a changed expansion is one removed plus one added backend; table-driven `Load` tests with `t.Setenv` (no `t.Parallel()`): expansion in host/port/credential positions, multiple variables in one URL, variables adjacent to literal text, unset/empty/malformed failures, passthrough of a `${...}` in a non-backend field; composition test: two `Load`s differing only in environment, diffed — the affected identity is one removed plus one added backend; `configs/docker.yaml` still loads and validates interpolation-free (`TestDockerConfig` untouched); no new exported symbols; `Config` shape unchanged; `make test`, `make test-race`, vet, fmt clean.
+
 - [PENDING] S4.T17 — Redaction: validation errors never contain the expanded URL
+  - Spec: `.scratch/s4-t12-t15-closeout/issues/06-t17-redaction-validation-errors.md`
+  - Depends: S4.T16
+  - Acceptance: `validateBackendURL` error messages name only the backend and the field; the raw URL (resolved or template) never appears; a test proves an invalid interpolated URL produces a load error that does not contain the expanded value; the registry parse error is confirmed unreachable post-validation (`validateBackendURL` already runs `url.Parse`) and the structural argument is recorded in the session log; `make test`, `make test-race`, vet, fmt clean.
+
 - [PENDING] S4.T18 — Example config documents interpolation
+  - Spec: `.scratch/s4-t12-t15-closeout/issues/07-t18-example-config-documents-interpolation.md`
+  - Depends: S4.T16
+  - Acceptance: `configs/example.yaml` documents the `${VAR}` syntax, the unset/empty/malformed failure behavior, and the backend-URL-only scope; the documented examples match the implementation's actual behavior; docs-only.
+
 - [PENDING] S4.T19 — ADR: deployment target decision
+  - Spec: `.scratch/s4-t12-t15-closeout/issues/08-t19-deployment-target-adr.md`
+  - Depends: S4.T16
+  - Acceptance: context cites ADR-0005 and its 2026-09-22 amendment (the demo stack does not settle the target), ADR-0014 (health-endpoint contract and orchestrator-probe semantics), ADR-0015 (in-process reload; why no socket handoff exists), the distroless image and `probe` subcommand (S3.T10), and the compose demo stack (S3.T11); options section: bare binary, Docker, Kubernetes — each argued against the system's real properties (three listeners, SIGHUP in-process reload, self-probe HEALTHCHECK, no external state, no clustering); decision and consequences made by the owner in the ADR session; SO_REUSEPORT process handoff recorded as a Post-Sprint-5 extension, citing the MILESTONES list; index row added to `docs/adr/INDEX.md`; the PROGRESS entry records the ADR as closing the Sprint 4 deployment deliverable deferred from Sprint 1; docs-only.
+
 - [PENDING] S4.T20 — Sprint 4 retro
+  - Spec: `.scratch/s4-t12-t15-closeout/issues/09-t20-sprint-4-retro.md`
+  - Depends: S4.T19
+  - Acceptance: `docs/sprint-4-retro.md` mirroring `docs/sprint-3-retro.md`'s shape — a deliverables-shipped table with the commit that landed each ticket, a deviations section, exit-criteria evidence, and a what-we-differently section; deviations record at minimum the R0 numbering reconciliation, the in-process-first exit criterion now evidenced at the OS boundary, the closed and deferred proposed tickets, and any `validateBackendURL` wording change from S4.T17; exit-criteria evidence: 1000-in-flight zero-drop (both `TestChaosReloadDrainExitCriterion1000` and the e2e SIGHUP test from S4.T14 cited by name), backend death mid-response → clean 502 (S4.T6), one-hour soak with the committed numbers (S4.T10: 59.66M requests, 7,175 cancellations, 2,789 failures, 12 reloads, goroutines 35→30, post-GC heap 930 KB→804 KB — cite the PROGRESS entry as the source of truth); docs-only.
+
 - [PENDING] S4.T21 — Architecture doc update
+  - Spec: `.scratch/s4-t12-t15-closeout/issues/10-t21-architecture-doc-update.md`
+  - Depends: S4.T19
+  - Acceptance: Sprint 4 sections added to `docs/architecture.md` — the app seam, reload and drain, connection lifecycle, transport tuning, soak results, env interpolation, and the e2e SIGHUP test; decision-index rows added for ADR-0015 through ADR-0019; the header's "Sprints 1–3 are complete" reference is updated to reflect the Sprint 4 close-out; the soak results are recorded with their numbers, so the production-resilience claims have evidence; docs-only.
 
 ## Sprint 5
 
