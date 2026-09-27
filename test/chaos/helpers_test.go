@@ -141,6 +141,53 @@ func (fb *flippableBackend) start() {
 	go func() { _ = srv.Serve(ln) }()
 }
 
+// TestFlippableBackendRequestCount proves the harness's per-backend request
+// counter: it increments exactly once per request at handler entry — before
+// any gating, so a request held open by the gate is already counted — and is
+// readable without touching proxy or registry internals.
+func TestFlippableBackendRequestCount(t *testing.T) {
+	fb := newFlippableBackend(t, "backend-a")
+	require.Zero(t, fb.RequestCount(), "a fresh backend has served no requests")
+
+	// A gated request is counted while it is still held open at the gate.
+	release := make(chan struct{})
+	entered := make(chan string, 1)
+	fb.ServeGated(entered, release)
+
+	statusCh := make(chan int, 1)
+	go func() {
+		resp, err := http.Get(fb.URL())
+		if err != nil {
+			t.Error(err)
+			statusCh <- 0
+			return
+		}
+		defer resp.Body.Close()
+		statusCh <- resp.StatusCode
+	}()
+
+	select {
+	case <-entered:
+	case <-time.After(eventuallyDeadline):
+		t.Fatal("the gated request never reached the backend")
+	}
+	require.Equal(t, int64(1), fb.RequestCount(), "a held-open request is counted at entry, before gating")
+
+	close(release)
+	require.Equal(t, http.StatusOK, <-statusCh, "the gated request must complete once released")
+	require.Equal(t, int64(1), fb.RequestCount(), "completing a request must not double-count")
+
+	// Every later request increments the counter exactly once.
+	fb.Serve200()
+	for i := 0; i < 3; i++ {
+		resp, err := http.Get(fb.URL())
+		require.NoError(t, err)
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+		require.NoError(t, resp.Body.Close())
+	}
+	require.Equal(t, int64(4), fb.RequestCount())
+}
+
 // doRequest drives one request through the proxy handler directly, with no
 // client-server hop, and returns the status and body. It is safe to call inside
 // a require.Eventually condition: it never touches *testing.T.
