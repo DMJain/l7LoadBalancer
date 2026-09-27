@@ -38,10 +38,11 @@ const (
 	soakHeapDelta      = 8 << 20        // +8 MB
 )
 
-// Phase plan. The four failure phases split the remaining budget; the quiet
-// period is capped so a shortened iteration does not always pay a full minute.
-// At the default one-hour budget this lands close to the spec's 20/10/10/10 +
-// 60s plan.
+// Phase plan. The quiet period is taken off the budget first (capped so a
+// shortened iteration does not always pay a full minute); the four failure
+// phases then divide what remains in the spec's 20:10:10:10 ratio, so the whole
+// run is approximately -soak-duration. At the default one-hour budget that is
+// ~24 min steady and ~12 min per failure phase.
 const (
 	soakSteadyFraction = 0.40
 	soakCancelFraction = 0.20
@@ -97,6 +98,15 @@ func TestChaosSoakConnectionLifecycle(t *testing.T) {
 
 	ctx := t.Context()
 
+	// The quiet period is reserved off the budget; the four failure phases
+	// split the rest. Keeping them out of the quiet window is what makes the
+	// run approximately the requested budget rather than budget + quiet.
+	quiet := quietDuration(budget)
+	phaseBudget := budget - quiet
+	if phaseBudget < 0 {
+		phaseBudget = 0
+	}
+
 	// Four backends run from the start, so every backend's transport connection
 	// pool is in the baseline. The reload phase alternates 3-subsets of them
 	// (removing one, adding another, S4.T3/T4); if the reserve entered only at
@@ -130,21 +140,21 @@ func TestChaosSoakConnectionLifecycle(t *testing.T) {
 	t.Logf("soak: budget=%s baseline goroutines=%d baseline heap=%d KB", budget, baselineGoroutines, baselineHeap>>10)
 
 	// --- Phase 1: steady-state proxying. ---
-	sleepCtx(ctx, phaseDuration(budget, soakSteadyFraction))
+	sleepCtx(ctx, phaseDuration(phaseBudget, soakSteadyFraction))
 
 	// --- Phase 2: client cancellations. The slow-headers handler keeps a
 	// response from starting, so a cancelled client lands in S4.T5's
 	// client-gone branch (499) rather than after the headers. ---
 	serveAll(fbs, func(fb *flippableBackend) { fb.ServeSlowHeaders(soakHeaderDelay) })
 	load.cancel.Store(true)
-	sleepCtx(ctx, phaseDuration(budget, soakCancelFraction))
+	sleepCtx(ctx, phaseDuration(phaseBudget, soakCancelFraction))
 	load.cancel.Store(false)
 	serveAll(fbs, func(fb *flippableBackend) { fb.Serve200() })
 
 	// --- Phase 3: backend death. The victim streams its body slowly, so a kill
 	// truncates a response whose headers already reached the proxy (S4.T6) and
 	// the active checker ejects then reinstates it. ---
-	runDeathPhase(t, ctx, a, fbs[0], phaseDuration(budget, soakDeathFraction))
+	runDeathPhase(t, ctx, a, fbs[0], phaseDuration(phaseBudget, soakDeathFraction))
 
 	// --- Phase 4: reloads under load. The slow-headers handler keeps requests
 	// in flight across each swap, so the drains have work to do. ---
@@ -155,12 +165,12 @@ func TestChaosSoakConnectionLifecycle(t *testing.T) {
 	if reloadInterval < soakReloadMinInterval {
 		reloadInterval = soakReloadMinInterval
 	}
-	reloads := runReloadPhase(t, ctx, a, []*config.Config{setB, setA}, phaseDuration(budget, soakReloadFraction), reloadInterval)
+	reloads := runReloadPhase(t, ctx, a, []*config.Config{setB, setA}, phaseDuration(phaseBudget, soakReloadFraction), reloadInterval)
 	serveAll(fbs, func(fb *flippableBackend) { fb.Serve200() })
 
 	// --- Phase 5: quiet. No client traffic; drains finish. ---
 	load.traffic.Store(false)
-	sleepCtx(ctx, quietDuration(budget))
+	sleepCtx(ctx, quiet)
 
 	// --- Assert. ---
 	t.Logf("soak: end goroutines=%d ok=%d canceled=%d failed=%d reloads=%d",
@@ -178,13 +188,13 @@ func TestChaosSoakConnectionLifecycle(t *testing.T) {
 	// Phase-machinery checks: a run long enough for a phase must have actually
 	// driven that failure path. Guarded on duration so a short iteration that
 	// legitimately fits zero cycles is not a failure.
-	if phaseDuration(budget, soakCancelFraction) >= time.Second {
+	if phaseDuration(phaseBudget, soakCancelFraction) >= time.Second {
 		require.Positivef(t, load.canceled.Load(), "the cancellation phase must have cancelled at least one client request")
 	}
-	if phaseDuration(budget, soakDeathFraction) >= soakDeathKillInterval {
+	if phaseDuration(phaseBudget, soakDeathFraction) >= soakDeathKillInterval {
 		require.Positivef(t, load.failed.Load(), "the backend-death phase must have produced at least one failure")
 	}
-	if phaseDuration(budget, soakReloadFraction) > 0 {
+	if phaseDuration(phaseBudget, soakReloadFraction) > 0 {
 		require.Positivef(t, reloads, "the reload phase must have reloaded at least once")
 	}
 }
@@ -209,9 +219,9 @@ func soakConfig(fbs []*flippableBackend) *config.Config {
 	return cfg
 }
 
-// phaseDuration scales a base fraction of the soak budget.
-func phaseDuration(budget time.Duration, fraction float64) time.Duration {
-	return time.Duration(float64(budget) * fraction)
+// phaseDuration returns fraction of span, the time a phase may run.
+func phaseDuration(span time.Duration, fraction float64) time.Duration {
+	return time.Duration(float64(span) * fraction)
 }
 
 // quietDuration caps the quiet fraction so a short iteration stays short, but
@@ -359,13 +369,13 @@ func (l *soakLoad) stopAndWait() {
 // handler on its own goroutine and cancels the client context after the delay,
 // so the round trip is genuinely in flight when the cancellation lands.
 func soakRequest(h http.Handler, cancelAfter time.Duration) int {
-	req := httptest.NewRequest(http.MethodGet, soakPath, nil)
-	rec := httptest.NewRecorder()
 	if cancelAfter <= 0 {
-		h.ServeHTTP(rec, req)
-		return rec.Code
+		status, _ := doRequestPath(h, soakPath)
+		return status
 	}
 
+	req := httptest.NewRequest(http.MethodGet, soakPath, nil)
+	rec := httptest.NewRecorder()
 	ctx, cancel := context.WithCancel(req.Context())
 	defer cancel()
 	req = req.WithContext(ctx)
