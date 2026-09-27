@@ -518,6 +518,12 @@ func TestValidate(t *testing.T) {
 			wantErr:   true,
 			errSubstr: "idle_conn_timeout",
 		},
+		{
+			name:      "transport idle_conn_timeout negative is rejected naming the field",
+			yaml:      configWithTransportYAML("transport:\n  idle_conn_timeout: \"-1s\"\n"),
+			wantErr:   true,
+			errSubstr: "idle_conn_timeout",
+		},
 	}
 
 	for _, tc := range cases {

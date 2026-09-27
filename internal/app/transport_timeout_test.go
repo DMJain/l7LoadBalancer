@@ -71,6 +71,8 @@ func TestTransportDialTimeoutFailsFast(t *testing.T) {
 	elapsed := time.Since(start)
 
 	assert.Equal(t, http.StatusBadGateway, rec.Code)
+	assert.GreaterOrEqual(t, elapsed, dialTimeout/2,
+		"the request must wait for the dial bound, not fail instantly as an unroutable address")
 	assert.Less(t, elapsed, 2*time.Second,
 		"a non-accepting address must fail at the %s dial timeout, not the stdlib default", dialTimeout)
 }

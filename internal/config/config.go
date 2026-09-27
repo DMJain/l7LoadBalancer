@@ -42,9 +42,11 @@ var implementedAlgorithms = map[string]struct{}{
 // field values, grep targets, and future admin UIs. No escaping needed.
 var backendNamePattern = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 
-// Sprint 3 duration defaults, applied by Validate when the corresponding YAML
-// field is omitted. Exported so tests, docs, and the packages that consume
-// them (health, circuit) reference one value instead of restating it.
+// Duration and listen defaults, applied by Validate when the corresponding
+// YAML field is omitted. Exported so tests, docs, and the packages that consume
+// them (health, circuit) reference one value instead of restating it. Sprint 3
+// added the health/circuit/metrics defaults; S4.T7 added DefaultReadTimeout;
+// S4.T8 added the four transport defaults.
 //
 // ADR-0011 decision 10 is why these three are config while the
 // consecutive-failure/-success thresholds, the passive-outlier window size and

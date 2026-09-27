@@ -44,12 +44,6 @@ const shutdownTimeout = 10 * time.Second
 // bound main applied to each server.
 const readHeaderTimeout = 5 * time.Second
 
-// backendKeepAlive matches the stdlib default dialer's TCP keep-alive, so
-// replacing http.DefaultTransport with a configured transport does not
-// silently disable keep-alives on backend connections. It is a constant, not a
-// config knob: the operator tunable is the dial bound (S4.T8).
-const backendKeepAlive = 30 * time.Second
-
 // App is the assembled load-balancing system. Its subsystems are wired at
 // build time and never mutated here; Run only starts and stops the servers.
 //
@@ -346,8 +340,7 @@ func buildTransport(cfg *config.Config) *http.Transport {
 	perHost := *cfg.Transport.MaxIdleConnsPerHost
 	return &http.Transport{
 		DialContext: (&net.Dialer{
-			Timeout:   *cfg.Transport.DialTimeout,
-			KeepAlive: backendKeepAlive,
+			Timeout: *cfg.Transport.DialTimeout,
 		}).DialContext,
 		ResponseHeaderTimeout: *cfg.Transport.ResponseHeaderTimeout,
 		MaxIdleConnsPerHost:   perHost,
