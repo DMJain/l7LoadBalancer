@@ -107,9 +107,10 @@ Scoped in `.scratch/s4-t5-t10-connection-lifecycle/` as one bundle spec plus eig
   - Completed: `test/chaos/soak_test.go` — `TestChaosSoakConnectionLifecycle`, flag-gated by `-soak`, budget `-soak-duration` (default 1h), six phases (warmup, steady, cancellation, death, reload, quiet) through the app seam, with committed tolerances +10 goroutines (`leakAuditDelta` reused) and +8 MB post-GC heap. `test/chaos/soak_race_test.go` / `soak_norace_test.go` set `raceDetectorEnabled` from the `race` build tag so the race variant keeps the goroutine assertion and drops the heap one. `make soak` (non-race, both tolerances) and `make soak-race` (goroutine only), both with `SOAK_DURATION` and a 2h test timeout. `assembleWith` splits the shared `assemble` helper so the soak runs on a discarding logger rather than retaining an hour of records. Reloads drive `App.Reload` directly — the operation main's SIGHUP loop calls; the signal registration stays untested per the bundle spec's Out of Scope. `make test`, `make test-race`, `go vet`, `make fmt` green; short iterations and both make targets verified, and the full one-hour `make soak` passed (35→30 goroutines, post-GC heap 930 KB→804 KB, 59.66M requests, 7,175 cancellations, 2,789 failures, 12 reloads) — the Sprint 4 third exit criterion.
   - Acceptance: a flag-gated one-hour soak test through the app seam cycling steady load, client cancellations, backend deaths, and SIGHUP reloads, with a duration flag to shorten for iteration and a new `make soak` target; tolerances committed as numbers — goroutines ≤ warmup baseline + 10, post-GC `HeapAlloc` ≤ baseline + 8 MB; the race variant keeps the goroutine assertion and drops the heap assertion.
 
-- [PENDING] S4.T11 — Retry-policy ADR (docs-only)
+- [IN_PROGRESS] S4.T11 — Retry-policy ADR (docs-only)
   - Spec: `.scratch/s4-t5-t10-connection-lifecycle/issues/08-t11-retry-policy-adr.md`
   - Depends: S4.T10
+  - Claimed 2026-09-27T14:31:23Z by OpenCode (deepseek-v4.1-flash).
   - Acceptance: the ADR records "no retry, ever" as a consequence of the observer and active-connection design, citing the T5/T6 code that forces it.
 
 ## Sprint 5
