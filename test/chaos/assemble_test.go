@@ -73,6 +73,10 @@ func chaosConfig(fbs []*flippableBackend) *config.Config {
 	cooldown := chaosCooldown
 	drainWindow := config.DefaultDrainWindow
 	readTimeout := config.DefaultReadTimeout
+	dialTimeout := config.DefaultDialTimeout
+	responseHeaderTimeout := config.DefaultResponseHeaderTimeout
+	maxIdleConnsPerHost := config.DefaultMaxIdleConnsPerHost
+	idleConnTimeout := config.DefaultIdleConnTimeout
 	return &config.Config{
 		Listen:    ":0",
 		Algorithm: config.AlgorithmRoundRobin,
@@ -85,7 +89,13 @@ func chaosConfig(fbs []*flippableBackend) *config.Config {
 		HealthEndpoint: config.HealthEndpointConfig{Listen: zeroListen()},
 		Reload:         config.ReloadConfig{DrainWindow: &drainWindow},
 		Server:         config.ServerConfig{ReadTimeout: &readTimeout},
-		Backends:       backendConfigs(fbs),
+		Transport: config.TransportConfig{
+			DialTimeout:           &dialTimeout,
+			ResponseHeaderTimeout: &responseHeaderTimeout,
+			MaxIdleConnsPerHost:   &maxIdleConnsPerHost,
+			IdleConnTimeout:       &idleConnTimeout,
+		},
+		Backends: backendConfigs(fbs),
 	}
 }
 

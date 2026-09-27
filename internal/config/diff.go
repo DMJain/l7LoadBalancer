@@ -45,12 +45,12 @@ func DiffBackends(oldCfg, newCfg *Config) BackendDiff {
 
 // NonBackendChanges returns the names of the non-backend config fields that
 // differ between oldCfg and newCfg, in the fixed order listen, algorithm,
-// health, circuit, metrics, health_endpoint, reload, server. A non-empty result
-// is what makes a reload be rejected whole; only the backend list is
-// reloadable. A section with any differing sub-field is named once by its
-// section name. See ADR-0015 decision 4, ADR-0016 decision 1
+// health, circuit, metrics, health_endpoint, reload, server, transport. A
+// non-empty result is what makes a reload be rejected whole; only the backend
+// list is reloadable. A section with any differing sub-field is named once by
+// its section name. See ADR-0015 decision 4, ADR-0016 decision 1
 // (reload.drain_window is a non-backend field and therefore not reloadable),
-// and S4.T7 (server.read_timeout likewise).
+// S4.T7 (server.read_timeout likewise), and S4.T8 (transport likewise).
 //
 // Both configs must be validated. Validate materializes every default (a
 // non-empty Algorithm and non-nil duration and listen pointers), so comparing
@@ -83,6 +83,12 @@ func NonBackendChanges(oldCfg, newCfg *Config) []string {
 	}
 	if *oldCfg.Server.ReadTimeout != *newCfg.Server.ReadTimeout {
 		changed = append(changed, "server")
+	}
+	if *oldCfg.Transport.DialTimeout != *newCfg.Transport.DialTimeout ||
+		*oldCfg.Transport.ResponseHeaderTimeout != *newCfg.Transport.ResponseHeaderTimeout ||
+		*oldCfg.Transport.MaxIdleConnsPerHost != *newCfg.Transport.MaxIdleConnsPerHost ||
+		*oldCfg.Transport.IdleConnTimeout != *newCfg.Transport.IdleConnTimeout {
+		changed = append(changed, "transport")
 	}
 	return changed
 }

@@ -80,6 +80,23 @@ const (
 	// slow-loris body; the server's ReadHeaderTimeout covers slow headers.
 	// S4.T7.
 	DefaultReadTimeout = 60 * time.Second
+	// DefaultDialTimeout bounds dialing a backend when transport.dial_timeout
+	// is omitted. LAN backends accept in milliseconds; 5s is generous headroom
+	// that still fails a non-accepting address fast. S4.T8.
+	DefaultDialTimeout = 5 * time.Second
+	// DefaultResponseHeaderTimeout bounds how long a backend may take to begin
+	// answering headers before the round trip is failed, when
+	// transport.response_header_timeout is omitted. S4.T8.
+	DefaultResponseHeaderTimeout = 30 * time.Second
+	// DefaultMaxIdleConnsPerHost is the per-host idle connection pool size when
+	// transport.max_idle_conns_per_host is omitted. The stdlib default of 2 is
+	// far too low for a proxy multiplexing many requests onto few backends.
+	// S4.T8.
+	DefaultMaxIdleConnsPerHost = 100
+	// DefaultIdleConnTimeout recycles idle keep-alive connections when
+	// transport.idle_conn_timeout is omitted. Kept at the stdlib default
+	// deliberately; the Sprint 5 benchmarks can revisit. S4.T8.
+	DefaultIdleConnTimeout = 90 * time.Second
 )
 
 // Config is the top-level load balancer configuration, loaded from YAML.
@@ -96,6 +113,7 @@ type Config struct {
 	HealthEndpoint HealthEndpointConfig `yaml:"health_endpoint"`
 	Reload         ReloadConfig         `yaml:"reload"`
 	Server         ServerConfig         `yaml:"server"`
+	Transport      TransportConfig      `yaml:"transport"`
 	Backends       []BackendConfig      `yaml:"backends"`
 }
 
@@ -170,6 +188,31 @@ type ServerConfig struct {
 	ReadTimeout *time.Duration `yaml:"read_timeout"`
 }
 
+// TransportConfig holds the upstream http.Transport tunables. Nested like the
+// other subsystems and following the same nil-means-omitted convention; after
+// Validate returns nil every pointer is non-nil. These knobs replace
+// http.DefaultTransport for the proxy's backend connections (S4.T8).
+// MaxConnsPerHost, ForceAttemptHTTP2, and backend TLS are deliberately out of
+// scope.
+type TransportConfig struct {
+	// DialTimeout bounds dialing and connection establishment to a backend.
+	// Omitted → DefaultDialTimeout.
+	DialTimeout *time.Duration `yaml:"dial_timeout"`
+	// ResponseHeaderTimeout bounds how long a backend may take to begin
+	// answering headers. Omitted → DefaultResponseHeaderTimeout. A backend
+	// that accepts a connection but never answers becomes a failure instead of
+	// a pinned request.
+	ResponseHeaderTimeout *time.Duration `yaml:"response_header_timeout"`
+	// MaxIdleConnsPerHost is the per-host idle connection pool size. Omitted →
+	// DefaultMaxIdleConnsPerHost. The transport's total MaxIdleConns is sized
+	// from this and the backend count in construction code, so the per-host
+	// knob is not silently capped by the stdlib default of 100.
+	MaxIdleConnsPerHost *int `yaml:"max_idle_conns_per_host"`
+	// IdleConnTimeout recycles idle keep-alive connections. Omitted →
+	// DefaultIdleConnTimeout.
+	IdleConnTimeout *time.Duration `yaml:"idle_conn_timeout"`
+}
+
 // ReloadConfig holds the zero-downtime-reload tunables. It is one field today,
 // but nested like the other subsystems so its shape can grow without a flat
 // top-level key. Its field follows the same nil-means-omitted convention as
@@ -229,7 +272,7 @@ func Load(path string) (*Config, error) {
 //
 // Validation is fail-fast: the first problem is returned. The order is
 // Listen → backends count → per-backend name/URL → name uniqueness →
-// algorithm → health/circuit/reload/server durations →
+// algorithm → health/circuit/reload/server/transport durations →
 // metrics/health_endpoint listen.
 func (c *Config) Validate() error {
 	if c.Algorithm == "" {
@@ -279,9 +322,9 @@ func (c *Config) Validate() error {
 	return normalizeListen("health_endpoint listen", &c.HealthEndpoint.Listen, DefaultHealthEndpointListen)
 }
 
-// normalizeAndValidateDurations applies the Sprint 3 and S4.T7 defaults to
-// every omitted duration and rejects an explicitly-set non-positive one. Called
-// last so the pre-Sprint-3 checks keep their fail-fast order.
+// normalizeAndValidateDurations applies the Sprint 3, S4.T7, and S4.T8 defaults
+// to every omitted duration and rejects an explicitly-set non-positive one.
+// Called last so the pre-Sprint-3 checks keep their fail-fast order.
 func (c *Config) normalizeAndValidateDurations() error {
 	if err := normalizeDuration("health probe_interval", &c.Health.ProbeInterval, DefaultProbeInterval); err != nil {
 		return err
@@ -295,7 +338,19 @@ func (c *Config) normalizeAndValidateDurations() error {
 	if err := normalizeDuration("reload drain_window", &c.Reload.DrainWindow, DefaultDrainWindow); err != nil {
 		return err
 	}
-	return normalizeDuration("server read_timeout", &c.Server.ReadTimeout, DefaultReadTimeout)
+	if err := normalizeDuration("server read_timeout", &c.Server.ReadTimeout, DefaultReadTimeout); err != nil {
+		return err
+	}
+	if err := normalizeDuration("transport dial_timeout", &c.Transport.DialTimeout, DefaultDialTimeout); err != nil {
+		return err
+	}
+	if err := normalizeDuration("transport response_header_timeout", &c.Transport.ResponseHeaderTimeout, DefaultResponseHeaderTimeout); err != nil {
+		return err
+	}
+	if err := normalizeDuration("transport idle_conn_timeout", &c.Transport.IdleConnTimeout, DefaultIdleConnTimeout); err != nil {
+		return err
+	}
+	return normalizePositiveInt("transport max_idle_conns_per_host", &c.Transport.MaxIdleConnsPerHost, DefaultMaxIdleConnsPerHost)
 }
 
 // normalizeListen defaults an omitted listen address to def and rejects an
@@ -328,6 +383,20 @@ func normalizeDuration(field string, value **time.Duration, def time.Duration) e
 	}
 	if **value <= 0 {
 		return fmt.Errorf("config: %s must be positive, got %s", field, **value)
+	}
+	return nil
+}
+
+// normalizePositiveInt replaces an omitted int (nil) with def and rejects an
+// explicitly-set non-positive one, mirroring normalizeDuration for the
+// transport's max_idle_conns_per_host knob.
+func normalizePositiveInt(field string, value **int, def int) error {
+	if *value == nil {
+		*value = &def
+		return nil
+	}
+	if **value <= 0 {
+		return fmt.Errorf("config: %s must be positive, got %d", field, **value)
 	}
 	return nil
 }

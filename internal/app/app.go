@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"sync/atomic"
 	"time"
@@ -42,6 +43,12 @@ const shutdownTimeout = 10 * time.Second
 // readHeaderTimeout is the client-, metrics-, and health-server read-header
 // bound main applied to each server.
 const readHeaderTimeout = 5 * time.Second
+
+// backendKeepAlive matches the stdlib default dialer's TCP keep-alive, so
+// replacing http.DefaultTransport with a configured transport does not
+// silently disable keep-alives on backend connections. It is a constant, not a
+// config knob: the operator tunable is the dial bound (S4.T8).
+const backendKeepAlive = 30 * time.Second
 
 // App is the assembled load-balancing system. Its subsystems are wired at
 // build time and never mutated here; Run only starts and stops the servers.
@@ -94,6 +101,7 @@ func Build(cfg *config.Config, log *slog.Logger) (*App, error) {
 	}
 
 	p := proxy.New(reg, sel)
+	p.SetTransport(buildTransport(cfg))
 	p.SetMetrics(collector)
 	p.RegisterObserver(proxy.NewLatencyObserver())
 	outlier := health.NewOutlierDetector(log, collector)
@@ -325,6 +333,26 @@ type runError struct {
 func serve(srv *http.Server, label string, errCh chan<- runError) {
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		errCh <- runError{label: label, err: err}
+	}
+}
+
+// buildTransport constructs the tuned *http.Transport the proxy uses for
+// backend connections in place of http.DefaultTransport (S4.T8): a bounded
+// dial, a response-header timeout, and a per-host idle pool. MaxIdleConns is
+// sized from max_idle_conns_per_host × backend count so the per-host knob is
+// not silently capped by the stdlib default of 100; operators tune per-host,
+// not total (YAGNI). cfg must already have passed Validate.
+func buildTransport(cfg *config.Config) *http.Transport {
+	perHost := *cfg.Transport.MaxIdleConnsPerHost
+	return &http.Transport{
+		DialContext: (&net.Dialer{
+			Timeout:   *cfg.Transport.DialTimeout,
+			KeepAlive: backendKeepAlive,
+		}).DialContext,
+		ResponseHeaderTimeout: *cfg.Transport.ResponseHeaderTimeout,
+		MaxIdleConnsPerHost:   perHost,
+		MaxIdleConns:          perHost * len(cfg.Backends),
+		IdleConnTimeout:       *cfg.Transport.IdleConnTimeout,
 	}
 }
 

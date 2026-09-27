@@ -33,6 +33,21 @@ reload:
 server:
   read_timeout: "60s"
 
+# Upstream transport. Replaces http.DefaultTransport for backend connections.
+# `dial_timeout` bounds dialing a backend (default "5s"); a non-accepting
+# address fails fast instead of pinning a request. `response_header_timeout`
+# bounds how long a backend may take to start answering headers (default
+# "30s"); a backend that never answers becomes a failure. `max_idle_conns_per_host`
+# is the per-host idle pool size (default 100); the total pool is sized from
+# this and the backend count, so it is not silently capped by the stdlib
+# default. `idle_conn_timeout` recycles idle keep-alives (default "90s").
+# All optional; not reloadable: changing any of them rejects the reload.
+transport:
+  dial_timeout: "5s"
+  response_header_timeout: "30s"
+  max_idle_conns_per_host: 100
+  idle_conn_timeout: "90s"
+
 # Upstream backends. At least one required. Names must be unique.
 backends:
   - name: "backend-a"

@@ -214,6 +214,19 @@ func (p *Proxy) SetMetrics(c *metrics.Collector) {
 	p.metrics = c
 }
 
+// SetTransport installs the *http.Transport the ReverseProxy uses for backend
+// connections, replacing http.DefaultTransport. It is optional and additive,
+// mirroring SetMetrics: a bare New(reg, sel) keeps the ReverseProxy's default.
+// internal/app builds a tuned transport (dial/response-header timeouts, idle
+// pool) from config and installs it here (S4.T8).
+//
+// SetTransport must be called before the Proxy begins serving traffic: the
+// request path reads rp.Transport without a lock, matching how SetMetrics and
+// RegisterObserver are wired at construction time.
+func (p *Proxy) SetTransport(t *http.Transport) {
+	p.rp.Transport = t
+}
+
 // observe fans a round trip's outcome out to every registered observer. It is
 // the single unconditional recording path for both terminal hooks. See
 // ADR-0011 decision 9.
