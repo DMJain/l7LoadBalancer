@@ -49,6 +49,27 @@ transport:
   idle_conn_timeout: "90s"
 
 # Upstream backends. At least one required. Names must be unique.
+#
+# Backend URLs support `${VAR}` environment interpolation. A reference is
+# resolved from the process environment at load time, so a credential or token
+# stays out of this file, version control, and the baked image config:
+#   url: "http://${BACKEND_HOST}:9001"
+#   url: "http://${USER}:${PASS}@${HOST}:9001"  # several vars, incl. credentials
+#   url: "http://api-${SUFFIX}:${PORT}/v1"      # adjacent to literal text
+#
+# Syntax: `${VAR}`, where VAR is `[A-Za-z_][A-Za-z0-9_]*`. There is no default
+# syntax — `${VAR:-fallback}` is not parsed and is rejected as malformed. Only
+# backend URLs are templated; a `${...}` in any other field passes through
+# untouched. The resolved URL is what validation checks, and interpolation
+# re-runs on every load, so a SIGHUP reload picks up a changed environment (a
+# changed expansion is one removed plus one added backend — ADR-0015).
+#
+# Failure: an unset or empty variable fails the load naming the backend and the
+# variable; an unterminated `${`, an empty `${}`, or an invalid variable name
+# fails the load naming the backend. Error messages never contain the resolved
+# value (S4.T16, S4.T17).
+#
+# This file's own URLs are literal, so it runs with no environment set.
 backends:
   - name: "backend-a"
     url: "http://127.0.0.1:9001"
