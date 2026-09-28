@@ -542,3 +542,31 @@ func TestValidate(t *testing.T) {
 		})
 	}
 }
+
+// TestValidateBackendURLErrorsRedactRawURL covers S4.T17: validateBackendURL's
+// error messages name only the backend and the url field, never the raw URL, so
+// a resolved secret cannot reach the logs (main logs validation errors). Every
+// branch that could quote the URL is covered so the redaction cannot regress
+// one branch at a time.
+func TestValidateBackendURLErrorsRedactRawURL(t *testing.T) {
+	cases := []struct {
+		name      string
+		url       string
+		errSubstr string
+	}{
+		{name: "unparseable url", url: "http://127.0.0.1:90%zz", errSubstr: "invalid"},
+		{name: "wrong scheme", url: "ftp://127.0.0.1:9001", errSubstr: "scheme"},
+		{name: "missing host", url: "http://", errSubstr: "host"},
+		{name: "query string", url: "http://127.0.0.1:9001?debug=1", errSubstr: "query"},
+		{name: "fragment", url: "http://127.0.0.1:9001#foo", errSubstr: "fragment"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := loadAndValidate(t, singleBackendYAML(tc.url))
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "backend-a")
+			assert.Contains(t, err.Error(), tc.errSubstr)
+			assert.NotContains(t, err.Error(), tc.url)
+		})
+	}
+}

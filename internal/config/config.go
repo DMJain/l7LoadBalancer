@@ -515,22 +515,28 @@ func validateBackendName(name string) error {
 // The scheme is checked against the raw string before url.Parse because
 // url.Parse lowercases the scheme it reports, so "HTTP://host" would
 // otherwise pass a post-parse check against "http".
+//
+// Every error names only the backend and the url field, never the raw URL:
+// after env interpolation (S4.T16) the raw string can embed a resolved secret,
+// and main logs validation errors. url.Parse's own error is deliberately not
+// wrapped here because it echoes the raw URL; the parse branch reports only
+// that the url is invalid (S4.T17).
 func validateBackendURL(name, raw string) error {
 	if !strings.HasPrefix(raw, "http://") && !strings.HasPrefix(raw, "https://") {
-		return fmt.Errorf("config: backend %q url %q must use http or https scheme", name, raw)
+		return fmt.Errorf("config: backend %q url must use http or https scheme", name)
 	}
 	u, err := url.Parse(raw)
 	if err != nil {
-		return fmt.Errorf("config: backend %q has an invalid url %q: %w", name, raw, err)
+		return fmt.Errorf("config: backend %q has an invalid url", name)
 	}
 	if u.Host == "" {
-		return fmt.Errorf("config: backend %q url %q must include a host", name, raw)
+		return fmt.Errorf("config: backend %q url must include a host", name)
 	}
 	if u.RawQuery != "" {
-		return fmt.Errorf("config: backend %q url %q must not include a query string", name, raw)
+		return fmt.Errorf("config: backend %q url must not include a query string", name)
 	}
 	if u.Fragment != "" {
-		return fmt.Errorf("config: backend %q url %q must not include a fragment", name, raw)
+		return fmt.Errorf("config: backend %q url must not include a fragment", name)
 	}
 	return nil
 }

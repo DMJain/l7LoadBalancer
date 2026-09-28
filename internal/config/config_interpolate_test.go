@@ -163,6 +163,27 @@ func TestLoadEnvInterpolationResolvedURLIsValidated(t *testing.T) {
 	require.Error(t, bad.Validate())
 }
 
+// TestLoadEnvInterpolationValidationErrorIsRedacted covers S4.T17: the
+// Load-then-Validate pipeline main runs over an interpolated URL fails naming
+// only the backend and the url field — neither the expanded value nor the
+// resolved URL appears, so a secret in the environment cannot reach the logs
+// through main's validation-error path. Load's own expansion errors already
+// never embed a value (S4.T16); Validate is the secret-bearing path. The
+// environment value here appears verbatim in url.Parse's pre-redaction message
+// ("invalid port \":80a\" after host"), so the test fails if the raw URL is
+// wrapped back in.
+func TestLoadEnvInterpolationValidationErrorIsRedacted(t *testing.T) {
+	const secret = "80a"
+	t.Setenv("T17_BAD_PORT", secret)
+
+	cfg, err := loadAndValidate(t, singleBackendYAML("http://127.0.0.1:${T17_BAD_PORT}"))
+	require.Error(t, err)
+	require.Len(t, cfg.Backends, 1)
+	assert.Contains(t, err.Error(), "backend-a")
+	assert.NotContains(t, err.Error(), secret)
+	assert.NotContains(t, err.Error(), cfg.Backends[0].URL)
+}
+
 // TestLoadEnvInterpolationReloadIsRemovePlusAdd proves the reload semantics: a
 // changed expansion is one removed plus one added backend, because identity is
 // (name, URL) (ADR-0015, S4.T16).
