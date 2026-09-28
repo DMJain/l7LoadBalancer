@@ -22,6 +22,7 @@ One-line decision summaries. Read the full ADR when your task touches that subsy
 | [0016](0016-drain-lifecycle.md) | Drain lifecycle: retired-context join, two-phase drain, and cancel-at-window | Accepted | Per-backend retired context joined via `context.AfterFunc`; drain window is config; cut-off signal is structural. |
 | [0017](0017-client-gone-classification-and-trial-rearm.md) | Client-gone classification and half-open trial re-arm | Accepted | Error handler classifies client-gone to 499/INFO with no observer; `Backend.RearmTrial()` re-arms a half-open trial a cancelled client held. |
 | [0018](0018-no-retry-ever.md) | No retry, ever: a failed round trip is classified and surfaced, never repeated | Accepted | The LB never retries — a retry would double-count active connections and corrupt the outlier window for one client request — so retry is left to the client, which alone knows idempotency. |
+| [0019](0019-deployment-target.md) | Deployment target — the Docker container as the packaging artifact | Accepted | The digest-pinned distroless image is the deployment target; Kubernetes is rejected (no clustering, no external state, no scale-out), the bare binary is the supported primitive; SO_REUSEPORT handoff stays post-Sprint-5. |
 
 ## Decisions without a dedicated ADR
 
