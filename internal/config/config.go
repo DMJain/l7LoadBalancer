@@ -42,6 +42,11 @@ var implementedAlgorithms = map[string]struct{}{
 // field values, grep targets, and future admin UIs. No escaping needed.
 var backendNamePattern = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 
+// envVarNamePattern matches the variable name inside a backend URL's ${...}
+// reference: [A-Za-z_][A-Za-z0-9_]*. There is deliberately no ${VAR:-default}
+// syntax; anything else is a malformed reference and fails the load. S4.T16.
+var envVarNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
 // Duration and listen defaults, applied by Validate when the corresponding
 // YAML field is omitted. Exported so tests, docs, and the packages that consume
 // them (health, circuit) reference one value instead of restating it. Sprint 3
@@ -234,13 +239,21 @@ type BackendConfig struct {
 }
 
 // Load reads and strictly unmarshals the YAML config file at path into a
-// Config, then returns it unvalidated (callers must call Validate).
+// Config, resolves ${VAR} references in backend URLs from the process
+// environment, then returns it unvalidated (callers must call Validate).
 //
 // Strictness: yaml.NewDecoder(f).KnownFields(true) rejects unknown fields at
 // decode time, so typos like `listn` fail here rather than being silently
 // ignored. yaml.Unmarshal is deliberately not used.
 //
-// Load is pure deserialization — it does not normalize, default, or validate.
+// Load is no longer pure deserialization: after decode it expands ${VAR}
+// references in backend URL strings from the process environment, so the
+// resolved URL is what Validate checks and a secret can live only in the
+// environment. Only backend URLs are templated — every other field passes
+// through untouched. Interpolation re-runs on every Load, so a reload resolves
+// from the current environment. See expandBackendURLs and the S4.T16 bundle
+// spec.
+//
 // Error handling convention (frozen S1.T0.5): errors are wrapped, not
 // sentinel — fmt.Errorf("config: %w", err). The wrapped OS error remains
 // inspectable via errors.Is(err, os.ErrNotExist) for callers that need it.
@@ -257,7 +270,63 @@ func Load(path string) (*Config, error) {
 	if err := dec.Decode(&cfg); err != nil {
 		return nil, fmt.Errorf("config: load %s: %w", path, err)
 	}
+	if err := expandBackendURLs(&cfg); err != nil {
+		return nil, fmt.Errorf("config: load %s: %w", path, err)
+	}
 	return &cfg, nil
+}
+
+// expandBackendURLs resolves ${VAR} references in every backend URL from the
+// process environment, in place. It is the one expansion step Load runs after
+// decode and before returning, so Validate and every consumer see only
+// resolved values. Non-backend fields are not touched. S4.T16.
+func expandBackendURLs(cfg *Config) error {
+	for i := range cfg.Backends {
+		expanded, err := expandEnv(cfg.Backends[i].Name, cfg.Backends[i].URL)
+		if err != nil {
+			return err
+		}
+		cfg.Backends[i].URL = expanded
+	}
+	return nil
+}
+
+// expandEnv resolves every ${VAR} reference in raw from the process
+// environment, where VAR matches envVarNamePattern. A reference to an unset or
+// empty variable, an unterminated ${, an empty ${}, or a name with invalid
+// characters is an error naming the backend; the expanded value is never
+// included in an error, so a resolved secret cannot reach the logs through this
+// path. raw with no ${ is returned unchanged. S4.T16.
+func expandEnv(backendName, raw string) (string, error) {
+	if !strings.Contains(raw, "${") {
+		return raw, nil
+	}
+
+	var b strings.Builder
+	b.Grow(len(raw))
+	for i := 0; i < len(raw); {
+		if raw[i] == '$' && i+1 < len(raw) && raw[i+1] == '{' {
+			rest := raw[i+2:]
+			end := strings.IndexByte(rest, '}')
+			if end < 0 {
+				return "", fmt.Errorf("backend %q has an unterminated ${...} reference in its url", backendName)
+			}
+			name := rest[:end]
+			if !envVarNamePattern.MatchString(name) {
+				return "", fmt.Errorf("backend %q has a malformed ${...} reference %q in its url", backendName, "${"+name+"}")
+			}
+			value, ok := os.LookupEnv(name)
+			if !ok || value == "" {
+				return "", fmt.Errorf("backend %q references environment variable %q which is not set or is empty", backendName, name)
+			}
+			b.WriteString(value)
+			i += 2 + end + 1
+			continue
+		}
+		b.WriteByte(raw[i])
+		i++
+	}
+	return b.String(), nil
 }
 
 // Validate checks the config for correctness: non-empty Listen, at least
