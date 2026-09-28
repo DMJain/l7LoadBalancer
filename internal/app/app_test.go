@@ -97,7 +97,7 @@ func TestBuildRoutesToConfiguredBackends(t *testing.T) {
 }
 
 // TestBuildSeedsGaugeSeries proves Build materializes every backend's gauge
-// series through the collector's own setter methods — active connections 0,
+// series through the collector's own setter methods — active requests 0,
 // healthy 1, circuit closed — so a freshly built system renders a complete
 // dashboard on its first scrape (ADR-0013 decision 9).
 func TestBuildSeedsGaugeSeries(t *testing.T) {
@@ -113,13 +113,13 @@ func TestBuildSeedsGaugeSeries(t *testing.T) {
 	require.NoError(t, err)
 
 	const wantActive = `
-# HELP lb_active_connections In-flight requests currently being served by a backend.
-# TYPE lb_active_connections gauge
-lb_active_connections{backend="backend-a"} 0
-lb_active_connections{backend="backend-b"} 0
+# HELP lb_active_requests In-flight requests currently being served by a backend.
+# TYPE lb_active_requests gauge
+lb_active_requests{backend="backend-a"} 0
+lb_active_requests{backend="backend-b"} 0
 `
 	require.NoError(t, testutil.GatherAndCompare(
-		application.Collector().Registry(), strings.NewReader(wantActive), "lb_active_connections"))
+		application.Collector().Registry(), strings.NewReader(wantActive), "lb_active_requests"))
 
 	const wantHealthy = `
 # HELP lb_backend_healthy Whether a backend is healthy (1) or unhealthy (0).
@@ -256,7 +256,7 @@ lb_circuit_state{backend="backend-b",state="open"} 0
 		c.Registry(), strings.NewReader(want), "lb_circuit_state"))
 }
 
-func TestSeedMetricsActiveConnections(t *testing.T) {
+func TestSeedMetricsActiveRequests(t *testing.T) {
 	reg, err := backend.NewRegistry([]config.BackendConfig{
 		{Name: "backend-a", URL: "http://127.0.0.1:9001"},
 		{Name: "backend-b", URL: "http://127.0.0.1:9002"},
@@ -267,11 +267,11 @@ func TestSeedMetricsActiveConnections(t *testing.T) {
 	seedMetrics(c, reg)
 
 	const want = `
-# HELP lb_active_connections In-flight requests currently being served by a backend.
-# TYPE lb_active_connections gauge
-lb_active_connections{backend="backend-a"} 0
-lb_active_connections{backend="backend-b"} 0
+# HELP lb_active_requests In-flight requests currently being served by a backend.
+# TYPE lb_active_requests gauge
+lb_active_requests{backend="backend-a"} 0
+lb_active_requests{backend="backend-b"} 0
 `
 	require.NoError(t, testutil.GatherAndCompare(
-		c.Registry(), strings.NewReader(want), "lb_active_connections"))
+		c.Registry(), strings.NewReader(want), "lb_active_requests"))
 }

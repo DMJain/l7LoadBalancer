@@ -199,7 +199,7 @@ func TestChaosReloadAddedBackendAdmittedAfterFirstProbe(t *testing.T) {
 
 // TestChaosReloadRemovedIdleBackendDrains proves an idle removed backend drains
 // immediately: it leaves All and Selectable, its healthy and circuit-state
-// series are deleted at removal, and its active-connections series is deleted
+// series are deleted at removal, and its active-requests series is deleted
 // at drain completion with exactly one idle drained line (ADR-0016 decision 7).
 func TestChaosReloadRemovedIdleBackendDrains(t *testing.T) {
 	fbs := newFlippableBackends(t, 2)
@@ -217,9 +217,9 @@ func TestChaosReloadRemovedIdleBackendDrains(t *testing.T) {
 	require.False(t, circuit, "the removed backend's circuit series must be deleted")
 
 	require.Eventually(t, func() bool {
-		_, ok := gaugeValueOK(a.collector, "lb_active_connections", map[string]string{"backend": b.id})
+		_, ok := gaugeValueOK(a.collector, "lb_active_requests", map[string]string{"backend": b.id})
 		return !ok
-	}, eventuallyDeadline, eventuallyTick, "the drained backend's active-connections series must be deleted")
+	}, eventuallyDeadline, eventuallyTick, "the drained backend's active-requests series must be deleted")
 
 	require.Eventually(t, func() bool {
 		return a.logs.transitionCount(logger.EventBackendDrained, b.id, logger.ReasonIdle) == 1
@@ -314,7 +314,7 @@ func TestChaosReloadDrainExitCriterion1000(t *testing.T) {
 	}, eventuallyDeadline, eventuallyTick, "the removed backend must log one idle drain")
 
 	require.Eventually(t, func() bool {
-		_, active := gaugeValueOK(a.collector, "lb_active_connections", map[string]string{"backend": "backend-b"})
+		_, active := gaugeValueOK(a.collector, "lb_active_requests", map[string]string{"backend": "backend-b"})
 		_, healthy := gaugeValueOK(a.collector, "lb_backend_healthy", healthGaugeLabels("backend-b"))
 		_, circuit := gaugeValueOK(a.collector, "lb_circuit_state", circuitStateLabels("backend-b", "closed"))
 		return !active && !healthy && !circuit
@@ -384,11 +384,11 @@ func TestChaosReloadDrainWindowExpired(t *testing.T) {
 
 	// The fresh same-name backend is admitted by its first probe, and its state
 	// reflects only its own traffic: healthy, circuit closed, and its
-	// active-connections series survived the drain because the name is in use.
+	// active-requests series survived the drain because the name is in use.
 	requireGaugeEventually(t, a.collector, "lb_backend_healthy", healthGaugeLabels("backend-b"), 1,
 		"the fresh same-name backend must be admitted")
 	assertGauge(t, a.collector, "lb_circuit_state", circuitStateLabels("backend-b", "closed"), 1)
-	active, ok := gaugeValueOK(a.collector, "lb_active_connections", map[string]string{"backend": "backend-b"})
+	active, ok := gaugeValueOK(a.collector, "lb_active_requests", map[string]string{"backend": "backend-b"})
 	require.True(t, ok, "the drain must not delete a series whose name is in use")
 	require.Equal(t, 0.0, active,
 		"the removed instance's cancelled request must not drive the fresh backend's active gauge negative")

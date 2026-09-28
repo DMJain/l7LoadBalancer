@@ -52,7 +52,7 @@ Prometheus.
 Every **gauge** panel — Circuit state, Backend healthy, Active connections —
 is populated from the very first scrape, **before any client request is sent**,
 because `main.go`'s startup seeding materializes each backend's gauge series
-(`lb_backend_healthy=1`, `lb_circuit_state=closed`, `lb_active_connections=0`)
+(`lb_backend_healthy=1`, `lb_circuit_state=closed`, `lb_active_requests=0`)
 through the same collector methods real transitions use (ADR-0013 decision 9).
 The two **traffic-derived** panels — Request rate and Latency — are
 necessarily empty until requests flow (a counter/histogram `Vec` has no series
@@ -71,7 +71,7 @@ The manual equivalent:
 
 ```sh
 # The LB must be running (make run) before this.
-curl -s http://127.0.0.1:9090/metrics | grep -E '^lb_(backend_healthy|circuit_state|active_connections)'
+curl -s http://127.0.0.1:9090/metrics | grep -E '^lb_(backend_healthy|circuit_state|active_requests)'
 # → every backend present: healthy=1, closed=1 (open=0, half_open=0), active=0
 curl -s http://127.0.0.1:9091/api/v1/targets | grep -o '"health":"up"' | head -1
 # → "health":"up" for the l7loadbalancer target

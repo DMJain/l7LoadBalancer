@@ -190,14 +190,14 @@ func TestProxyWithoutMetricsCollectorServes(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code)
 }
 
-// TestProxyActiveConnectionsGaugeTracksConcurrentInFlightRequests mirrors
+// TestProxyActiveRequestsGaugeTracksConcurrentInFlightRequests mirrors
 // S1.T6's ActiveConns leak-check against the metric: with requests blocked in
-// the backend, lb_active_connections must match Backend.ActiveConns() at every
+// the backend, lb_active_requests must match Backend.ActiveConns() at every
 // point, and after they drain both must return to 0. Asserting the gauge
 // alongside the backend counter proves the gauge shares the IncActive/DecActive
 // call sites rather than merely counting something correlated (ADR-0013
 // decision 7).
-func TestProxyActiveConnectionsGaugeTracksConcurrentInFlightRequests(t *testing.T) {
+func TestProxyActiveRequestsGaugeTracksConcurrentInFlightRequests(t *testing.T) {
 	const requests = 100
 
 	var inFlight atomic.Int64
@@ -217,11 +217,11 @@ func TestProxyActiveConnectionsGaugeTracksConcurrentInFlightRequests(t *testing.
 	front := httptest.NewServer(p)
 	t.Cleanup(front.Close)
 
-	// gauge reads lb_active_connections for the one backend, returning -1 if
+	// gauge reads lb_active_requests for the one backend, returning -1 if
 	// the series does not exist yet so a missing series fails an equality
 	// assertion rather than panicking.
 	gauge := func() float64 {
-		m := labeledSeries(t, c, "lb_active_connections", map[string]string{"backend": "backend-a"})
+		m := labeledSeries(t, c, "lb_active_requests", map[string]string{"backend": "backend-a"})
 		if m == nil {
 			return -1
 		}

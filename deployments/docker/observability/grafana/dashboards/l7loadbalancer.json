@@ -416,7 +416,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "lb_active_connections",
+          "expr": "lb_active_requests",
           "legendFormat": "{{backend}}",
           "refId": "A"
         }

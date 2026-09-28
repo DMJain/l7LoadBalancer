@@ -172,8 +172,8 @@ func (a *App) LoadedConfig() *config.Config { return a.loadedCfg.Load() }
 //   - the outlier detector forgets a removed backend's window, so a same-name
 //     backend added later cannot inherit a stale one;
 //   - the collector deletes a removed backend's healthy and circuit-state
-//     series and seeds an added backend's (active connections 0, healthy 0,
-//     circuit closed). A removed backend's active-connections series is left in
+//     series and seeds an added backend's (active requests 0, healthy 0,
+//     circuit closed). A removed backend's active-requests series is left in
 //     place: its in-flight requests still decrement it by name, and deleting it
 //     now would recreate it negative. A name shared with a removed backend
 //     skips the active seed for that same reason — the fresh instance must not
@@ -233,13 +233,13 @@ func (a *App) Reload(ctx context.Context, cfg *config.Config) error {
 	}
 	for _, b := range added {
 		// A name shared with a removed backend already has an
-		// active-connections series: the removed instance's in-flight requests
+		// active-requests series: the removed instance's in-flight requests
 		// still decrement it by name until its drain finishes, so seeding 0
 		// here would leave the shared series negative once they do. The
 		// healthy and circuit-state series, by contrast, were just deleted with
 		// the removed instance and so are seeded fresh for the new one.
 		if !removedNames[b.Name] {
-			a.collector.SetActiveConnections(b.Name, 0)
+			a.collector.SetActiveRequests(b.Name, 0)
 		}
 		a.collector.SetBackendHealthy(b.Name, false)
 		a.collector.SetCircuitState(b.Name, metrics.CircuitStateClosed)
@@ -370,13 +370,13 @@ func buildTransport(cfg *config.Config) *http.Transport {
 // collector's own setter methods, so a freshly started, never-degraded system
 // renders a complete dashboard on its first scrape — Prometheus Vec metrics
 // create no series until first written (ADR-0013 decision 9). It seeds the
-// active-connections gauge to 0, lb_backend_healthy to 1 (every backend starts
+// active-requests gauge to 0, lb_backend_healthy to 1 (every backend starts
 // healthy per NewRegistry), and lb_circuit_state to closed (every backend
 // starts with a closed circuit per ADR-0011), using the same Collector methods
 // real transitions use.
 func seedMetrics(c *metrics.Collector, reg *backend.Registry) {
 	for _, b := range reg.All() {
-		c.SetActiveConnections(b.Name, 0)
+		c.SetActiveRequests(b.Name, 0)
 		c.SetBackendHealthy(b.Name, true)
 		c.SetCircuitState(b.Name, metrics.CircuitStateClosed)
 	}

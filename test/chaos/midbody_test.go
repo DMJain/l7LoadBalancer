@@ -73,9 +73,9 @@ func TestChaosBackendDiesMidBody(t *testing.T) {
 
 	b := backendByName(t, a.reg, x.id)
 	require.Equal(t, int64(0), b.ActiveConns(), "the slot must release after a truncated body")
-	active, ok := gaugeValueOK(a.collector, "lb_active_connections", map[string]string{"backend": x.id})
-	require.True(t, ok, "active-connections series must exist")
-	require.Equal(t, 0.0, active, "the active-connections gauge must return to zero")
+	active, ok := gaugeValueOK(a.collector, "lb_active_requests", map[string]string{"backend": x.id})
+	require.True(t, ok, "active-requests series must exist")
+	require.Equal(t, 0.0, active, "the active-requests gauge must return to zero")
 }
 
 // TestChaosBackendKilledBeforeHeaders is S4.T6 arc (ii) and half of Sprint 4's
@@ -99,9 +99,9 @@ func TestChaosBackendKilledBeforeHeaders(t *testing.T) {
 	b := backendByName(t, a.reg, x.id)
 	require.Equal(t, 2*time.Second, b.EWMALatency(), "the transport failure must be observed")
 	require.Equal(t, int64(0), b.ActiveConns(), "no active-connection slot may leak")
-	active, ok := gaugeValueOK(a.collector, "lb_active_connections", map[string]string{"backend": x.id})
-	require.True(t, ok, "active-connections series must exist")
-	require.Equal(t, 0.0, active, "the active-connections gauge must return to zero")
+	active, ok := gaugeValueOK(a.collector, "lb_active_requests", map[string]string{"backend": x.id})
+	require.True(t, ok, "active-requests series must exist")
+	require.Equal(t, 0.0, active, "the active-requests gauge must return to zero")
 
 	require.Empty(t, a.logs.recordsWithField("reason", logger.ReasonBackendDiedMidResponse),
 		"a pre-headers death is a transport failure, not a mid-body death")

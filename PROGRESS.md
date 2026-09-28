@@ -183,9 +183,10 @@ Scoped in `.scratch/s4-t12-t15-closeout/` as one bundle spec plus ten tickets. T
 
 Scoped in `.scratch/s5-t1-t4-http2-benchmarks/` as one spec plus six tickets: 01 (metric rename), 02 (TLS listener), 03 (h2c), 04 (HTTP/2 to backends), 05 (benchmark infra), 06 (benchmark harness). Issue 01 is claimed below; the rest await claiming.
 
-- [IN_PROGRESS] S5.T3-prefactor — Metric rename (`lb_active_connections` → `lb_active_requests`)
+- [DONE] S5.T3-prefactor — Metric rename (`lb_active_connections` → `lb_active_requests`)
   - Spec: `.scratch/s5-t1-t4-http2-benchmarks/issues/01-metric-rename.md`
   - Depends: none (the spec's ticket order puts it before T1 so T1's tests use the correct name)
-  - Claimed 2026-09-28T18:33:00Z by OpenCode (deepseek-v4.1-flash); names only, no behavioral change.
+  - Claimed 2026-09-28T18:33:00Z by OpenCode (deepseek-v4.1-flash); completed 2026-09-28T18:35:56Z.
+  - Completed: the gauge registration and all four `Collector` methods renamed; every caller updated (`proxy.activate`/`release`, `app.seedMetrics`, `app.Reload`'s add-seed, `app.completeDrain`); every test assertion/identifier renamed across `internal/metrics`, `internal/proxy`, `internal/app`, and `test/chaos`; the Grafana dashboard panel `expr`, `smoke.sh`, and the observability README follow; `internal/metrics/doc.go` and the living `docs/architecture.md` / `docs/design/sprint-1-contracts.md` references updated. `Backend.ActiveConns()` and ADR-0007's "active-connection" backend terminology are deliberately untouched — the ticket renames the metric, not the backend counter. Historical ADRs, retros, and session logs left as records; no ADR per spec §18 (commit-message rationale). AGENTS.md carried no metric-name vocabulary, so that checklist item was verified as a no-op. Names only, no behavior change: `make test`, `make test-race`, `go vet ./...`, and `gofmt -l` all green.
   - Acceptance: the gauge registration, the `IncActive*`/`DecActive*`/`SetActive*`/`DeleteActive*` methods, all Go callers (`proxy.activate`/`release`, `app.Build`/seed, `app.drain`), the Grafana dashboard JSON, `deployments/docker/observability/smoke.sh` and its README, and the `internal/metrics/doc.go` reservation all read `lb_active_requests`; every existing test's assertion is renamed (the lifecycle tests are the regression gate); `make test` and `make test-race` pass; the AGENTS.md checklist item is a no-op because AGENTS.md carries no metric-name vocabulary (verified — no `active_connections` reference exists).
 

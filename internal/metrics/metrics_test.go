@@ -165,36 +165,36 @@ func TestCollectorSetCircuitStateZeroesOtherStates(t *testing.T) {
 	assert.Equal(t, 1.0, stateValue(CircuitStateHalfOpen))
 }
 
-func TestCollectorActiveConnections(t *testing.T) {
+func TestCollectorActiveRequests(t *testing.T) {
 	t.Parallel()
 	c := NewCollector()
 	labels := map[string]string{"backend": "backend-a"}
 
-	c.IncActiveConnections("backend-a")
-	assert.Equal(t, 1.0, findMetric(t, c, "lb_active_connections", labels).GetGauge().GetValue())
-	c.IncActiveConnections("backend-a")
-	assert.Equal(t, 2.0, findMetric(t, c, "lb_active_connections", labels).GetGauge().GetValue())
-	c.DecActiveConnections("backend-a")
-	assert.Equal(t, 1.0, findMetric(t, c, "lb_active_connections", labels).GetGauge().GetValue())
+	c.IncActiveRequests("backend-a")
+	assert.Equal(t, 1.0, findMetric(t, c, "lb_active_requests", labels).GetGauge().GetValue())
+	c.IncActiveRequests("backend-a")
+	assert.Equal(t, 2.0, findMetric(t, c, "lb_active_requests", labels).GetGauge().GetValue())
+	c.DecActiveRequests("backend-a")
+	assert.Equal(t, 1.0, findMetric(t, c, "lb_active_requests", labels).GetGauge().GetValue())
 
-	c.SetActiveConnections("backend-a", 5)
-	assert.Equal(t, 5.0, findMetric(t, c, "lb_active_connections", labels).GetGauge().GetValue())
+	c.SetActiveRequests("backend-a", 5)
+	assert.Equal(t, 5.0, findMetric(t, c, "lb_active_requests", labels).GetGauge().GetValue())
 
 	// Setting zero materializes the series for a fresh backend at startup.
-	c.SetActiveConnections("backend-b", 0)
-	require.NotNil(t, findMetric(t, c, "lb_active_connections", map[string]string{"backend": "backend-b"}))
+	c.SetActiveRequests("backend-b", 0)
+	require.NotNil(t, findMetric(t, c, "lb_active_requests", map[string]string{"backend": "backend-b"}))
 }
 
 // TestCollectorDeletesBackendSeries proves the deletion operations reload needs
 // for a removed backend: its healthy series and every circuit-state series are
-// gone, while its active-connections series is deliberately left in place
+// gone, while its active-requests series is deliberately left in place
 // (deleted only at drain completion, S4.T4).
 func TestCollectorDeletesBackendSeries(t *testing.T) {
 	t.Parallel()
 	c := NewCollector()
 	c.SetBackendHealthy("backend-a", true)
 	c.SetCircuitState("backend-a", CircuitStateOpen)
-	c.SetActiveConnections("backend-a", 2)
+	c.SetActiveRequests("backend-a", 2)
 
 	c.DeleteBackendHealthy("backend-a")
 	c.DeleteCircuitState("backend-a")
@@ -206,28 +206,28 @@ func TestCollectorDeletesBackendSeries(t *testing.T) {
 			map[string]string{"backend": "backend-a", "state": string(state)}),
 			"every circuit-state series must be gone")
 	}
-	require.NotNil(t, findMetric(t, c, "lb_active_connections", map[string]string{"backend": "backend-a"}),
-		"the active-connections series is not deleted here")
+	require.NotNil(t, findMetric(t, c, "lb_active_requests", map[string]string{"backend": "backend-a"}),
+		"the active-requests series is not deleted here")
 }
 
-// TestCollectorDeleteActiveConnections proves the drain's deletion (S4.T4): a
-// removed backend's active-connections series is gone, and a same-name fresh
+// TestCollectorDeleteActiveRequests proves the drain's deletion (S4.T4): a
+// removed backend's active-requests series is gone, and a same-name fresh
 // backend's series survives when the drain skips the deletion because the name
 // is in use — modelled here as deleting the old instance's series before the
 // fresh one is seeded.
-func TestCollectorDeleteActiveConnections(t *testing.T) {
+func TestCollectorDeleteActiveRequests(t *testing.T) {
 	t.Parallel()
 	c := NewCollector()
-	c.SetActiveConnections("backend-a", 3)
+	c.SetActiveRequests("backend-a", 3)
 
-	c.DeleteActiveConnections("backend-a")
-	assert.Nil(t, findMetric(t, c, "lb_active_connections", map[string]string{"backend": "backend-a"}),
-		"the active-connections series must be gone")
+	c.DeleteActiveRequests("backend-a")
+	assert.Nil(t, findMetric(t, c, "lb_active_requests", map[string]string{"backend": "backend-a"}),
+		"the active-requests series must be gone")
 
-	c.SetActiveConnections("backend-a", 0)
-	require.NotNil(t, findMetric(t, c, "lb_active_connections", map[string]string{"backend": "backend-a"}),
+	c.SetActiveRequests("backend-a", 0)
+	require.NotNil(t, findMetric(t, c, "lb_active_requests", map[string]string{"backend": "backend-a"}),
 		"a fresh same-name series must exist after seeding")
-	assert.Equal(t, 0.0, findMetric(t, c, "lb_active_connections", map[string]string{"backend": "backend-a"}).GetGauge().GetValue())
+	assert.Equal(t, 0.0, findMetric(t, c, "lb_active_requests", map[string]string{"backend": "backend-a"}).GetGauge().GetValue())
 }
 
 // TestCollectorDeleteUnknownSeriesIsNoop proves deletion is safe for a backend
@@ -238,7 +238,7 @@ func TestCollectorDeleteUnknownSeriesIsNoop(t *testing.T) {
 	require.NotPanics(t, func() {
 		c.DeleteBackendHealthy("absent")
 		c.DeleteCircuitState("absent")
-		c.DeleteActiveConnections("absent")
+		c.DeleteActiveRequests("absent")
 	})
 }
 
@@ -262,7 +262,7 @@ func TestCollectorExpositionEndpoint(t *testing.T) {
 	c.ObserveRequest("backend-a", "GET", "2xx", 12*time.Millisecond)
 	c.SetBackendHealthy("backend-a", true)
 	c.SetCircuitState("backend-a", CircuitStateOpen)
-	c.SetActiveConnections("backend-a", 1)
+	c.SetActiveRequests("backend-a", 1)
 	c.RecordProbe("/livez", http.StatusOK)
 
 	srv := httptest.NewServer(promhttp.HandlerFor(c.Registry(), promhttp.HandlerOpts{}))
@@ -286,7 +286,7 @@ func TestCollectorExpositionEndpoint(t *testing.T) {
 		`lb_circuit_state{backend="backend-a",state="closed"} 0`,
 		`lb_circuit_state{backend="backend-a",state="open"} 1`,
 		`lb_circuit_state{backend="backend-a",state="half_open"} 0`,
-		`lb_active_connections{backend="backend-a"} 1`,
+		`lb_active_requests{backend="backend-a"} 1`,
 		`lb_health_probe_total{endpoint="/livez",status="2xx"} 1`,
 	}
 	for _, want := range wants {

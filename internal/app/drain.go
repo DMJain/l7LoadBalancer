@@ -99,7 +99,7 @@ func (a *App) waitActiveZero(ctx context.Context, b *backend.Backend, timeout ti
 	}
 }
 
-// completeDrain forgets a finished drain: it deletes b's active-connections
+// completeDrain forgets a finished drain: it deletes b's active-requests
 // series when no current backend shares the name, and logs one backend drained
 // line carrying the reason and the number of requests cancelled. The name check
 // keeps a fresh same-name backend's own series from being wiped (ADR-0016
@@ -107,7 +107,7 @@ func (a *App) waitActiveZero(ctx context.Context, b *backend.Backend, timeout ti
 // off; an idle drain logs at INFO.
 func (a *App) completeDrain(ctx context.Context, b *backend.Backend, reason string, cancelled int64) {
 	if !a.backendNameInUse(b.Name) {
-		a.collector.DeleteActiveConnections(b.Name)
+		a.collector.DeleteActiveRequests(b.Name)
 	}
 	level := slog.LevelInfo
 	if reason == logger.ReasonWindowExpired {
@@ -123,7 +123,7 @@ func (a *App) completeDrain(ctx context.Context, b *backend.Backend, reason stri
 
 // backendNameInUse reports whether any backend in the current snapshot shares
 // name, which is the condition under which a finished drain must not delete the
-// active-connections series.
+// active-requests series.
 func (a *App) backendNameInUse(name string) bool {
 	for _, b := range a.reg.All() {
 		if b.Name == name {

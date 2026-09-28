@@ -94,8 +94,8 @@ func TestChaosCircuitTripCooldownAndTrialSuccess(t *testing.T) {
 	// denied before dispatch, so it never claims an active-connection slot.
 	status, _ := doRequest(a.handler)
 	require.Equal(t, http.StatusServiceUnavailable, status, "a request during cooldown is denied")
-	active, ok := gaugeValueOK(a.collector, "lb_active_connections", map[string]string{"backend": x.id})
-	require.True(t, ok, "active-connections series must exist")
+	active, ok := gaugeValueOK(a.collector, "lb_active_requests", map[string]string{"backend": x.id})
+	require.True(t, ok, "active-requests series must exist")
 	require.Equal(t, 0.0, active, "a denied request must not touch active-connection accounting")
 
 	assertGauge(t, a.collector, "lb_circuit_state", circuitStateLabels(x.id, "open"), 1)

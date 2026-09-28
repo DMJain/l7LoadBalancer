@@ -284,9 +284,9 @@ func TestReloadBlueGreenLogsWarn(t *testing.T) {
 }
 
 // TestReloadSeedsAddedAndDeletesRemovedSeries proves the collector hook-up: an
-// added backend's series are seeded (active connections 0, healthy 0, circuit
+// added backend's series are seeded (active requests 0, healthy 0, circuit
 // closed), a removed backend's healthy and circuit-state series are deleted,
-// and its active-connections series is deliberately left in place (the T3 → T4
+// and its active-requests series is deliberately left in place (the T3 → T4
 // hand-off).
 func TestReloadSeedsAddedAndDeletesRemovedSeries(t *testing.T) {
 	silenceDefault(t)
@@ -336,18 +336,18 @@ lb_circuit_state{backend="backend-c",state="open"} 0
 	require.NoError(t, testutil.GatherAndCompare(
 		application.Collector().Registry(), strings.NewReader(wantCircuit), "lb_circuit_state"))
 
-	// S4.T4's drain deletes the removed backend's active-connections series at
+	// S4.T4's drain deletes the removed backend's active-requests series at
 	// drain completion; the unchanged backend's remains and the added one's is
 	// seeded.
 	const wantActive = `
-# HELP lb_active_connections In-flight requests currently being served by a backend.
-# TYPE lb_active_connections gauge
-lb_active_connections{backend="backend-a"} 0
-lb_active_connections{backend="backend-c"} 0
+# HELP lb_active_requests In-flight requests currently being served by a backend.
+# TYPE lb_active_requests gauge
+lb_active_requests{backend="backend-a"} 0
+lb_active_requests{backend="backend-c"} 0
 `
 	require.Eventually(t, func() bool {
 		return testutil.GatherAndCompare(
-			application.Collector().Registry(), strings.NewReader(wantActive), "lb_active_connections") == nil
+			application.Collector().Registry(), strings.NewReader(wantActive), "lb_active_requests") == nil
 	}, 3*time.Second, 10*time.Millisecond, "the drained backend's active series must be deleted")
 }
 

@@ -1,6 +1,6 @@
 // Package metrics registers and exposes Prometheus instruments for
 // request counts, latency histograms, circuit breaker state, and active
-// connections.
+// requests.
 //
 // Label name reservations. Metric labels MUST use these names:
 //
@@ -18,7 +18,7 @@
 //	lb_request_duration_seconds
 //	lb_backend_healthy
 //	lb_circuit_state
-//	lb_active_connections   - added in S3.T4 (ADR-0013 decision 7)
+//	lb_active_requests   - added in S3.T4 (ADR-0013 decision 7)
 //	lb_health_probe_total   - added in S3.T12 (ADR-0014)
 //
 // See docs/design/sprint-1-contracts.md "Metric name and label

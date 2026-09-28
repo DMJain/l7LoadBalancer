@@ -48,7 +48,7 @@ const statusClientClosedRequest = 499
 // ActiveConns. See ADR-0007.
 type reqState struct {
 	backend *backend.Backend
-	// metrics is the collector whose lb_active_connections gauge mirrors this
+	// metrics is the collector whose lb_active_requests gauge mirrors this
 	// request's slot. It is the same reference ServeHTTP reads off Proxy, copied
 	// here so release() can decrement the gauge next to DecActive without the
 	// release closures needing the Proxy. nil means no collector is installed
@@ -79,14 +79,14 @@ type reqState struct {
 }
 
 // activate claims this request's active-connection slot, reporting it to both
-// the backend's own counter and the lb_active_connections gauge at the same
+// the backend's own counter and the lb_active_requests gauge at the same
 // call site so the two cannot drift. It is called only on the dispatch path,
 // after the circuit gate admits the request — a denied request never touches
 // either (ADR-0013 decision 7).
 func (s *reqState) activate() {
 	s.backend.IncActive()
 	if s.metrics != nil {
-		s.metrics.IncActiveConnections(s.backend.Name)
+		s.metrics.IncActiveRequests(s.backend.Name)
 	}
 }
 
@@ -96,7 +96,7 @@ func (s *reqState) release() {
 	s.once.Do(func() {
 		s.backend.DecActive()
 		if s.metrics != nil {
-			s.metrics.DecActiveConnections(s.backend.Name)
+			s.metrics.DecActiveRequests(s.backend.Name)
 		}
 	})
 }

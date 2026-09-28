@@ -181,7 +181,7 @@ As-built package status:
 | `internal/backend` | Sprint 1–4 | `Backend` (identity + unexported `atomic` health/active/EWMA-latency state, a CAS-guarded circuit snapshot, a removed flag, and a retired context, methods-only access) and `Registry` (ordered; Sprint 4 replaces its backend set through an immutable versioned snapshot behind one atomic pointer, with `Selectable()` and the `CircuitGate`/`Allow` admission seam). |
 | `internal/config` | Sprint 1, extended Sprint 3–4 | Strict YAML loading (`KnownFields(true)`) and fail-fast validation; algorithm identifier constants. Sprint 3 adds optional global `health:`/`circuit:` duration sections and always-on `metrics:`/`health_endpoint:` listen blocks. Sprint 4 adds `reload.drain_window` (ADR-0016 decision 1), `server.read_timeout` (S4.T7), the four-knob `transport:` section (S4.T8), `${VAR}` interpolation of backend URLs after decode (S4.T16), and the pure `DiffBackends`/`NonBackendChanges` reload comparison (ADR-0015 decisions 2–4). |
 | `internal/logger` | Sprint 1 | `log/slog` JSON setup and the frozen canonical field vocabulary. Leaf. |
-| `internal/metrics` | Sprint 3 | The `Collector` over a private `prometheus.Registry`: request counter and whole-request latency histogram (`backend`/`method`/`status_class`), backend-healthy and active-connections gauges, a `lb_circuit_state` label-enum gauge whose setter unconditionally zeroes the non-target states, and the `lb_health_probe_total{endpoint,status}` probe counter. Push-only and leaf — it imports no other internal package (ADR-0013, ADR-0014). Sprint 4 adds series deletion for removed backends and seeding for added ones. |
+| `internal/metrics` | Sprint 3 | The `Collector` over a private `prometheus.Registry`: request counter and whole-request latency histogram (`backend`/`method`/`status_class`), backend-healthy and active-requests gauges, a `lb_circuit_state` label-enum gauge whose setter unconditionally zeroes the non-target states, and the `lb_health_probe_total{endpoint,status}` probe counter. Push-only and leaf — it imports no other internal package (ADR-0013, ADR-0014). Sprint 4 adds series deletion for removed backends and seeding for added ones. |
 | `internal/health` | Sprint 3–4 | Active health checking: `Checker` owns one probe goroutine per backend (started by `app.Run` on the shared context), probes each backend's configured URL with a dedicated `http.Client` (its own timeout, no redirect following), drives `Backend.MarkHealthy`/`MarkUnhealthy` through an N-consecutive-failure / M-consecutive-success state machine whose thresholds are Go constants, and exposes `ProbeRoundComplete()` (ADR-0011 decisions 2, 10, 11, 13; ADR-0014 decision 10). Sprint 4 adds `Add`/`Remove` so reload starts and stops a backend's prober (ADR-0015 decision 10). Passive outlier detection: `OutlierDetector` implements `proxy.RoundTripObserver` (structurally, without importing `proxy`), keeps a count-based sliding window of recent outcomes per backend, and ejects via `MarkUnhealthy` after N failures within the window — recovering only when a later active probe is observed to have reinstated the backend; Sprint 4 adds `Forget` for a removed backend (ADR-0015). Health endpoint: `NewHandler` serves `/livez`, `/readyz`, `/startupz` (ADR-0014). |
 | `internal/circuit` | Sprint 3 | `Breaker`: the circuit policy (consecutive-failure-to-open constant, config cooldown). Drives `Backend`'s circuit-state methods, implements `backend.CircuitGate` and `proxy.RoundTripObserver` structurally, and is installed by `app.Build` as both the registry gate and an observer. Logs and writes `lb_circuit_state` from the shared `CircuitTransition` (ADR-0013 decision 10). |
 
@@ -343,7 +343,7 @@ gauge at `open`: the accepted, permanent gap ADR-0013 decision 13 records.
 independent instances and run `t.Parallel()`. It holds the whole-request
 counter and histogram (`backend`/`method`/`status_class`, never a raw
 `status_code`; provisional `doc.go` buckets), the `lb_backend_healthy` and
-`lb_active_connections` gauges, the label-enum `lb_circuit_state` gauge whose
+`lb_active_requests` gauges, the label-enum `lb_circuit_state` gauge whose
 setter unconditionally zeroes the two non-target states, and the
 health-endpoint counter `lb_health_probe_total{endpoint,status}`. `main`
 serves `/metrics` via `promhttp.HandlerFor` on a dedicated `http.Server` on
@@ -355,7 +355,7 @@ the whole-request hook in `proxy.ServeHTTP` counts and times every exit path
 with the real backend label); the transition subsystems write their gauges
 at the exact edge-triggered sites their log lines fire from; and `main` seeds
 every backend's series (`healthy=1`, `circuit_state=closed`,
-`active_connections=0`) immediately after `backend.NewRegistry` succeeds, so
+`active_requests=0`) immediately after `backend.NewRegistry` succeeds, so
 a never-trafficked system renders a complete dashboard on first scrape. The
 two new canonical log fields, `event` and `reason`, are closed snake_case
 Go-constant vocabularies in `internal/logger`. `internal/balancer` is

@@ -15,13 +15,13 @@ import (
 )
 
 // activeSeriesPresent reports whether the collector exposes an
-// lb_active_connections series for backend.
+// lb_active_requests series for backend.
 func activeSeriesPresent(t *testing.T, c *metrics.Collector, backend string) bool {
 	t.Helper()
 	families, err := c.Registry().Gather()
 	require.NoError(t, err)
 	for _, mf := range families {
-		if mf.GetName() != "lb_active_connections" {
+		if mf.GetName() != "lb_active_requests" {
 			continue
 		}
 		for _, m := range mf.GetMetric() {

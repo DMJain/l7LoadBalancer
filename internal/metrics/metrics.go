@@ -89,7 +89,7 @@ func NewCollector() *Collector {
 			Help: "Circuit breaker state per backend as a label enum; exactly one of closed/open/half_open is 1.",
 		}, []string{"backend", "state"}),
 		active: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "lb_active_connections",
+			Name: "lb_active_requests",
 			Help: "In-flight requests currently being served by a backend.",
 		}, []string{"backend"}),
 		probes: prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -135,7 +135,7 @@ func (c *Collector) DeleteBackendHealthy(backend string) {
 
 // DeleteCircuitState removes every lb_circuit_state series for a backend — all
 // three state labels — for the same reason DeleteBackendHealthy exists. Neither
-// deletion touches the active-connections series: a removed backend's in-flight
+// deletion touches the active-requests series: a removed backend's in-flight
 // requests still decrement it by name until its drain completes (S4.T4).
 func (c *Collector) DeleteCircuitState(backend string) {
 	for _, s := range circuitStates {
@@ -162,32 +162,32 @@ func (c *Collector) SetCircuitState(backend string, state CircuitState) {
 	}
 }
 
-// IncActiveConnections increments the per-backend active-connections gauge. It
+// IncActiveRequests increments the per-backend active-requests gauge. It
 // is called at the same call site as Backend.IncActive (ADR-0013 decision 7).
-func (c *Collector) IncActiveConnections(backend string) {
+func (c *Collector) IncActiveRequests(backend string) {
 	c.active.WithLabelValues(backend).Inc()
 }
 
-// DecActiveConnections decrements the per-backend active-connections gauge,
+// DecActiveRequests decrements the per-backend active-requests gauge,
 // mirroring Backend.DecActive.
-func (c *Collector) DecActiveConnections(backend string) {
+func (c *Collector) DecActiveRequests(backend string) {
 	c.active.WithLabelValues(backend).Dec()
 }
 
-// SetActiveConnections sets the per-backend active-connections gauge directly.
+// SetActiveRequests sets the per-backend active-requests gauge directly.
 // Startup seeding uses it to materialize a fresh backend's series at 0 before
 // any request has been served (ADR-0013 decision 9).
-func (c *Collector) SetActiveConnections(backend string, n int64) {
+func (c *Collector) SetActiveRequests(backend string, n int64) {
 	c.active.WithLabelValues(backend).Set(float64(n))
 }
 
-// DeleteActiveConnections removes a backend's lb_active_connections series. It
+// DeleteActiveRequests removes a backend's lb_active_requests series. It
 // is deleted at drain completion, not at removal, because a removed backend's
 // in-flight requests still decrement it by name; deleting it earlier would
 // recreate it negative. The drain deletes it only when no current backend
 // shares the name, so a same-name fresh backend's own series survives
 // (ADR-0016 decision 7). Deleting a backend with no series is a no-op.
-func (c *Collector) DeleteActiveConnections(backend string) {
+func (c *Collector) DeleteActiveRequests(backend string) {
 	c.active.DeleteLabelValues(backend)
 }
 

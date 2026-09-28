@@ -27,10 +27,10 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 
 echo "==> 1. Load balancer metrics endpoint"
 metrics_body="$(curl -fsS "$lb_metrics")" || fail "no /metrics at $lb_metrics — is 'make run' running?"
-for name in lb_backend_healthy lb_circuit_state lb_active_connections; do
+for name in lb_backend_healthy lb_circuit_state lb_active_requests; do
 	grep -q "^$name" <<<"$metrics_body" || fail "$name has no seeded series yet"
 done
-grep -E '^lb_(backend_healthy|circuit_state|active_connections)' <<<"$metrics_body" | sort -u
+grep -E '^lb_(backend_healthy|circuit_state|active_requests)' <<<"$metrics_body" | sort -u
 echo "    ok"
 
 echo "==> 2. Starting the observability stack"
@@ -59,7 +59,7 @@ echo "    ok — l7loadbalancer target is up"
 echo "==> 3. Prometheus has the seeded gauge series (panel data present)"
 # The three gauge panels read these; querying Prometheus proves the panels have
 # data before any client traffic, not just that the dashboard JSON is loaded.
-for query in lb_backend_healthy lb_circuit_state lb_active_connections; do
+for query in lb_backend_healthy lb_circuit_state lb_active_requests; do
 	results="$(curl -fsS --get --data-urlencode "query=$query" "$prom_url/api/v1/query" \
 		| python3 -c 'import json,sys; print(len(json.load(sys.stdin)["data"]["result"]))')"
 	[ "$results" -gt 0 ] || fail "Prometheus has no series for $query (gauge panel would be blank)"
