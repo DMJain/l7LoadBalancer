@@ -1,7 +1,9 @@
 # Sprint 4 retrospective — Hard Subsystems
 
 Written by S4.T20 (issue 09 of `.scratch/s4-t12-t15-closeout/`), 2026-09-28,
-mirroring the Sprint 3 close-out shape. Sprint 4 ran across three scoping
+following the Sprint 3 close-out's convention — a deliverables table carrying
+the landing commit, a deviations section, exit-criteria evidence, and a
+what-we'd-do-differently section. Sprint 4 ran across three scoping
 passes: `.scratch/s4-t0-t4-reload/` (the `internal/app` seam and the
 zero-downtime reload bundle), `.scratch/s4-t5-t10-connection-lifecycle/`
 (cancellation correctness, mid-body death, slow-loris timeouts, transport
@@ -61,9 +63,11 @@ implementation, test, ADR, or review commit that carries the work.
 | S4.T17 | Redaction: `validateBackendURL` errors drop the raw URL across all five branches. | `db0088f` |
 | S4.T18 | `configs/example.yaml` documents interpolation. | `a5a0bf9` |
 | S4.T19 | ADR-0019 — the digest-pinned distroless Docker image is the deployment target. | `3fa0fb0`, review `e1f2832` |
+| S4.T20 | Sprint 4 retrospective — this document. | `0e68de4` |
+| S4.T21 | Architecture-doc update — not yet landed. | — |
 
-S4.T20 is this document. S4.T21 (architecture-doc update) is the final
-close-out ticket and remains pending.
+S4.T21 is the final close-out ticket and remains pending; S4.T20 is this
+document.
 
 ## 2. Deviations from MILESTONES/spec
 
@@ -85,7 +89,7 @@ mapping is:
 | S4.T14 retry policy ADR | — | — | Already ADR-0018 (S4.T11); closed as recorded, not rebuilt |
 | S4.T15 retro + architecture doc | S4.T15 | S4.T20 (retro) + S4.T21 (architecture doc) | Split into two; T20 is this document, T21 pending |
 | (amendment-first fold) | S4.T12's first commit | S4.T12 | Folded into T12; no separate amendment ticket |
-| (make `e2e` target) | S4.T15, story 7 | S4.T15 | Landed with T14; T15 verified it |
+| (make `e2e` target) | S4.T12, story 7 | S4.T15 | Landed with T14; T15 verified it |
 
 ### 2.2 The first exit criterion was evidenced in-process first, at the OS boundary second
 
@@ -105,11 +109,12 @@ is stated in the e2e's doc comment.
 
 ### 2.3 Proposed tickets closed and deferred
 
-Recorded in `PROGRESS.md` under "Proposed tickets" and landed in S4.T12's
-amendment commit (`a5c2345`):
+Recorded across the S4.D1 amendment (`0117806`) and S4.T12's amendment commit
+(`a5c2345`), and held in `PROGRESS.md` under "Proposed tickets":
 
 - **Closed — client cancellation misclassified as a backend failure.** Absorbed
-  into S4.T5 (commit `0117806`), which added the three-tier classification.
+  into S4.T5; the closure was recorded in `0117806`, the three-tier
+  classification landed in `e0c07c6`.
 - **Closed — hot-reload rejected, not ignored.** Already implemented by S4.T1's
   `NonBackendChanges` (now naming `reload`, `server`, `transport`, and every
   original non-backend field); S4.T12 closed the ticket with the reason on
