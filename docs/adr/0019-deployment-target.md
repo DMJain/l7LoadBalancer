@@ -37,16 +37,17 @@ relevant properties are these:
    `/l7lb probe http://127.0.0.1:8081/livez` — the `probe` subcommand
    (`main.go:106`) exists precisely so a shell-less runtime has a health check
    ([ADR-0014](0014-health-endpoint-contract-and-probe-semantics.md) decision
-   2; `Dockerfile:76`).
+   2; `Dockerfile:76-77`).
 4. **No external state.** Configuration is one YAML file; there is no
    database, cache, or shared store to back up or coordinate ("there is none to
    back up; config is a file" — ADR-0005). Backend state (health, circuit,
    EWMA, active connections) is in-process and intentionally reset on restart;
    only the config file is durable.
-5. **No clustering.** One instance serves one configured backend set; there is
-   no peer discovery, no shared state between instances, and no scale-out
-   requirement expressed anywhere in `MILESTONES.md` (ADR-0005 multi-tenancy
-   bullet).
+5. **No clustering.** One instance serves one configured backend set — ADR-0005's
+   multi-tenancy bullet: "one load balancer instance serves one configured
+   backend set; no tenant isolation, quotas, or per-tenant config." There is no
+   peer discovery and no shared state between instances, and `MILESTONES.md`
+   expresses no scale-out requirement.
 
 The artifacts already exist: a digest-pinned
 `gcr.io/distroless/static-debian12:nonroot` image with the static binary baked
@@ -68,11 +69,14 @@ port. The health and metrics ports are exposed for an orchestrator or a
 Prometheus scraper and may stay on an internal network. Operational moves map
 directly onto the mechanisms already built:
 
-- **Fleet change** — edit the backend list in the mounted config and
-  `docker kill -s HUP <container>` (or `docker compose restart`). The binary is
-  PID 1, so it receives the signal directly and swaps the backend set in place,
+- **Fleet change** — edit the backend list in the mounted config and send
+  SIGHUP to the process: `docker kill -s HUP <container>`. The binary is PID 1,
+  so it receives the signal directly and swaps the backend set in place,
   dropping nothing (ADR-0015, ADR-0016; proven end-to-end at the OS boundary in
-  S4.T14).
+  S4.T14). This is distinct from any container restart — `docker restart` /
+  `docker compose restart` sends SIGTERM and starts a fresh process, which is a
+  stop/start and drops in-flight requests (no socket handoff, ADR-0015 decision
+  1); only the SIGHUP path is the zero-drop reload.
 - **Health** — the image's own `HEALTHCHECK` (the `probe` subcommand against
   `/livez`) gives any container runtime a liveness signal with no shell or
   `curl` in the image.
