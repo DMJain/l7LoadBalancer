@@ -418,7 +418,7 @@ amendment).
   See
   [ADR-0013 decision 18](adr/0013-observability-metrics-logging-and-integration.md#repo-root-demo-stack-docker-composeyml).
 
-## Sprint 4 — Hard subsystems
+## Sprint 4 — Hard Subsystems
 
 Sprint 4's subsystems surround the request path built in Sprints 1–3 without
 changing its shape, and they are assembled only through `internal/app`
@@ -429,7 +429,7 @@ exit-criteria evidence are in
 ### Application seam (Sprint 4)
 
 The whole wiring graph lives behind `app.Build(cfg, log)` and `app.Run(ctx)`.
-`Build` constructs the metrics collector; the registry, and seeds every
+`Build` constructs the metrics collector; builds the registry and seeds every
 backend's gauge series; installs the circuit breaker as both the registry's
 `CircuitGate` and an observer; builds the selector; builds the proxy with the
 configured transport, the metrics collector, and the latency, outlier, and
@@ -534,10 +534,11 @@ process environment, so the resolved URL is what `Validate` checks and a secret
 can live only in the environment. `VAR` must match `[A-Za-z_][A-Za-z0-9_]*`;
 there is deliberately no `${VAR:-default}` syntax and no escape hatch. An
 unset or empty variable, an unterminated `${`, an empty `${}`, or an invalid
-name fails the load naming the backend (and the variable); the resolved value
-is never included in an error, and Sprint 4's redaction change made
-`validateBackendURL` name only the backend and the `url` field across all five
-of its branches (S4.T16, S4.T17). Non-backend fields pass through untouched.
+name fails the load naming the backend (and, for a reference that names one,
+the variable); the resolved value is never included in an error, and Sprint 4's
+redaction change made `validateBackendURL` name only the backend and the `url`
+field across all five of its branches (S4.T16, S4.T17). Non-backend fields pass
+through untouched.
 Interpolation re-runs on every `Load`, so an environment change between
 reloads resolves to the new value and — by the `(name, URL)` identity rule —
 diffs as one removed plus one added backend. `configs/example.yaml` documents
@@ -552,8 +553,10 @@ the feature; `configs/docker.yaml` stays interpolation-free.
 - **Soak test.** `TestChaosSoakConnectionLifecycle`, run by `make soak`
   (both tolerances) or `make soak-race` (goroutine tolerance only; `-race`
   makes the heap assertion meaningless), cycles warmup, steady load, client
-  cancellations, backend deaths, SIGHUP reloads, and a quiet phase for a
-  flag-gated duration (default 1h, `-soak-duration` to shorten). Committed
+  cancellations, backend deaths, reloads, and a quiet phase for a flag-gated
+  duration (default 1h, `-soak-duration` to shorten). Its reloads call
+  `App.Reload` directly — the operation `main`'s SIGHUP loop calls — so the
+  signal registration itself is exercised only by the e2e below. Committed
   tolerances: goroutines ≤ warmup baseline + 10 and post-GC `HeapAlloc` ≤
   baseline + 8 MB. The full one-hour pass (the source of truth is the
   `PROGRESS.md` S4.T10 entry): **59.66M requests, 7,175 cancellations, 2,789
@@ -564,17 +567,17 @@ the feature; `configs/docker.yaml` stays interpolation-free.
   **OS-boundary sibling** of the in-process
   `TestChaosReloadDrainExitCriterion1000`. It builds the real binary, spawns
   it with a temp config, holds 1000 concurrent requests in flight through
-  gated counting backends, rewrites the config file atomically, sends a real
-  `syscall.Kill(pid, SIGHUP)`, proves live traffic shifts to the added backend
-  and never touches the removed one (whose counter stays frozen), then asserts
-  all 1000 return 200 and the process exits 0 on `SIGTERM`. The division of
-  labor is explicit: registry-view assertions (instance identity, EWMA/circuit
-  state survival) stay in-process; the e2e asserts externally visible outcomes
-  only (statuses, counts, exit status) (S4.T14).
+  gated counting backends, rewrites the config file atomically, sends the
+  spawned process a real `SIGHUP`, proves live traffic shifts to the added
+  backend and never touches the removed one (whose counter stays frozen), then
+  asserts all 1000 return 200 and the process exits 0 on `SIGTERM`. The
+  division of labor is explicit: registry-view assertions (instance identity,
+  EWMA/circuit state survival) stay in-process; the e2e asserts externally
+  visible outcomes only (statuses, counts, exit status) (S4.T14).
 
 ## Decision index
 
-All non-trivial decisions are recorded in `docs/adr/`. Accepted:
+All non-trivial decisions are recorded in `docs/adr/`, with their status:
 
 | ADR | Title | Status |
 |-----|-------|--------|
