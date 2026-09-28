@@ -181,5 +181,11 @@ Scoped in `.scratch/s4-t12-t15-closeout/` as one bundle spec plus ten tickets. T
 
 ## Sprint 5
 
-See `MILESTONES.md`. Tasks added as scoped.
+Scoped in `.scratch/s5-t1-t4-http2-benchmarks/` as one spec plus six tickets: 01 (metric rename), 02 (TLS listener), 03 (h2c), 04 (HTTP/2 to backends), 05 (benchmark infra), 06 (benchmark harness). Issue 01 is claimed below; the rest await claiming.
+
+- [IN_PROGRESS] S5.T3-prefactor — Metric rename (`lb_active_connections` → `lb_active_requests`)
+  - Spec: `.scratch/s5-t1-t4-http2-benchmarks/issues/01-metric-rename.md`
+  - Depends: none (the spec's ticket order puts it before T1 so T1's tests use the correct name)
+  - Claimed 2026-09-28T18:33:00Z by OpenCode (deepseek-v4.1-flash); names only, no behavioral change.
+  - Acceptance: the gauge registration, the `IncActive*`/`DecActive*`/`SetActive*`/`DeleteActive*` methods, all Go callers (`proxy.activate`/`release`, `app.Build`/seed, `app.drain`), the Grafana dashboard JSON, `deployments/docker/observability/smoke.sh` and its README, and the `internal/metrics/doc.go` reservation all read `lb_active_requests`; every existing test's assertion is renamed (the lifecycle tests are the regression gate); `make test` and `make test-race` pass; the AGENTS.md checklist item is a no-op because AGENTS.md carries no metric-name vocabulary (verified — no `active_connections` reference exists).
 
