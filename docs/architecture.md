@@ -9,8 +9,10 @@ reference._
 
 ## Overview
 
-l7LoadBalancer is a Layer 7 HTTP load balancer built entirely on Go's
-standard library (`net/http`, `net/http/httputil`) for the request path. It
+l7LoadBalancer is a Layer 7 HTTP load balancer built on Go's standard library
+(`net/http`, `net/http/httputil`) for the request path, with one exception:
+cleartext HTTP/2 (h2c) uses `golang.org/x/net/http2/h2c`, the only request-path
+dependency outside the standard library (S5.T2; see `docs/adr/INDEX.md`). It
 layers a pluggable backend-selection policy (`balancer.Selector`) over
 `httputil.ReverseProxy`:
 

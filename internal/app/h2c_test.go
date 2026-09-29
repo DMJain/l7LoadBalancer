@@ -31,6 +31,26 @@ func h2cTestConfig(t *testing.T, backendURL string, idle *time.Duration) *config
 	return cfg
 }
 
+// waitForListener polls addr with a plain HTTP/1.1 GET until the asynchronously
+// started listener answers. The GET also exercises the h2c handler's HTTP/1.1
+// pass-through.
+func waitForListener(t *testing.T, addr string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	client := &http.Client{Timeout: time.Second}
+	for {
+		resp, err := client.Get("http://" + addr + "/")
+		if err == nil {
+			resp.Body.Close()
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("listener %s never came up: %v", addr, err)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
 // startTestApp builds and runs the app on a free loopback port, returning the
 // listen address. Run is torn down on cleanup.
 func startTestApp(t *testing.T, cfg *config.Config) string {
@@ -101,21 +121,7 @@ func TestRunH2CListenerServesHTTP2PriorKnowledge(t *testing.T) {
 
 	cfg := h2cTestConfig(t, backend.URL, nil)
 	addr := startTestApp(t, cfg)
-
-	// Run starts its servers asynchronously; poll until the listener answers.
-	deadline := time.Now().Add(5 * time.Second)
-	plain := &http.Client{Timeout: time.Second}
-	for {
-		resp, err := plain.Get("http://" + addr + "/")
-		if err == nil {
-			resp.Body.Close()
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("h2c listener never came up: %v", err)
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
+	waitForListener(t, addr)
 
 	client := &http.Client{Transport: &http2.Transport{
 		AllowHTTP: true,
@@ -149,20 +155,7 @@ func TestRunH2CListenerUpgrade(t *testing.T) {
 
 	cfg := h2cTestConfig(t, backend.URL, nil)
 	addr := startTestApp(t, cfg)
-
-	deadline := time.Now().Add(5 * time.Second)
-	plain := &http.Client{Timeout: time.Second}
-	for {
-		resp, err := plain.Get("http://" + addr + "/")
-		if err == nil {
-			resp.Body.Close()
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("h2c listener never came up: %v", err)
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
+	waitForListener(t, addr)
 
 	conn, err := net.Dial("tcp", addr)
 	require.NoError(t, err)

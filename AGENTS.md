@@ -8,7 +8,7 @@ Canonical guidance for any coding agent working on this repository (Claude Code,
 
 ## Project
 
-**l7LoadBalancer** — a Layer 7 HTTP load balancer in Go, built entirely on the standard library (`net/http`, `net/http/httputil`). Owner: Darshan Jain.
+**l7LoadBalancer** — a Layer 7 HTTP load balancer in Go, built on the standard library (`net/http`, `net/http/httputil`) for the request path, with one exception: h2c uses `golang.org/x/net/http2/h2c` (`docs/adr/INDEX.md`, S5.T2). Owner: Darshan Jain.
 
 ### Why this project exists
 
