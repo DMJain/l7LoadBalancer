@@ -15,10 +15,11 @@ support ([ADR-0020](../docs/adr/0020-benchmark-tool-vegeta-over-wrk.md)).
   matrix parameters (rates, durations, warmup, thresholds). Slices: `core`
   (36 runs, HTTP/2), `protocol` (12 runs, HTTP/1.1), `failure` (2 runs), `all`.
 - `docker-compose.yml` — the topology: `lb`, `nginx`, `backend1`–`backend4`, `vegeta`.
-- `nginx/http11.conf`, `nginx/h2.conf` (round-robin) and
-  `nginx/h2-leastconn.conf` (`least_conn`) — Nginx plain HTTP/1.1 and
+- `nginx/http11/roundrobin.conf`, `nginx/h2/roundrobin.conf` and
+  `nginx/h2/leastconn.conf` (`least_conn`) — Nginx plain HTTP/1.1 and
   TLS+HTTP/2 (`http2 on;`), constrained-matched to the LB's algorithm, four
-  backends, keepalive 100.
+  backends, keepalive 100. Organised by protocol then algorithm, mirroring
+  `configs/`.
 - `configs/http11/`, `configs/h2/` — eight self-contained LB configs, one per
   algorithm × client protocol (`roundrobin`, `leastconn`, `consistent-hash`,
   `p2c-ewma`). No templating; each is readable in isolation.
@@ -83,7 +84,7 @@ them:
 ```sh
 scripts/generate-cert.sh
 BACKEND_TLS_CERT_FILE=/certs/server.crt BACKEND_TLS_KEY_FILE=/certs/server.key \
-  LB_CONFIG=./configs/h2/roundrobin.yaml NGINX_CONF=h2.conf \
+  LB_CONFIG=./configs/h2/roundrobin.yaml NGINX_CONF=h2/roundrobin.conf \
   docker compose -f bench/docker-compose.yml up -d --force-recreate
 curl -sk --http2 https://127.0.0.1:8443/200b | wc -c   # through Nginx
 ```

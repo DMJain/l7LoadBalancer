@@ -76,7 +76,7 @@ TMP="$RESULTS/.tmp"
 # shellcheck disable=SC2034 # used by the compose file's ${VAR:-default}
 export LB_CONFIG="./configs/http11/roundrobin.yaml"
 # shellcheck disable=SC2034
-export NGINX_CONF="http11.conf"
+export NGINX_CONF="http11/roundrobin.conf"
 # shellcheck disable=SC2034
 export BACKEND_TLS_CERT_FILE=""
 # shellcheck disable=SC2034
@@ -140,7 +140,7 @@ up_h2() {
   ensure_certs
   BACKEND_TLS_CERT_FILE=/certs/server.crt
   BACKEND_TLS_KEY_FILE=/certs/server.key
-  NGINX_CONF=h2.conf
+  NGINX_CONF=h2/roundrobin.conf
   "${COMPOSE[@]}" up -d --force-recreate backend1 backend2 backend3 backend4 nginx
 }
 
@@ -148,7 +148,7 @@ up_h2() {
 up_http11() {
   BACKEND_TLS_CERT_FILE=""
   BACKEND_TLS_KEY_FILE=""
-  NGINX_CONF=http11.conf
+  NGINX_CONF=http11/roundrobin.conf
   "${COMPOSE[@]}" up -d --force-recreate backend1 backend2 backend3 backend4 nginx
 }
 
@@ -168,9 +168,9 @@ target_url() { # <proto> <competitor> <size>
 # algorithm has no Nginx equivalent (solo benchmarks).
 nginx_conf_for() {
   case "$1:$2" in
-    h2:roundrobin) printf 'h2.conf' ;;
-    h2:leastconn) printf 'h2-leastconn.conf' ;;
-    http11:roundrobin) printf 'http11.conf' ;;
+    h2:roundrobin) printf 'h2/roundrobin.conf' ;;
+    h2:leastconn) printf 'h2/leastconn.conf' ;;
+    http11:roundrobin) printf 'http11/roundrobin.conf' ;;
     *) printf '' ;;
   esac
 }

@@ -5,7 +5,7 @@
 #
 # Default `docker compose up` runs the plain-HTTP topology:
 #   lb     → bench/configs/http11/roundrobin.yaml
-#   nginx  → bench/nginx/http11.conf
+#   nginx  → bench/nginx/http11/roundrobin.conf
 #   backends serve plain HTTP
 #
 # The TLS+HTTP/2 protocol slice is the same topology with the h2 configs. It
@@ -13,7 +13,7 @@
 # issue 06):
 #   scripts/generate-cert.sh
 #   BACKEND_TLS_CERT_FILE=/certs/server.crt BACKEND_TLS_KEY_FILE=/certs/server.key \
-#     LB_CONFIG=./configs/h2/roundrobin.yaml NGINX_CONF=h2.conf \
+#     LB_CONFIG=./configs/h2/roundrobin.yaml NGINX_CONF=h2/roundrobin.conf \
 #     docker compose up
 #
 # Vegeta idles until used (its entrypoint is overridden to sleep so `up` can
@@ -89,10 +89,10 @@ services:
       - "8090:80" # plain HTTP/1.1
       - "8443:443" # TLS + HTTP/2
     volumes:
-      # Both configs are mounted; the default selects http11.conf via NGINX_CONF.
+      # All configs are mounted; the default selects http11/roundrobin.conf via NGINX_CONF.
       - ./nginx:/etc/nginx/bench:ro
       - ../certs:/certs:ro
-    command: ["nginx", "-g", "daemon off;", "-c", "/etc/nginx/bench/${NGINX_CONF:-http11.conf}"]
+    command: ["nginx", "-g", "daemon off;", "-c", "/etc/nginx/bench/${NGINX_CONF:-http11/roundrobin.conf}"]
 
   vegeta:
     build:
