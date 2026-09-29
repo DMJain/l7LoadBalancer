@@ -234,9 +234,10 @@ Scoped in `.scratch/s5-t5-t12-bench-execution/` as one bundle spec plus 20 ticke
   - Depends: none
   - Completed: 2026-09-30. PROGRESS.md gains this bundle paragraph and the 19 `[TODO]` entries below with their blocking edges; S5.T7 recorded as merged into S5.T6 and S5.T11 as dropped per ADR-0019; S5.T13–T15 listed as proposed. MILESTONES.md Sprint 5 deliverables gain the nearest-equivalent comparisons, the `degraded` slice, the no-op and drain reload runs, and `make bench-repro`. The spec and the four `CONTEXT.md` glossary entries (**No-op reload**, **Competitor**, **Nearest-equivalent**, **Hot key**) landed in `96853d3`. Docs-only, no code or harness changes (TDD-exempt per AGENTS.md).
 
-- [TODO] S5.T5.1 — Nginx configs mirror the LB layout (rename-only prefactor)
+- [IN_PROGRESS] S5.T5.1 — Nginx configs mirror the LB layout (rename-only prefactor)
   - Spec: `.scratch/s5-t5-t12-bench-execution/issues/02-t5-1-nginx-layout-rename.md`
   - Depends: S5.D0
+  - Claimed 2026-09-30T01:12:00+05:30 by OpenCode (deepseek-v4.1-flash); move the three Nginx configs to `<proto>/<algo>` positions, update compose default and harness mapping in the same commit.
 
 - [TODO] S5.T5.2 — Nearest-equivalent competitors
   - Spec: `.scratch/s5-t5-t12-bench-execution/issues/03-t5-2-nearest-equivalent-competitors.md`
