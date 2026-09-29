@@ -15,9 +15,10 @@ support ([ADR-0020](../docs/adr/0020-benchmark-tool-vegeta-over-wrk.md)).
   matrix parameters (rates, durations, warmup, thresholds). Slices: `core`
   (36 runs, HTTP/2), `protocol` (12 runs, HTTP/1.1), `failure` (2 runs), `all`.
 - `docker-compose.yml` — the topology: `lb`, `nginx`, `backend1`–`backend4`, `vegeta`.
-- `nginx/http11.conf`, `nginx/h2.conf` — Nginx plain HTTP/1.1 and TLS+HTTP/2
-  (`http2 on;`), constrained-matched to the LB (round-robin or `least_conn`,
-  four backends, keepalive 100).
+- `nginx/http11.conf`, `nginx/h2.conf` (round-robin) and
+  `nginx/h2-leastconn.conf` (`least_conn`) — Nginx plain HTTP/1.1 and
+  TLS+HTTP/2 (`http2 on;`), constrained-matched to the LB's algorithm, four
+  backends, keepalive 100.
 - `configs/http11/`, `configs/h2/` — eight self-contained LB configs, one per
   algorithm × client protocol (`roundrobin`, `leastconn`, `consistent-hash`,
   `p2c-ewma`). No templating; each is readable in isolation.
@@ -37,17 +38,24 @@ The whole matrix from the repo root:
 Each slice prints a summary table (algorithm, size, competitor, p50, p99,
 throughput) and writes per-run files named by their parameters, e.g.
 `results/core/roundrobin-10kb-nginx-throughput.txt` and
-`results/failure/roundrobin-10kb-sighup.txt`.
+`results/failure/roundrobin-10kb-sighup.txt`. Protocol-slice filenames carry an
+`http11` token (spec §30), e.g.
+`results/protocol/roundrobin-10kb-http11-lb-throughput.txt`; the latency `.txt`
+holds one report per rate, with a `-latency-<pct>.hdr` histogram beside it.
 
 Peak throughput is discovered automatically: seed at 1000 req/s, double until
 p99 exceeds 100 ms or the error rate exceeds 1%, then bisect to within 500 req/s.
-The first 5 s of every measured step is discarded as warmup. These are constants
-at the top of `run.sh`, not flags.
+Latency is then profiled at 30/50/70/90% of that peak. The first 5 s of every
+measured step is discarded as warmup. These are constants at the top of
+`run.sh`, not flags.
 
 Failure mode runs round-robin at 10 KB over TLS+HTTP/2 at 50% of discovered
 peak for 60 s. `backend-kill` stops `backend3` at T+30 s; `sighup` sends an
 unchanged-config SIGHUP to the LB at T+30 s (zero drops is the target). Both
 write a `-timeseries.txt` (per-second cumulative stats) beside the summary.
+Detection time is dominated by the active health checker's cadence: no bench
+config sets `health.probe_interval`, so runs use the default 5 s with 3
+consecutive failures before ejection (set it in a config to change it).
 
 Nginx and the LB are compared under a constrained match — same algorithm, same
 topology, same keepalive pool — so a gap is attributable to implementation, not
@@ -96,4 +104,9 @@ checker, however, uses its own default-cloned transport (ADR-0011 decision 11)
 that the config knob cannot reach, so the compose `lb` service also sets
 `SSL_CERT_FILE=/certs/server.crt`; the cert's SAN list already covers
 `backend1`–`backend4`, so the probes verify successfully instead of ejecting
-every backend after three failures.
+every backend after three failures. Nginx's h2 configs likewise proxy
+`https://backends` with `proxy_ssl_verify off` — the backends serve TLS in this
+slice, so a plaintext upstream would fail. Nginx speaks HTTP/1.1 upstream here
+(it has no upstream-HTTP/2 directive for this topology), so the backend leg is
+TLS+h1 for Nginx and TLS+h2 for the LB; the client-facing comparison stays
+matched.

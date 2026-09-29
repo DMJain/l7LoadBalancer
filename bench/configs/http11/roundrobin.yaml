@@ -1,6 +1,4 @@
-# Benchmark config (S5.T4-infra): plain-HTTP client, round-robin LB,
-# four plain-HTTP backends. Self-contained by design (spec §31) — no
-# templating, no sed, readable in isolation. Matched by bench/nginx/http11.conf.
+# Benchmark config (S5.T4-harness): plain-HTTP client, round-robin LB, four plain-HTTP backends. See bench/README.md.
 listen: ":8080"
 algorithm: "round_robin"
 metrics:

@@ -1,10 +1,4 @@
-# Benchmark config (S5.T4-harness): plain-HTTP client, bounded-load
-# consistent-hashing LB, four plain-HTTP backends. Self-contained by design
-# (spec §31) — no templating, no sed, readable in isolation.
-#
-# Solo benchmark (LB only): nginx `ip_hash` is source-IP mod-N, not
-# Maglev-style bounded-load consistent hashing, so there is no true equivalent
-# to compare against (spec §25).
+# Benchmark config (S5.T4-harness): plain-HTTP client, consistent-hashing LB, four plain-HTTP backends. See bench/README.md.
 listen: ":8080"
 algorithm: "consistent_hash"
 metrics:

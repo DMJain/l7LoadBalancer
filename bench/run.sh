@@ -48,11 +48,17 @@ P99_CEILING_MS=100        # a rate fails when p99 exceeds this (spec §28)
 ERROR_CEILING_PCT=1       # a rate fails when error rate exceeds this percent
 WARMUP_SECS=5             # first seconds of every measured attack, discarded
 STEP_SECS=10              # measurement window per throughput-search step (10–15s)
-LATENCY_RATE_PCT=50       # fixed-rate latency run as a percent of discovered peak
+LATENCY_RATES_PCT=(30 50 70 90)  # latency-profile rates, as % of discovered peak (spec §21)
 FAILURE_RATE_PCT=50       # failure-mode steady state as a percent of peak
 FAILURE_SECS=60           # failure-mode total duration (spec §29)
 FAILURE_EVENT_AT=30       # seconds into the failure run when the event fires
 SETTLE_SECS=10            # settle time after restarting backend3 (two probe intervals)
+
+# Detection time is dominated by the active health checker's cadence. None of
+# the bench configs set health.probe_interval, so every run uses the config
+# default: config.DefaultProbeInterval = 5s, with 3 consecutive failures before
+# ejection (internal/health). Set health.probe_interval in a config to change
+# it for a run, and record the value alongside the numbers.
 
 SIZES=(200b 10kb 1mb)
 MATCHED_ALGOS=(roundrobin leastconn)
@@ -77,7 +83,21 @@ export BACKEND_TLS_CERT_FILE=""
 export BACKEND_TLS_KEY_FILE=""
 
 usage() {
-  sed -n '2,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  cat <<'EOF'
+bench/run.sh — the benchmark execution harness (S5.T4-harness).
+
+Usage: bench/run.sh [core|protocol|failure|all]     (default: all)
+
+  core      HTTP/2 (TLS+ALPN) matrix — 36 runs
+  protocol  HTTP/1.1 round-robin comparison — 12 runs
+  failure   backend-kill and SIGHUP-under-load — 2 runs
+  all       the full 50-run matrix
+
+Results land as .txt summaries + .hdr HDR histograms under
+bench/results/{core,protocol,failure}/ with parameter-encoded filenames, and
+each slice prints a summary table to stdout. All parameters are constants at
+the top of this script; see the header comment for the methodology.
+EOF
 }
 
 log() { printf '%s\n' "$*"; }
@@ -86,6 +106,9 @@ warn() { printf 'WARN: %s\n' "$*" >&2; }
 require_docker() {
   command -v docker >/dev/null 2>&1 || { warn "docker is required"; exit 1; }
   docker compose version >/dev/null 2>&1 || { warn "docker compose v2 is required"; exit 1; }
+  # set_lb relies on `up --wait` (compose >= 2.17); fail up front, not mid-slice.
+  docker compose up --help 2>&1 | grep -q -- '--wait' \
+    || { warn "docker compose up --wait is required (compose >= 2.17)"; exit 1; }
 }
 
 ensure_certs() {
@@ -95,11 +118,11 @@ ensure_certs() {
   fi
 }
 
-# veg <command> runs a shell command inside a one-off vegeta container with the
-# results directory mounted at /results. The exported compose variables keep
-# the running lb/nginx/backends on the config this slice selected, so
-# `compose run` never recreates them.
-veg() {
+# vegeta_run <command> runs a shell command inside a one-off vegeta container
+# with the results directory mounted at /results. The exported compose
+# variables keep the running lb/nginx/backends on the config this slice
+# selected, so `compose run` never recreates them.
+vegeta_run() {
   "${COMPOSE[@]}" run --rm -T -v "$RESULTS:/results" --entrypoint sh vegeta -c "$1"
 }
 
@@ -139,6 +162,26 @@ target_url() { # <proto> <competitor> <size>
   esac
 }
 
+# nginx_conf_for <proto> <algorithm> maps a scenario to the Nginx config that
+# matches the LB's algorithm (spec §24). leastconn needs an explicit
+# `least_conn` upstream; roundrobin is Nginx's default. Empty means the
+# algorithm has no Nginx equivalent (solo benchmarks).
+nginx_conf_for() {
+  case "$1:$2" in
+    h2:roundrobin) printf 'h2.conf' ;;
+    h2:leastconn) printf 'h2-leastconn.conf' ;;
+    http11:roundrobin) printf 'http11.conf' ;;
+    *) printf '' ;;
+  esac
+}
+
+# set_nginx_conf <conf-file> recreates nginx on a config (the exported global
+# is updated so later `compose run` calls stay consistent).
+set_nginx_conf() {
+  NGINX_CONF="$1"
+  "${COMPOSE[@]}" up -d --force-recreate nginx
+}
+
 # ---------------------------------------------------------------------------
 # Metrics parsing (vegeta report --type=json).
 # ---------------------------------------------------------------------------
@@ -170,7 +213,7 @@ passes() {
 attack_filtered() {
   local url="$1" rate="$2" secs="$3"
   local total=$(( WARMUP_SECS + secs ))
-  veg "
+  vegeta_run "
 set -e
 printf 'GET %s\n' '$url' | vegeta attack -rate=${rate}/s -duration=${total}s -insecure > /results/.tmp/attack.gob
 vegeta encode -to csv /results/.tmp/attack.gob > /results/.tmp/attack.csv
@@ -234,10 +277,12 @@ add_summary() { # <algorithm> <size> <competitor> <load> [throughput-override]
     "$algo" "$size" "$comp" "$load" "$p50" "$p99" "$tput" >> "$TMP/summary.tsv"
 }
 
-# run_scenario discovers peak, writes the throughput result at peak, then the
-# fixed-rate latency result at LATENCY_RATE_PCT of peak.
-run_scenario() { # <outdir> <algorithm> <size> <competitor> <url>
-  local outdir="$1" algo="$2" size="$3" comp="$4" url="$5" peak latrate
+# run_scenario discovers peak, writes the throughput result at peak, then a
+# latency result sweeping LATENCY_RATES_PCT of peak. proto is a filename token
+# ("http11" in the protocol slice, empty in core — spec §30).
+run_scenario() { # <outdir> <proto> <algorithm> <size> <competitor> <url>
+  local outdir="$1" proto="$2" algo="$3" size="$4" comp="$5" url="$6"
+  local peak base latrate pct
   peak=$(discover_peak "$url")
   if (( peak == 0 )); then
     warn "$algo/$size/$comp reached no sustainable rate at seed ${SEED_RATE}/s; skipped"
@@ -245,17 +290,27 @@ run_scenario() { # <outdir> <algorithm> <size> <competitor> <url>
   fi
   log "  $algo $size $comp: peak=${peak}/s"
 
+  base="${algo}-${size}"
+  [[ -n "$proto" ]] && base="${base}-${proto}"
+  base="${base}-${comp}"
+
   attack_filtered "$url" "$peak" "$STEP_SECS"
-  save_result "$outdir" "${algo}-${size}-${comp}-throughput" \
+  save_result "$outdir" "${base}-throughput" \
     "algorithm=$algo size=$size competitor=$comp load=throughput peak_rps=$peak"
   add_summary "$algo" "$size" "$comp" throughput "$peak"
 
-  latrate=$(( peak * LATENCY_RATE_PCT / 100 ))
-  (( latrate > 0 )) || latrate=1
-  attack_filtered "$url" "$latrate" "$STEP_SECS"
-  save_result "$outdir" "${algo}-${size}-${comp}-latency" \
-    "algorithm=$algo size=$size competitor=$comp load=latency rate_rps=$latrate peak_rps=$peak"
-  add_summary "$algo" "$size" "$comp" latency ""
+  { printf '# algorithm=%s size=%s competitor=%s load=latency peak_rps=%s rates_pct=%s\n' \
+      "$algo" "$size" "$comp" "$peak" "${LATENCY_RATES_PCT[*]}"; } \
+    > "$RESULTS/$outdir/${base}-latency.txt"
+  for pct in "${LATENCY_RATES_PCT[@]}"; do
+    latrate=$(( peak * pct / 100 ))
+    (( latrate > 0 )) || latrate=1
+    attack_filtered "$url" "$latrate" "$STEP_SECS"
+    { printf '\n# rate_rps=%s (%s%% of peak %s)\n' "$latrate" "$pct" "$peak"
+      cat "$TMP/report.txt"; } >> "$RESULTS/$outdir/${base}-latency.txt"
+    cp "$TMP/report.hdr" "$RESULTS/$outdir/${base}-latency-${pct}.hdr"
+    add_summary "$algo" "$size" "$comp" "latency@${pct}%" ""
+  done
 }
 
 # ---------------------------------------------------------------------------
@@ -266,13 +321,15 @@ run_core() {
   log "=== core slice: HTTP/2 (TLS+ALPN), 36 runs ==="
   : > "$TMP/summary.tsv"
   up_h2
-  local algo size comp url
+  local algo size comp url nginx_conf
   for algo in "${MATCHED_ALGOS[@]}"; do
     set_lb "./configs/h2/$algo.yaml"
+    nginx_conf=$(nginx_conf_for h2 "$algo")
+    [[ -n "$nginx_conf" ]] && set_nginx_conf "$nginx_conf"
     for size in "${SIZES[@]}"; do
       for comp in lb nginx; do
         url=$(target_url h2 "$comp" "$size")
-        run_scenario core "$algo" "$size" "$comp" "$url"
+        run_scenario core "" "$algo" "$size" "$comp" "$url"
       done
     done
   done
@@ -280,7 +337,7 @@ run_core() {
     set_lb "./configs/h2/$algo.yaml"
     for size in "${SIZES[@]}"; do
       url=$(target_url h2 lb "$size")
-      run_scenario core "$algo" "$size" lb "$url"
+      run_scenario core "" "$algo" "$size" lb "$url"
     done
   done
 }
@@ -294,7 +351,7 @@ run_protocol() {
   for size in "${SIZES[@]}"; do
     for comp in lb nginx; do
       url=$(target_url http11 "$comp" "$size")
-      run_scenario protocol roundrobin "$size" "$comp" "$url"
+      run_scenario protocol http11 roundrobin "$size" "$comp" "$url"
     done
   done
 }
@@ -303,7 +360,7 @@ run_protocol() {
 # the live 1 Hz cumulative JSON report as a time series for recovery analysis.
 failure_attack() { # <url> <rate> <secs>
   local url="$1" rate="$2" secs="$3"
-  veg "
+  vegeta_run "
 set -e
 printf 'GET %s\n' '$url' | vegeta attack -rate=${rate}/s -duration=${secs}s -insecure \
   | tee /results/.tmp/failure.gob \
@@ -357,7 +414,7 @@ failure_event() { # <kill|sighup> <url> <rate>
   failure_attack "$url" "$rate" "$FAILURE_SECS"
   wait "$scheduler" || warn "the $mode event command exited non-zero"
 
-  local errors first last p50 p99 rec start_epoch event_epoch event_offset maxp drops
+  local errors first last p50 p99 rec start_epoch event_epoch event_offset maxp drops detwindow
   read -r errors first last < <(awk -F, '
     NR == 1 { start = $1 }
     ($2 + 0 < 200 || $2 + 0 >= 300) {
@@ -374,12 +431,16 @@ failure_event() { # <kill|sighup> <url> <rate>
   start_epoch=$(awk -F, 'NR == 1 { printf "%.0f", $1 / 1e9 }' "$TMP/failure.csv")
   event_epoch=$(cat "$TMP/event_epoch" 2>/dev/null || printf '0')
   event_offset=$(( event_epoch - start_epoch ))
+  # time-to-detection: first error to the last error (the point the LB stopped
+  # routing to the dead backend). Every error is inside [first, last], so the
+  # detection-window count equals the total error count.
+  detwindow=$(awk -v a="$first" -v b="$last" 'BEGIN { printf "%.3f", b - a }')
 
   local base analysis
   if [[ "$mode" == kill ]]; then
     base="roundrobin-10kb-backend-kill"
-    analysis=$(printf 'measurements: mode=backend-kill event=docker-compose-stop-backend3 event_at_s=%s total_errors=%s error_first_s=%s error_last_s=%s time_to_detection_s=%s p50_ms=%s p99_ms=%s p99_recovery_s=%s' \
-      "$event_offset" "$errors" "$first" "$last" "$last" "$p50" "$p99" "$rec")
+    analysis=$(printf 'measurements: mode=backend-kill event=docker-compose-stop-backend3 event_at_s=%s total_errors=%s detection_window_errors=%s error_first_s=%s error_last_s=%s time_to_detection_s=%s p50_ms=%s p99_ms=%s p99_recovery_s=%s' \
+      "$event_offset" "$errors" "$errors" "$first" "$last" "$detwindow" "$p50" "$p99" "$rec")
   else
     base="roundrobin-10kb-sighup"
     drops=$errors

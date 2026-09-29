@@ -1,15 +1,4 @@
-# Benchmark config (S5.T4-harness): TLS+ALPN client (HTTP/2), bounded-load
-# consistent-hashing LB, four https:// backends so the LB↔backend leg also
-# negotiates HTTP/2 (S5.T3). Self-contained by design (spec §31) — no
-# templating, no sed, readable in isolation.
-#
-# Solo benchmark (LB only): nginx `ip_hash` is not a true equivalent (spec §25).
-# The TLS block is the shared SAN cert from scripts/generate-cert.sh, mounted
-# at /certs. The backends serve TLS because bench/docker-compose.yml sets
-# TLS_CERT_FILE/TLS_KEY_FILE. tls_skip_verify is required for that self-signed
-# cert; the active health checker uses its own default-cloned transport
-# (ADR-0011 d11) which the knob does not reach, so the compose lb service also
-# sets SSL_CERT_FILE=/certs/server.crt to trust it.
+# Benchmark config (S5.T4-harness): TLS+ALPN HTTP/2, consistent-hashing LB, https:// backends. See bench/README.md.
 listen: ":8080"
 tls:
   cert_file: "/certs/server.crt"

@@ -88,7 +88,7 @@ Strategic plan. Each sprint = one weekend of focused work. Tasks under each spri
 - HTTP/2 to backends: `http.Transport` with `ForceAttemptHTTP2: true`.
 - Benchmark rig in `bench/`: docker-compose with LB + Nginx + 4 backends and a vegeta load generator (wrk dropped — no HTTP/2 support; ADR-0020), response-size matrix (200B, 10KB, 1MB), and protocol and failure-mode benchmarks.
 - S5.T6 — vegeta peak-throughput discovery: binary-search the highest sustainable request rate (seed, double, bisect); thresholds fixed in `bench/run.sh`, not flags.
-- S5.T7 — vegeta fixed-rate latency profiling: p50 / p99 / p99.9 at a set fraction of discovered peak (the harness's `LATENCY_RATE_PCT`), with HDR histograms.
+- S5.T7 — vegeta fixed-rate latency profiling: p50 / p99 / p99.9 at 30/50/70/90% of discovered peak (`LATENCY_RATES_PCT` in `bench/run.sh`), with HDR histograms.
 - Published numbers: p50 / p99 / p99.9 and throughput ceilings, with `.txt` summaries and `.hdr` histograms committed alongside the harness.
 - README with architecture diagram (Mermaid or Excalidraw export).
 - `docs/design-decisions.md` — rationale-heavy doc covering every non-trivial choice.
