@@ -113,6 +113,12 @@ const (
 	// transport.idle_conn_timeout is omitted. Kept at the stdlib default
 	// deliberately; the Sprint 5 benchmarks can revisit. S4.T8.
 	DefaultIdleConnTimeout = 90 * time.Second
+	// DefaultForceHTTP2 is whether HTTP/2 is negotiated with https:// backends
+	// via ALPN when transport.force_http2 is omitted. True: a https:// backend
+	// URL should speak HTTP/2 by default, and Go's automatic HTTP/2 is silently
+	// lost once the transport customizes TLSClientConfig, so construction code
+	// applies this default explicitly. S5.T3-main.
+	DefaultForceHTTP2 = true
 )
 
 // Config is the top-level load balancer configuration, loaded from YAML.
@@ -237,10 +243,25 @@ type ServerConfig struct {
 // TransportConfig holds the upstream http.Transport tunables. Nested like the
 // other subsystems and following the same nil-means-omitted convention; after
 // Validate returns nil every pointer is non-nil. These knobs replace
-// http.DefaultTransport for the proxy's backend connections (S4.T8).
-// MaxConnsPerHost, ForceAttemptHTTP2, and backend TLS are deliberately out of
-// scope.
+// http.DefaultTransport for the proxy's backend connections (S4.T8). Backend
+// protocol selection is scheme-driven: an http:// URL uses HTTP/1.1 and an
+// https:// URL negotiates HTTP/2 via ALPN, both on the same shared transport
+// (S5.T3-main). MaxConnsPerHost is deliberately out of scope.
 type TransportConfig struct {
+	// ForceHTTP2 enables HTTP/2 negotiation with https:// backends via ALPN.
+	// Omitted → DefaultForceHTTP2 (true). It is a pointer because the default
+	// is true: nil ("omitted") must be distinguishable from an explicit false,
+	// which forces HTTP/1.1 to backends for debugging. app.buildTransport sets
+	// http.Transport.ForceAttemptHTTP2 explicitly from it — Go silently stops
+	// auto-negotiating HTTP/2 the moment TLSClientConfig is customized, and
+	// tls_skip_verify customizes it (S5.T3-main).
+	ForceHTTP2 *bool `yaml:"force_http2"`
+	// TLSSkipVerify disables verification of a backend's TLS certificate.
+	// Omitted → false. It is a plain bool because false is the zero value, so
+	// omission needs no special handling. Set true only for self-signed backend
+	// certs in test/staging: an explicit opt-in, never a hardcoded insecure
+	// default (S5.T3-main).
+	TLSSkipVerify bool `yaml:"tls_skip_verify"`
 	// DialTimeout bounds dialing and connection establishment to a backend.
 	// Omitted → DefaultDialTimeout.
 	DialTimeout *time.Duration `yaml:"dial_timeout"`
@@ -436,7 +457,7 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("config: unsupported algorithm %q", c.Algorithm)
 	}
 
-	if err := c.normalizeAndValidateDurations(); err != nil {
+	if err := c.normalizeAndValidateDefaults(); err != nil {
 		return err
 	}
 	if err := normalizeListen("metrics listen", &c.Metrics.Listen, DefaultMetricsListen); err != nil {
@@ -445,11 +466,15 @@ func (c *Config) Validate() error {
 	return normalizeListen("health_endpoint listen", &c.HealthEndpoint.Listen, DefaultHealthEndpointListen)
 }
 
-// normalizeAndValidateDurations applies the Sprint 3, S4.T7, S4.T8, and S5.T1
-// defaults to every omitted duration and rejects an explicitly-set non-positive
-// one. Called last so the listener and backend checks keep their fail-fast
-// order.
-func (c *Config) normalizeAndValidateDurations() error {
+// normalizeAndValidateDefaults applies the Sprint 3, S4.T7, S4.T8, S5.T1, and
+// S5.T3-main defaults to every omitted duration (and the transport's
+// force_http2 bool) and rejects an explicitly-set non-positive duration. Called
+// last so the listener and backend checks keep their fail-fast order.
+func (c *Config) normalizeAndValidateDefaults() error {
+	if c.Transport.ForceHTTP2 == nil {
+		force := DefaultForceHTTP2
+		c.Transport.ForceHTTP2 = &force
+	}
 	if err := normalizeDuration("health probe_interval", &c.Health.ProbeInterval, DefaultProbeInterval); err != nil {
 		return err
 	}

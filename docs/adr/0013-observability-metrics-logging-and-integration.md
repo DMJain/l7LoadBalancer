@@ -55,7 +55,12 @@ from the design-session record in the spec above.
    own duration measurement stays purely internal (feeding P2C-EWMA, passive
    detection, and the circuit), so there is exactly one definition of "request
    duration" in the metrics surface. Labels are exactly `backend`, `method`,
-   `status_class` — never `status_code` (unbounded cardinality).
+   `status_class` — never `status_code` (unbounded cardinality). **S5.T3-main
+   amends this:** `lb_requests_total` gained a fourth label, `protocol`
+   (`http/1.1`/`h2`/`h2c`, the closed `metrics.ClientProtocol` set), so a
+   dashboard can prove HTTP/2 was negotiated rather than silently falling back.
+   Its cardinality is bounded at three values, and the amendment is to the
+   request counter only — the duration histogram keeps the three-label set.
 
 4. **The histogram buckets are `doc.go`'s provisional set** (`.005, .01, .025,
    .05, .1, .25, .5, 1, 2.5, 5, 10` seconds), annotated as provisional pending

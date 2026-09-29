@@ -65,7 +65,13 @@ type reqState struct {
 	// goroutine, and the error handler runs on that same goroutine (S4.T5).
 	clientCtx context.Context
 	status    int
-	once      sync.Once
+	// backendProto is the protocol the LB→backend leg negotiated (resp.Proto,
+	// e.g. "HTTP/2.0"), captured in modifyResponse and surfaced on the "request
+	// complete" line as backend_proto. Empty when no response arrived (a
+	// short-circuit or a failed round trip). Touched only on the request
+	// goroutine, like the rest of reqState (ADR-0007). S5.T3-main.
+	backendProto string
+	once         sync.Once
 
 	// dispatchStart is captured at the end of director(), just before the
 	// request is dispatched, and consumed in modifyResponse when the response
@@ -346,6 +352,7 @@ func (p *Proxy) modifyResponse(resp *http.Response) error {
 		return nil
 	}
 	state.status = resp.StatusCode
+	state.backendProto = resp.Proto
 	p.observe(state, time.Since(state.dispatchStart), resp.StatusCode < 500)
 	resp.Body = &releaseBody{
 		ReadCloser: resp.Body,
@@ -506,8 +513,9 @@ func (p *Proxy) completeRequest(r *http.Request, state *reqState, start time.Tim
 }
 
 // observeRequest feeds one whole client-facing request into the metrics
-// collector: a counter increment and a duration observation on the same
-// backend/method/status_class label set. The duration is the whole-request
+// collector: a counter increment on backend/method/status_class/protocol and a
+// duration observation on backend/method/status_class (the protocol label
+// rides the counter only, S5.T3-main). The duration is the whole-request
 // window (the same start as latency_ms), deliberately not RoundTripObserver's
 // backend-round-trip-only measurement — there is exactly one definition of
 // "request duration" on the metrics surface (ADR-0013 decision 3).
@@ -530,7 +538,7 @@ func (p *Proxy) observeRequest(r *http.Request, state *reqState, start time.Time
 	if p.metrics == nil {
 		return
 	}
-	p.metrics.ObserveRequest(backendName(state), r.Method, statusClass(state.status), time.Since(start))
+	p.metrics.ObserveRequest(backendName(state), r.Method, statusClass(state.status), protocolLabel(r), time.Since(start))
 }
 
 // backendName is the canonical backend label for a request: the serving
@@ -553,6 +561,23 @@ func statusClass(status int) string {
 	return strconv.Itoa(status/100) + "xx"
 }
 
+// protocolLabel maps a client request's wire protocol to the closed
+// metrics.ClientProtocol vocabulary (S5.T3-main): h2 for HTTP/2 over TLS, h2c
+// for cleartext HTTP/2 (h2c prior knowledge or Upgrade), and http/1.1 for
+// everything else. req.Proto is the source; TLS presence is what separates h2
+// from h2c, since both report "HTTP/2.0". The vocabulary is deliberately closed
+// at three values so the label cannot drive cardinality (an HTTP/1.0 request is
+// labelled http/1.1).
+func protocolLabel(r *http.Request) metrics.ClientProtocol {
+	if r.ProtoMajor >= 2 {
+		if r.TLS != nil {
+			return metrics.ClientProtocolH2
+		}
+		return metrics.ClientProtocolH2C
+	}
+	return metrics.ClientProtocolHTTP11
+}
+
 // logRequest emits the single per-request "request complete" line using the
 // canonical field vocabulary. 5xx responses log at WARN, everything else at
 // INFO.
@@ -565,6 +590,12 @@ func (p *Proxy) logRequest(r *http.Request, state *reqState, start time.Time) {
 		"latency_ms", latencyMS,
 		"remote_addr", r.RemoteAddr,
 		"path", r.URL.Path,
+	}
+	// backend_proto gives backend-side protocol visibility: the protocol the
+	// LB→backend leg negotiated, distinct from the client-facing protocol
+	// metric label. Absent when no backend response arrived (S5.T3-main).
+	if state.backendProto != "" {
+		attrs = append(attrs, "backend_proto", state.backendProto)
 	}
 	if state.status >= 500 {
 		p.logger.Warn("request complete", attrs...)

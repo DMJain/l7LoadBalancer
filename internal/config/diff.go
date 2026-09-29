@@ -50,8 +50,10 @@ func DiffBackends(oldCfg, newCfg *Config) BackendDiff {
 // the backend list is reloadable. A section with any differing sub-field is
 // named once by its section name. See ADR-0015 decision 4, ADR-0016 decision 1
 // (reload.drain_window is a non-backend field and therefore not reloadable),
-// S4.T7 (server.read_timeout likewise), S4.T8 (transport likewise), and S5.T1
-// (the listener mode — tls and h2c — and server.idle_timeout likewise).
+// S4.T7 (server.read_timeout likewise), S4.T8 (transport likewise), S5.T1
+// (the listener mode — tls and h2c — and server.idle_timeout likewise), and
+// S5.T3-main (transport.force_http2 and transport.tls_skip_verify likewise: a
+// change to either silently alters backend protocol negotiation).
 //
 // Both configs must be validated. Validate materializes every default (a
 // non-empty Algorithm and non-nil duration and listen pointers), so comparing
@@ -92,7 +94,9 @@ func NonBackendChanges(oldCfg, newCfg *Config) []string {
 		*oldCfg.Server.IdleTimeout != *newCfg.Server.IdleTimeout {
 		changed = append(changed, "server")
 	}
-	if *oldCfg.Transport.DialTimeout != *newCfg.Transport.DialTimeout ||
+	if *oldCfg.Transport.ForceHTTP2 != *newCfg.Transport.ForceHTTP2 ||
+		oldCfg.Transport.TLSSkipVerify != newCfg.Transport.TLSSkipVerify ||
+		*oldCfg.Transport.DialTimeout != *newCfg.Transport.DialTimeout ||
 		*oldCfg.Transport.ResponseHeaderTimeout != *newCfg.Transport.ResponseHeaderTimeout ||
 		*oldCfg.Transport.MaxIdleConnsPerHost != *newCfg.Transport.MaxIdleConnsPerHost ||
 		*oldCfg.Transport.IdleConnTimeout != *newCfg.Transport.IdleConnTimeout {

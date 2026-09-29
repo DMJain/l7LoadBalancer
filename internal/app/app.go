@@ -421,10 +421,20 @@ func buildMetricsHandler(c *metrics.Collector) http.Handler {
 // dial, a response-header timeout, and a per-host idle pool. MaxIdleConns is
 // sized from max_idle_conns_per_host × backend count so the per-host knob is
 // not silently capped by the stdlib default of 100; operators tune per-host,
-// not total (YAGNI). cfg must already have passed Validate.
+// not total (YAGNI).
+//
+// Protocol selection is scheme-driven and shared: one transport handles both
+// http:// (HTTP/1.1) and https:// (HTTP/2 via ALPN) backends in the same
+// config, so migrating backends to HTTP/2 is incremental (S5.T3-main).
+// ForceAttemptHTTP2 is set explicitly from force_http2 for a reason: Go only
+// auto-negotiates HTTP/2 on a transport whose TLSClientConfig is nil, and
+// tls_skip_verify sets it — so without this line every https:// backend would
+// silently fall back to HTTP/1.1 with no error, warning, or log (spec §17).
+//
+// cfg must already have passed Validate.
 func buildTransport(cfg *config.Config) *http.Transport {
 	perHost := *cfg.Transport.MaxIdleConnsPerHost
-	return &http.Transport{
+	tr := &http.Transport{
 		DialContext: (&net.Dialer{
 			Timeout: *cfg.Transport.DialTimeout,
 		}).DialContext,
@@ -432,7 +442,14 @@ func buildTransport(cfg *config.Config) *http.Transport {
 		MaxIdleConnsPerHost:   perHost,
 		MaxIdleConns:          perHost * len(cfg.Backends),
 		IdleConnTimeout:       *cfg.Transport.IdleConnTimeout,
+		ForceAttemptHTTP2:     *cfg.Transport.ForceHTTP2,
 	}
+	if cfg.Transport.TLSSkipVerify {
+		// Test/staging only: an operator opt-in for self-signed backend certs.
+		// The explicit ForceAttemptHTTP2 above keeps HTTP/2 alive despite this.
+		tr.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+	}
+	return tr
 }
 
 // seedMetrics materializes every backend's initial gauge series through the

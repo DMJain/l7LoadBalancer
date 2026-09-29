@@ -520,11 +520,11 @@ func TestProtocolLabelMapsRequestProtocol(t *testing.T) {
 	cases := []struct {
 		name string
 		req  *http.Request
-		want string
+		want metrics.ClientProtocol
 	}{
-		{name: "http/1.1", req: http11, want: "http/1.1"},
-		{name: "http/2 over TLS", req: h2, want: "h2"},
-		{name: "cleartext http/2", req: h2c, want: "h2c"},
+		{name: "http/1.1", req: http11, want: metrics.ClientProtocolHTTP11},
+		{name: "http/2 over TLS", req: h2, want: metrics.ClientProtocolH2},
+		{name: "cleartext http/2", req: h2c, want: metrics.ClientProtocolH2C},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1008,11 +1008,11 @@ func TestProxyClientCancelReachesNoObserverAndRecords499(t *testing.T) {
 	assert.Equal(t, "backend-a", fails[0]["backend"])
 
 	counter := labeledSeries(t, c, "lb_requests_total",
-		map[string]string{"backend": "backend-a", "method": "GET", "status_class": "4xx"})
+		map[string]string{"backend": "backend-a", "method": "GET", "status_class": "4xx", "protocol": "http/1.1"})
 	require.NotNil(t, counter, "client churn must stay visible as a 4xx request")
 	assert.Equal(t, 1.0, counter.GetCounter().GetValue())
 	assert.Nil(t, labeledSeries(t, c, "lb_requests_total",
-		map[string]string{"backend": "backend-a", "method": "GET", "status_class": "5xx"}),
+		map[string]string{"backend": "backend-a", "method": "GET", "status_class": "5xx", "protocol": "http/1.1"}),
 		"a client cancellation must never land in the 5xx class reserved for backend failures")
 }
 

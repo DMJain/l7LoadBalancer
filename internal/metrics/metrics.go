@@ -35,6 +35,20 @@ func (s CircuitState) valid() bool {
 	return false
 }
 
+// ClientProtocol is the closed set of lb_requests_total protocol label values:
+// the wire protocol a client-facing request arrived on. It is a distinct type
+// rather than a bare string so an unrecognized value is a deliberate
+// conversion, mirroring CircuitState (S5.T3-main).
+type ClientProtocol string
+
+// ClientProtocol values. The set is closed at exactly three so the label
+// cannot drive cardinality; an HTTP/1.0 request is labelled HTTP/1.1.
+const (
+	ClientProtocolHTTP11 ClientProtocol = "http/1.1"
+	ClientProtocolH2     ClientProtocol = "h2"
+	ClientProtocolH2C    ClientProtocol = "h2c"
+)
+
 // histogramBuckets are the provisional request-duration boundaries in seconds,
 // reserved in doc.go and documented as provisional pending Sprint 5's real
 // benchmark data (ADR-0013 decision 4).
@@ -73,8 +87,8 @@ func NewCollector() *Collector {
 		registry: reg,
 		requests: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "lb_requests_total",
-			Help: "Total requests handled by the load balancer, by backend, method, and response status class.",
-		}, []string{"backend", "method", "status_class"}),
+			Help: "Total requests handled by the load balancer, by backend, method, client protocol, and response status class.",
+		}, []string{"backend", "method", "status_class", "protocol"}),
 		duration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
 			Name:    "lb_request_duration_seconds",
 			Help:    "Whole-request duration in seconds, from dispatch to response, by backend, method, and status class.",
@@ -108,11 +122,17 @@ func (c *Collector) Registry() *prometheus.Registry {
 }
 
 // ObserveRequest records one whole-request outcome: the request counter
-// increments and the duration is observed on the same label set. d is the
-// whole client-facing request duration, not the backend round trip
-// (ADR-0013 decision 3).
-func (c *Collector) ObserveRequest(backend, method, statusClass string, d time.Duration) {
-	c.requests.WithLabelValues(backend, method, statusClass).Inc()
+// increments on its backend/method/status_class/protocol label set and the
+// duration is observed on backend/method/status_class. d is the whole
+// client-facing request duration, not the backend round trip (ADR-0013
+// decision 3).
+//
+// protocol is the client-facing wire protocol ("http/1.1", "h2", or "h2c"). It
+// rides the request counter only — exactly three values, so cardinality is
+// bounded — and lets a dashboard prove HTTP/2 is actually negotiated rather
+// than silently falling back (S5.T3-main).
+func (c *Collector) ObserveRequest(backend, method, statusClass string, protocol ClientProtocol, d time.Duration) {
+	c.requests.WithLabelValues(backend, method, statusClass, string(protocol)).Inc()
 	c.duration.WithLabelValues(backend, method, statusClass).Observe(d.Seconds())
 }
 

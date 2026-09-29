@@ -527,6 +527,11 @@ func TestValidate(t *testing.T) {
 				assert.Equal(t, 10*time.Second, *cfg.Transport.ResponseHeaderTimeout)
 				assert.Equal(t, 42, *cfg.Transport.MaxIdleConnsPerHost)
 				assert.Equal(t, 45*time.Second, *cfg.Transport.IdleConnTimeout)
+				// force_http2 and tls_skip_verify are omitted in this block,
+				// so they must still take their defaults.
+				require.NotNil(t, cfg.Transport.ForceHTTP2)
+				assert.Equal(t, DefaultForceHTTP2, *cfg.Transport.ForceHTTP2)
+				assert.False(t, cfg.Transport.TLSSkipVerify)
 			},
 		},
 		{

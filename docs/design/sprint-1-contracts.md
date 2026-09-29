@@ -128,14 +128,17 @@ the rule above, amending it deliberately rather than silently.
 ## Log field vocabulary
 
 Canonical field names (from `internal/logger/doc.go`): `backend`,
-`method`, `status`, `latency_ms`, `remote_addr`, `path`.
+`method`, `status`, `latency_ms`, `remote_addr`, `path`, and (added by
+S5.T3-main) `backend_proto`.
 
 Example log line per event type (JSON via `slog.NewJSONHandler`):
 
 - **Request complete**
   ```json
-  {"time":"2026-09-01T16:10:00Z","level":"INFO","msg":"request complete","method":"GET","path":"/api/widgets","backend":"backend-a","status":200,"latency_ms":12.4}
+  {"time":"2026-09-01T16:10:00Z","level":"INFO","msg":"request complete","method":"GET","path":"/api/widgets","backend":"backend-a","status":200,"latency_ms":12.4,"backend_proto":"HTTP/1.1"}
   ```
+  `backend_proto` is the protocol the LB→backend leg negotiated (`resp.Proto`);
+  it is absent when no backend response arrived. Added by S5.T3-main.
 - **Backend ejected** (Sprint 3)
   ```json
   {"time":"2026-09-01T16:10:00Z","level":"WARN","msg":"backend ejected","backend":"backend-b"}
@@ -204,7 +207,11 @@ From `internal/metrics/doc.go`:
   ADR-0014).
 - Labels: `backend`, `method`, `status_class` — deliberately **not**
   `status_code`, to avoid unbounded cardinality from arbitrary upstream
-  status codes. `lb_circuit_state` additionally carries `state`
+  status codes. `lb_requests_total` additionally carries `protocol`
+  (`http/1.1`/`h2`/`h2c`; added in S5.T3-main, amending this reservation) so a
+  dashboard can prove HTTP/2 is negotiated rather than silently falling back;
+  the latency histogram keeps the three-label set. `lb_circuit_state`
+  additionally carries `state`
   (`closed`/`open`/`half_open`) as a label enum. `lb_health_probe_total` is
   probe-scoped: it carries `endpoint` (`/livez`/`/readyz`/`/startupz`) and
   `status` (the same status-class vocabulary as `status_class`), and does not

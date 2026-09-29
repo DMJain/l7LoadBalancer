@@ -27,7 +27,7 @@ func TestBuildTransportHTTP2Settings(t *testing.T) {
 		tr := buildTransport(cfg)
 
 		assert.True(t, tr.ForceAttemptHTTP2, "force_http2 defaults to true")
-		assert.Nil(t, tr.TLSClientConfig, "certificate verification must stay on by default")
+		assert.Nil(t, tr.TLSClientConfig, "no TLSClientConfig means Go verifies backend certs with its secure default")
 	})
 
 	t.Run("tls_skip_verify keeps http/2 despite a custom TLSClientConfig", func(t *testing.T) {
@@ -91,6 +91,42 @@ func TestTransportNegotiatesHTTP2ToHTTPSBackend(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 
 	assert.Equal(t, "HTTP/2.0", sawProto(), "an https:// backend must be reached over HTTP/2 via ALPN")
+}
+
+// TestTransportHandlesMixedSchemes proves one shared transport serves both an
+// http:// (HTTP/1.1) and an https:// (HTTP/2) backend in the same config, so a
+// fleet can migrate to HTTP/2 one backend at a time (spec §15, S5.T3-main).
+func TestTransportHandlesMixedSchemes(t *testing.T) {
+	silenceDefault(t)
+
+	plainSeen := make(chan string, 1)
+	plain := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		plainSeen <- r.Proto
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(plain.Close)
+
+	secure, secureSeen := h2Backend(t)
+
+	cfg := testConfig([]config.BackendConfig{
+		{Name: "backend-plain", URL: plain.URL},
+		{Name: "backend-secure", URL: secure.URL},
+	})
+	cfg.Transport.TLSSkipVerify = true
+	require.NoError(t, cfg.Validate())
+
+	application, err := Build(cfg, discardLogger())
+	require.NoError(t, err)
+
+	// Round-robin over two backends: two requests hit each exactly once.
+	for i := 0; i < 2; i++ {
+		rec := httptest.NewRecorder()
+		application.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+		require.Equal(t, http.StatusOK, rec.Code)
+	}
+
+	assert.Equal(t, "HTTP/1.1", <-plainSeen, "the http:// backend must stay HTTP/1.1")
+	assert.Equal(t, "HTTP/2.0", secureSeen(), "the https:// backend must negotiate HTTP/2")
 }
 
 // TestTransportKeepsHTTP11ToHTTPBackend proves scheme selection stays per-URL:

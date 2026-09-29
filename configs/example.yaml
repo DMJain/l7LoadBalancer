@@ -41,8 +41,18 @@ server:
 # is the per-host idle pool size (default 100); the total pool is sized from
 # this and the backend count, so it is not silently capped by the stdlib
 # default. `idle_conn_timeout` recycles idle keep-alives (default "90s").
+#
+# Backend protocol is scheme-driven: an `https://` URL negotiates HTTP/2 via
+# ALPN, an `http://` URL uses HTTP/1.1, and both may be mixed in one backends
+# list for incremental migration. `force_http2` (default true) is the only
+# switch — set it false to force HTTP/1.1 to backends for debugging.
+# `tls_skip_verify` (default false) disables verification of a backend's TLS
+# certificate and is required only for self-signed backend certs in
+# test/staging; leaving it false is the production-correct default.
 # All optional; not reloadable: changing any of them rejects the reload.
 transport:
+  force_http2: true
+  tls_skip_verify: false
   dial_timeout: "5s"
   response_header_timeout: "30s"
   max_idle_conns_per_host: 100

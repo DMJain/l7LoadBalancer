@@ -5,12 +5,17 @@
 //
 // Request-scoped fields:
 //
-//	backend      - name of the backend a log line concerns
-//	method       - HTTP method
-//	status       - HTTP response status code
-//	latency_ms   - request latency in milliseconds
-//	remote_addr  - client remote address
-//	path         - request path
+//	backend       - name of the backend a log line concerns
+//	method        - HTTP method
+//	status        - HTTP response status code
+//	latency_ms    - request latency in milliseconds
+//	remote_addr   - client remote address
+//	path          - request path
+//	backend_proto - protocol the LB→backend leg negotiated (resp.Proto, e.g.
+//	                "HTTP/2.0"), present on the "request complete" line when a
+//	                backend response arrived. It is the backend-side complement
+//	                of lb_requests_total's client-facing protocol label
+//	                (S5.T3-main).
 //
 // Transition-scoped fields (Sprint 3; values are the closed Go-constant
 // vocabularies in vocab.go). A transition line also carries the request-scoped

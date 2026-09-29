@@ -78,6 +78,7 @@ func chaosConfig(fbs []*flippableBackend) *config.Config {
 	responseHeaderTimeout := config.DefaultResponseHeaderTimeout
 	maxIdleConnsPerHost := config.DefaultMaxIdleConnsPerHost
 	idleConnTimeout := config.DefaultIdleConnTimeout
+	forceHTTP2 := config.DefaultForceHTTP2
 	return &config.Config{
 		Listen:    ":0",
 		Algorithm: config.AlgorithmRoundRobin,
@@ -91,6 +92,7 @@ func chaosConfig(fbs []*flippableBackend) *config.Config {
 		Reload:         config.ReloadConfig{DrainWindow: &drainWindow},
 		Server:         config.ServerConfig{ReadTimeout: &readTimeout, IdleTimeout: &idleTimeout},
 		Transport: config.TransportConfig{
+			ForceHTTP2:            &forceHTTP2,
 			DialTimeout:           &dialTimeout,
 			ResponseHeaderTimeout: &responseHeaderTimeout,
 			MaxIdleConnsPerHost:   &maxIdleConnsPerHost,

@@ -7,6 +7,9 @@
 //	backend       - backend name
 //	method        - HTTP method
 //	status_class  - "2xx" / "4xx" / "5xx" etc. (NOT status_code — cardinality)
+//	protocol      - client wire protocol: "http/1.1" / "h2" / "h2c"
+//	                (lb_requests_total only; added in S5.T3-main, closed at
+//	                three values so cardinality stays bounded)
 //	endpoint      - health-probe path (lb_health_probe_total only)
 //	status        - health-probe status class, "2xx"/"5xx" etc.
 //	                (lb_health_probe_total only; deliberately its own name,
