@@ -69,6 +69,14 @@ func configWithTransportYAML(transport string) string {
 		"backends:\n" + backendYAML("backend-a", "http://127.0.0.1:9001")
 }
 
+// configWithListenerModeYAML builds a minimal otherwise-valid config with the
+// supplied top-level lines (the tls: block and/or h2c: flag) spliced in before
+// the backends section.
+func configWithListenerModeYAML(mode string) string {
+	return "listen: \":8443\"\n" + mode +
+		"backends:\n" + backendYAML("backend-a", "http://127.0.0.1:9001")
+}
+
 // loadAndValidate is the end-to-end seam under test: YAML -> Load -> Validate.
 func loadAndValidate(t *testing.T, contents string) (*Config, error) {
 	t.Helper()
@@ -445,6 +453,36 @@ func TestValidate(t *testing.T) {
 			errSubstr: "read_timeout",
 		},
 		{
+			name: "server idle_timeout omitted defaults to 90s",
+			yaml: threeBackendYAML(),
+			check: func(t *testing.T, cfg *Config) {
+				t.Helper()
+				require.NotNil(t, cfg.Server.IdleTimeout)
+				assert.Equal(t, DefaultIdleTimeout, *cfg.Server.IdleTimeout)
+			},
+		},
+		{
+			name: "server idle_timeout set explicitly is kept",
+			yaml: configWithServerYAML("server:\n  idle_timeout: \"120s\"\n"),
+			check: func(t *testing.T, cfg *Config) {
+				t.Helper()
+				require.NotNil(t, cfg.Server.IdleTimeout)
+				assert.Equal(t, 120*time.Second, *cfg.Server.IdleTimeout)
+			},
+		},
+		{
+			name:      "server idle_timeout of zero is rejected naming the field",
+			yaml:      configWithServerYAML("server:\n  idle_timeout: \"0s\"\n"),
+			wantErr:   true,
+			errSubstr: "idle_timeout",
+		},
+		{
+			name:      "server idle_timeout negative is rejected naming the field",
+			yaml:      configWithServerYAML("server:\n  idle_timeout: \"-1s\"\n"),
+			wantErr:   true,
+			errSubstr: "idle_timeout",
+		},
+		{
 			name: "transport fields omitted fall back to documented defaults",
 			yaml: threeBackendYAML(),
 			check: func(t *testing.T, cfg *Config) {
@@ -523,6 +561,78 @@ func TestValidate(t *testing.T) {
 			yaml:      configWithTransportYAML("transport:\n  idle_conn_timeout: \"-1s\"\n"),
 			wantErr:   true,
 			errSubstr: "idle_conn_timeout",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := loadAndValidate(t, tc.yaml)
+			if tc.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tc.errSubstr)
+				return
+			}
+			require.NoError(t, err)
+			require.NotNil(t, cfg)
+			if tc.check != nil {
+				tc.check(t, cfg)
+			}
+		})
+	}
+}
+
+// TestValidateListenerMode covers the listener-mode config surface (S5.T1): a
+// present `tls:` block selects TLS mode by presence and requires both cert
+// files, `h2c: true` selects h2c mode, and the two together are rejected as
+// mutually exclusive rather than one silently winning.
+func TestValidateListenerMode(t *testing.T) {
+	cases := []validateCase{
+		{
+			name:      "tls block without a cert_file is rejected naming the field",
+			yaml:      configWithListenerModeYAML("tls:\n  key_file: \"certs/server.key\"\n"),
+			wantErr:   true,
+			errSubstr: "cert_file",
+		},
+		{
+			name:      "tls block without a key_file is rejected naming the field",
+			yaml:      configWithListenerModeYAML("tls:\n  cert_file: \"certs/server.crt\"\n"),
+			wantErr:   true,
+			errSubstr: "key_file",
+		},
+		{
+			name:      "tls with h2c is rejected as mutually exclusive",
+			yaml:      configWithListenerModeYAML("h2c: true\ntls:\n  cert_file: \"certs/server.crt\"\n  key_file: \"certs/server.key\"\n"),
+			wantErr:   true,
+			errSubstr: "mutually exclusive",
+		},
+		{
+			name: "plain mode leaves tls nil and h2c false",
+			yaml: threeBackendYAML(),
+			check: func(t *testing.T, cfg *Config) {
+				t.Helper()
+				assert.Nil(t, cfg.TLS)
+				assert.False(t, cfg.H2C)
+			},
+		},
+		{
+			name: "tls block present selects TLS mode and keeps the paths",
+			yaml: configWithListenerModeYAML("tls:\n  cert_file: \"certs/server.crt\"\n  key_file: \"certs/server.key\"\n"),
+			check: func(t *testing.T, cfg *Config) {
+				t.Helper()
+				require.NotNil(t, cfg.TLS)
+				assert.Equal(t, "certs/server.crt", cfg.TLS.CertFile)
+				assert.Equal(t, "certs/server.key", cfg.TLS.KeyFile)
+				assert.False(t, cfg.H2C)
+			},
+		},
+		{
+			name: "h2c alone selects h2c mode",
+			yaml: configWithListenerModeYAML("h2c: true\n"),
+			check: func(t *testing.T, cfg *Config) {
+				t.Helper()
+				assert.True(t, cfg.H2C)
+				assert.Nil(t, cfg.TLS)
+			},
 		},
 	}
 

@@ -184,6 +184,30 @@ func TestNonBackendChanges(t *testing.T) {
 			want: []string{"server"},
 		},
 		{
+			name: "server idle_timeout differs",
+			old:  oneBackendConfigYAML(base),
+			new:  oneBackendConfigYAML(base + "server:\n  idle_timeout: \"120s\"\n"),
+			want: []string{"server"},
+		},
+		{
+			name: "tls block added differs",
+			old:  oneBackendConfigYAML(base),
+			new:  oneBackendConfigYAML(base + "tls:\n  cert_file: \"a.crt\"\n  key_file: \"a.key\"\n"),
+			want: []string{"tls"},
+		},
+		{
+			name: "tls cert_file differs",
+			old:  oneBackendConfigYAML(base + "tls:\n  cert_file: \"a.crt\"\n  key_file: \"a.key\"\n"),
+			new:  oneBackendConfigYAML(base + "tls:\n  cert_file: \"b.crt\"\n  key_file: \"a.key\"\n"),
+			want: []string{"tls"},
+		},
+		{
+			name: "h2c differs",
+			old:  oneBackendConfigYAML(base),
+			new:  oneBackendConfigYAML(base + "h2c: true\n"),
+			want: []string{"h2c"},
+		},
+		{
 			name: "transport dial_timeout differs",
 			old:  oneBackendConfigYAML(base),
 			new:  oneBackendConfigYAML(base + "transport:\n  dial_timeout: \"2s\"\n"),
@@ -205,7 +229,7 @@ func TestNonBackendChanges(t *testing.T) {
 				"metrics:\n  listen: \"" + DefaultMetricsListen + "\"\n" +
 				"health_endpoint:\n  listen: \"" + DefaultHealthEndpointListen + "\"\n" +
 				"reload:\n  drain_window: \"" + DefaultDrainWindow.String() + "\"\n" +
-				"server:\n  read_timeout: \"" + DefaultReadTimeout.String() + "\"\n" +
+				"server:\n  read_timeout: \"" + DefaultReadTimeout.String() + "\"\n  idle_timeout: \"" + DefaultIdleTimeout.String() + "\"\n" +
 				"transport:\n  dial_timeout: \"" + DefaultDialTimeout.String() + "\"\n  response_header_timeout: \"" + DefaultResponseHeaderTimeout.String() + "\"\n  max_idle_conns_per_host: " + strconv.Itoa(DefaultMaxIdleConnsPerHost) + "\n  idle_conn_timeout: \"" + DefaultIdleConnTimeout.String() + "\"\n"),
 		},
 		{

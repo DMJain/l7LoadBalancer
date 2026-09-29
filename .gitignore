@@ -17,6 +17,9 @@ coverage.*
 .env
 .env.local
 
+# Generated TLS certificates (scripts/generate-cert.sh)
+/certs/
+
 # Benchmark artifacts (raw outputs kept intentionally in bench/results/)
 bench/tmp/
 

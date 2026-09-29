@@ -16,6 +16,7 @@ package app
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -105,22 +106,18 @@ func Build(cfg *config.Config, log *slog.Logger) (*App, error) {
 
 	checker := health.New(reg, *cfg.Health.ProbeInterval, *cfg.Health.ProbeTimeout, log, collector)
 
+	srv, err := buildClientServer(cfg, p)
+	if err != nil {
+		return nil, err
+	}
+
 	a := &App{
 		log:       log,
 		collector: collector,
 		reg:       reg,
 		checker:   checker,
 		outlier:   outlier,
-		srv: &http.Server{
-			Addr:              cfg.Listen,
-			Handler:           p,
-			ReadHeaderTimeout: readHeaderTimeout,
-			// ReadTimeout bounds the full client request read including the
-			// body, the slow-body slow-loris vector (S4.T7). WriteTimeout is
-			// deliberately omitted: it would span the whole response copy and
-			// trip on a slow-but-healthy upstream. See Config.ServerConfig.
-			ReadTimeout: *cfg.Server.ReadTimeout,
-		},
+		srv:       srv,
 		metricsSrv: &http.Server{
 			Addr:              *cfg.Metrics.Listen,
 			Handler:           buildMetricsHandler(collector),
@@ -324,11 +321,61 @@ type runError struct {
 	err   error
 }
 
-// serve runs one server and reports a non-ErrServerClosed failure on errCh.
+// serve runs one server and reports a non-ErrServerClosed failure on errCh. A
+// server with a TLSConfig set serves TLS (and negotiates HTTP/2 via ALPN);
+// every other server — the client one in plain/h2c mode, and always the metrics
+// and health-endpoint ones — serves plain HTTP (S5.T1).
 func serve(srv *http.Server, label string, errCh chan<- runError) {
-	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	var err error
+	if srv.TLSConfig != nil {
+		// The cert pair is already loaded into TLSConfig by buildClientServer,
+		// so the file arguments are empty.
+		err = srv.ListenAndServeTLS("", "")
+	} else {
+		err = srv.ListenAndServe()
+	}
+	if err != nil && !errors.Is(err, http.ErrServerClosed) {
 		errCh <- runError{label: label, err: err}
 	}
+}
+
+// buildClientServer constructs the client-facing http.Server for the config's
+// listener mode. Plain HTTP sets ReadTimeout from config (the slow-loris bound
+// of S4.T7). TLS mode loads the configured cert pair into the server's
+// TLSConfig up front — so a bad path is a startup error, not a silent plaintext
+// listener — which also makes net/http's ListenAndServeTLS negotiate HTTP/2 via
+// ALPN. It deliberately does NOT set srv.TLSNextProto: an empty map there would
+// silently disable HTTP/2 (S5.T1).
+//
+// ReadTimeout is hardcoded to 0 in TLS mode, not configurable. net/http's
+// ReadTimeout applies to the whole connection, so on a multiplexed HTTP/2
+// connection it would kill every active stream after N seconds regardless of
+// activity; HTTP/2 stream-level flow control is the slow-client bound instead
+// (see https://pkg.go.dev/net/http#Server.ReadTimeout and the HTTP/2
+// MaxConcurrentStreams default of 250). IdleTimeout, set from config, is what
+// reclaims idle connections. h2c mode joins this branch in a later ticket.
+func buildClientServer(cfg *config.Config, handler http.Handler) (*http.Server, error) {
+	srv := &http.Server{
+		Addr:              cfg.Listen,
+		Handler:           handler,
+		ReadHeaderTimeout: readHeaderTimeout,
+	}
+	if cfg.TLS != nil {
+		cert, err := tls.LoadX509KeyPair(cfg.TLS.CertFile, cfg.TLS.KeyFile)
+		if err != nil {
+			return nil, fmt.Errorf("app: tls key pair load failed: %w", err)
+		}
+		srv.TLSConfig = &tls.Config{Certificates: []tls.Certificate{cert}}
+		srv.IdleTimeout = *cfg.Server.IdleTimeout
+		return srv, nil
+	}
+	// Plain HTTP: ReadTimeout bounds the full client request read including the
+	// body, the slow-body slow-loris vector (S4.T7). WriteTimeout is
+	// deliberately omitted: it would span the whole response copy and trip on a
+	// slow-but-healthy upstream. IdleTimeout is left unset so net/http derives
+	// the idle bound from ReadTimeout, preserving the pre-Sprint-5 behavior.
+	srv.ReadTimeout = *cfg.Server.ReadTimeout
+	return srv, nil
 }
 
 // buildMetricsHandler returns the metrics listener's handler: the Prometheus

@@ -87,6 +87,14 @@ const (
 	// slow-loris body; the server's ReadHeaderTimeout covers slow headers.
 	// S4.T7.
 	DefaultReadTimeout = 60 * time.Second
+	// DefaultIdleTimeout is how long an idle client keep-alive connection is
+	// held open before it is closed, when server.idle_timeout is omitted. In
+	// HTTP/2 modes (TLS, h2c) it is the primary connection-lifetime bound:
+	// ReadTimeout is disabled there because it spans the whole multiplexed
+	// connection, and IdleTimeout is what reclaims idle connections. Kept at
+	// the stdlib transport default (90s); generous for HTTP/2 keep-alives.
+	// S5.T1.
+	DefaultIdleTimeout = 90 * time.Second
 	// DefaultDialTimeout bounds dialing a backend when transport.dial_timeout
 	// is omitted. LAN backends accept in milliseconds; 5s is generous headroom
 	// that still fails a non-accepting address fast. S4.T8.
@@ -112,7 +120,15 @@ const (
 // rather than flat top-level keys, so each subsystem's settings stay grouped
 // and the schema remains legible as it grows. See ADR-0011 decision 10.
 type Config struct {
-	Listen         string               `yaml:"listen"`
+	Listen string `yaml:"listen"`
+	// TLS selects TLS mode when the `tls:` block is present (non-nil). The
+	// block's presence — not an enum field — is the mode switch, so there is
+	// no second source of truth that can disagree with it (S5.T1).
+	TLS *TLSConfig `yaml:"tls"`
+	// H2C selects cleartext HTTP/2 mode when true. It is mutually exclusive
+	// with a present `tls:` block; Validate rejects them together naming both
+	// (S5.T1). Plain HTTP is the absence of both.
+	H2C            bool                 `yaml:"h2c"`
 	Algorithm      string               `yaml:"algorithm"`
 	Health         HealthConfig         `yaml:"health"`
 	Circuit        CircuitConfig        `yaml:"circuit"`
@@ -122,6 +138,19 @@ type Config struct {
 	Server         ServerConfig         `yaml:"server"`
 	Transport      TransportConfig      `yaml:"transport"`
 	Backends       []BackendConfig      `yaml:"backends"`
+}
+
+// TLSConfig holds the client listener's TLS settings. A non-nil *TLSConfig on
+// Config is the presence switch for TLS mode; the pair is loaded by app.Build
+// and installed on the client http.Server, which then negotiates HTTP/2 via
+// ALPN automatically. Deliberately minimal: no min_version, cipher suites, or
+// OCSP — Go's crypto/tls defaults are secure, and adding those knobs later is a
+// backwards-compatible extension point (S5.T1).
+type TLSConfig struct {
+	// CertFile is the path to the PEM-encoded certificate (or chain).
+	CertFile string `yaml:"cert_file"`
+	// KeyFile is the path to the PEM-encoded private key.
+	KeyFile string `yaml:"key_file"`
 }
 
 // HealthConfig holds the active-health-check tunables shared by every backend.
@@ -170,9 +199,9 @@ type HealthEndpointConfig struct {
 	Listen *string `yaml:"listen"`
 }
 
-// ServerConfig holds the client-facing HTTP server's tunables. It is one field
-// today, nested like the other subsystems so its shape can grow without a flat
-// top-level key, and follows the same nil-means-omitted convention.
+// ServerConfig holds the client-facing HTTP server's tunables. Nested like the
+// other subsystems so its shape can grow without a flat top-level key, and
+// following the same nil-means-omitted convention.
 //
 // WriteTimeout is deliberately absent: the standard library's WriteTimeout
 // spans end-of-request-headers through the entire response body copy, so a
@@ -188,11 +217,21 @@ type ServerConfig struct {
 	// "server" when it differs, so a reload that would silently change it is
 	// rejected (S4.T7).
 	//
-	// It also bounds an idle keep-alive connection: net/http derives the idle
-	// timeout as IdleTimeout else ReadTimeout, so with no IdleTimeout set this
-	// value is the idle bound too — dead clients cannot accumulate idle
-	// connections past it.
+	// It applies in plain HTTP mode only. In the HTTP/2 modes (TLS, h2c) the
+	// server sets ReadTimeout to 0 and uses IdleTimeout instead, because
+	// ReadTimeout spans the whole connection and would kill every multiplexed
+	// stream on it (S5.T1). In plain mode it also bounds an idle keep-alive
+	// connection: net/http derives the idle timeout as IdleTimeout else
+	// ReadTimeout, so with no IdleTimeout set this value is the idle bound
+	// too — dead clients cannot accumulate idle connections past it.
 	ReadTimeout *time.Duration `yaml:"read_timeout"`
+	// IdleTimeout bounds an idle client keep-alive connection. Omitted →
+	// DefaultIdleTimeout. It is the primary connection-lifetime bound in the
+	// HTTP/2 modes, where ReadTimeout is disabled (S5.T1). In plain HTTP mode
+	// it is left unset by app.Build, preserving the pre-Sprint-5 behavior that
+	// derived the idle bound from ReadTimeout. Not reloadable:
+	// NonBackendChanges names "server" when it differs.
+	IdleTimeout *time.Duration `yaml:"idle_timeout"`
 }
 
 // TransportConfig holds the upstream http.Transport tunables. Nested like the
@@ -329,10 +368,11 @@ func expandEnv(backendName, raw string) (string, error) {
 	return b.String(), nil
 }
 
-// Validate checks the config for correctness: non-empty Listen, at least
-// one backend, each backend URL parseable with a host, unique backend
-// names, a recognized Algorithm value, positive Sprint 3 durations, and
-// host:port-valid metrics/health-endpoint listen addresses.
+// Validate checks the config for correctness: non-empty Listen, at most one
+// listener mode, a complete tls: block when present, at least one backend,
+// each backend URL parseable with a host, unique backend names, a recognized
+// Algorithm value, positive Sprint 3 durations, and host:port-valid
+// metrics/health-endpoint listen addresses.
 //
 // Validate normalizes before it validates: an empty Algorithm is set to
 // AlgorithmRoundRobin, and each omitted Sprint 3 duration or listen address is
@@ -342,8 +382,8 @@ func expandEnv(backendName, raw string) (string, error) {
 // these mutations (revisit if defaults grow further).
 //
 // Validation is fail-fast: the first problem is returned. The order is
-// Listen → backends count → per-backend name/URL → name uniqueness →
-// algorithm → health/circuit/reload/server/transport durations →
+// Listen → listener mode → backends count → per-backend name/URL → name
+// uniqueness → algorithm → health/circuit/reload/server/transport durations →
 // metrics/health_endpoint listen.
 func (c *Config) Validate() error {
 	if c.Algorithm == "" {
@@ -355,6 +395,18 @@ func (c *Config) Validate() error {
 	}
 	if err := validateListen(c.Listen); err != nil {
 		return err
+	}
+
+	if c.TLS != nil && c.H2C {
+		return errors.New("config: h2c and tls are mutually exclusive; remove one")
+	}
+	if c.TLS != nil {
+		if c.TLS.CertFile == "" {
+			return errors.New("config: tls cert_file must not be empty")
+		}
+		if c.TLS.KeyFile == "" {
+			return errors.New("config: tls key_file must not be empty")
+		}
 	}
 
 	if len(c.Backends) == 0 {
@@ -393,9 +445,10 @@ func (c *Config) Validate() error {
 	return normalizeListen("health_endpoint listen", &c.HealthEndpoint.Listen, DefaultHealthEndpointListen)
 }
 
-// normalizeAndValidateDurations applies the Sprint 3, S4.T7, and S4.T8 defaults
-// to every omitted duration and rejects an explicitly-set non-positive one.
-// Called last so the pre-Sprint-3 checks keep their fail-fast order.
+// normalizeAndValidateDurations applies the Sprint 3, S4.T7, S4.T8, and S5.T1
+// defaults to every omitted duration and rejects an explicitly-set non-positive
+// one. Called last so the listener and backend checks keep their fail-fast
+// order.
 func (c *Config) normalizeAndValidateDurations() error {
 	if err := normalizeDuration("health probe_interval", &c.Health.ProbeInterval, DefaultProbeInterval); err != nil {
 		return err
@@ -410,6 +463,9 @@ func (c *Config) normalizeAndValidateDurations() error {
 		return err
 	}
 	if err := normalizeDuration("server read_timeout", &c.Server.ReadTimeout, DefaultReadTimeout); err != nil {
+		return err
+	}
+	if err := normalizeDuration("server idle_timeout", &c.Server.IdleTimeout, DefaultIdleTimeout); err != nil {
 		return err
 	}
 	if err := normalizeDuration("transport dial_timeout", &c.Transport.DialTimeout, DefaultDialTimeout); err != nil {

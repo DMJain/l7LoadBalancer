@@ -191,6 +191,7 @@ func writeE2EConfig(t *testing.T, path, listen string, fbs []*flippableBackend) 
 	cooldown := time.Hour
 	drainWindow := e2eDrainWindow
 	readTimeout := config.DefaultReadTimeout
+	idleTimeout := config.DefaultIdleTimeout
 	dialTimeout := config.DefaultDialTimeout
 	responseHeaderTimeout := config.DefaultResponseHeaderTimeout
 	maxIdleConnsPerHost := config.DefaultMaxIdleConnsPerHost
@@ -208,7 +209,7 @@ func writeE2EConfig(t *testing.T, path, listen string, fbs []*flippableBackend) 
 		Metrics:        config.MetricsConfig{Listen: &metricsListen},
 		HealthEndpoint: config.HealthEndpointConfig{Listen: &healthListen},
 		Reload:         config.ReloadConfig{DrainWindow: &drainWindow},
-		Server:         config.ServerConfig{ReadTimeout: &readTimeout},
+		Server:         config.ServerConfig{ReadTimeout: &readTimeout, IdleTimeout: &idleTimeout},
 		Transport: config.TransportConfig{
 			DialTimeout:           &dialTimeout,
 			ResponseHeaderTimeout: &responseHeaderTimeout,

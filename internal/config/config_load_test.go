@@ -233,6 +233,56 @@ backends:
 			wantErr:   true,
 			errSubstr: "cannot unmarshal",
 		},
+		{
+			name:     "server idle_timeout decodes from YAML without defaulting",
+			contents: "listen: \":8080\"\nserver:\n  idle_timeout: \"120s\"\n",
+			check: func(t *testing.T, cfg *Config) {
+				t.Helper()
+				require.NotNil(t, cfg.Server.IdleTimeout)
+				assert.Equal(t, 120*time.Second, *cfg.Server.IdleTimeout)
+			},
+		},
+		{
+			name:     "omitted server idle_timeout is left nil by Load",
+			contents: "listen: \":8080\"\n",
+			check: func(t *testing.T, cfg *Config) {
+				t.Helper()
+				assert.Nil(t, cfg.Server.IdleTimeout)
+			},
+		},
+		{
+			name:     "tls block decodes from YAML without validation",
+			contents: "listen: \":8443\"\ntls:\n  cert_file: \"certs/server.crt\"\n  key_file: \"certs/server.key\"\n",
+			check: func(t *testing.T, cfg *Config) {
+				t.Helper()
+				require.NotNil(t, cfg.TLS)
+				assert.Equal(t, "certs/server.crt", cfg.TLS.CertFile)
+				assert.Equal(t, "certs/server.key", cfg.TLS.KeyFile)
+			},
+		},
+		{
+			name:     "omitted tls block is left nil by Load",
+			contents: "listen: \":8080\"\n",
+			check: func(t *testing.T, cfg *Config) {
+				t.Helper()
+				assert.Nil(t, cfg.TLS)
+				assert.False(t, cfg.H2C)
+			},
+		},
+		{
+			name:      "unknown field inside tls section is rejected",
+			contents:  "listen: \":8443\"\ntls:\n  cert_fil: \"certs/server.crt\"\n",
+			wantErr:   true,
+			errSubstr: "cert_fil",
+		},
+		{
+			name:     "h2c flag decodes from YAML",
+			contents: "listen: \":8080\"\nh2c: true\n",
+			check: func(t *testing.T, cfg *Config) {
+				t.Helper()
+				assert.True(t, cfg.H2C)
+			},
+		},
 	}
 
 	for _, tc := range cases {

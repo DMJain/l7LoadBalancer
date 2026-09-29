@@ -44,13 +44,14 @@ func DiffBackends(oldCfg, newCfg *Config) BackendDiff {
 }
 
 // NonBackendChanges returns the names of the non-backend config fields that
-// differ between oldCfg and newCfg, in the fixed order listen, algorithm,
-// health, circuit, metrics, health_endpoint, reload, server, transport. A
-// non-empty result is what makes a reload be rejected whole; only the backend
-// list is reloadable. A section with any differing sub-field is named once by
-// its section name. See ADR-0015 decision 4, ADR-0016 decision 1
+// differ between oldCfg and newCfg, in the fixed order listen, tls, h2c,
+// algorithm, health, circuit, metrics, health_endpoint, reload, server,
+// transport. A non-empty result is what makes a reload be rejected whole; only
+// the backend list is reloadable. A section with any differing sub-field is
+// named once by its section name. See ADR-0015 decision 4, ADR-0016 decision 1
 // (reload.drain_window is a non-backend field and therefore not reloadable),
-// S4.T7 (server.read_timeout likewise), and S4.T8 (transport likewise).
+// S4.T7 (server.read_timeout likewise), S4.T8 (transport likewise), and S5.T1
+// (the listener mode — tls and h2c — and server.idle_timeout likewise).
 //
 // Both configs must be validated. Validate materializes every default (a
 // non-empty Algorithm and non-nil duration and listen pointers), so comparing
@@ -61,6 +62,12 @@ func NonBackendChanges(oldCfg, newCfg *Config) []string {
 	var changed []string
 	if oldCfg.Listen != newCfg.Listen {
 		changed = append(changed, "listen")
+	}
+	if !tlsConfigEqual(oldCfg.TLS, newCfg.TLS) {
+		changed = append(changed, "tls")
+	}
+	if oldCfg.H2C != newCfg.H2C {
+		changed = append(changed, "h2c")
 	}
 	if oldCfg.Algorithm != newCfg.Algorithm {
 		changed = append(changed, "algorithm")
@@ -81,7 +88,8 @@ func NonBackendChanges(oldCfg, newCfg *Config) []string {
 	if *oldCfg.Reload.DrainWindow != *newCfg.Reload.DrainWindow {
 		changed = append(changed, "reload")
 	}
-	if *oldCfg.Server.ReadTimeout != *newCfg.Server.ReadTimeout {
+	if *oldCfg.Server.ReadTimeout != *newCfg.Server.ReadTimeout ||
+		*oldCfg.Server.IdleTimeout != *newCfg.Server.IdleTimeout {
 		changed = append(changed, "server")
 	}
 	if *oldCfg.Transport.DialTimeout != *newCfg.Transport.DialTimeout ||
@@ -91,6 +99,17 @@ func NonBackendChanges(oldCfg, newCfg *Config) []string {
 		changed = append(changed, "transport")
 	}
 	return changed
+}
+
+// tlsConfigEqual reports whether two TLS blocks are equivalent for reload
+// purposes: both absent, or both present with identical cert and key paths. A
+// nil block is not equal to a present one — adding or removing `tls:` changes
+// the listener mode and must block a reload (S5.T1).
+func tlsConfigEqual(a, b *TLSConfig) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return a.CertFile == b.CertFile && a.KeyFile == b.KeyFile
 }
 
 // BackendIdentity is the identity key for a backend in a reload diff: the
