@@ -87,15 +87,18 @@ Strategic plan. Each sprint = one weekend of focused work. Tasks under each spri
 - HTTP/2 client-facing: TLS with self-signed cert + ALPN; also h2c via `golang.org/x/net/http2/h2c`.
 - HTTP/2 to backends: `http.Transport` with `ForceAttemptHTTP2: true`.
 - Benchmark rig in `bench/`: docker-compose with LB + Nginx + 4 backends and a vegeta load generator (wrk dropped — no HTTP/2 support; ADR-0020), response-size matrix (200B, 10KB, 1MB), and protocol and failure-mode benchmarks.
-- S5.T6 — vegeta peak-throughput discovery: binary-search the highest sustainable request rate (seed, double, bisect); thresholds fixed in `bench/run.sh`, not flags.
-- S5.T7 — vegeta fixed-rate latency profiling: p50 / p99 / p99.9 at 30/50/70/90% of discovered peak (`LATENCY_RATES_PCT` in `bench/run.sh`), with HDR histograms.
+- S5.T6 — the published run (absorbs S5.T7): vegeta peak-throughput discovery (binary-search the highest sustainable request rate — seed, double, bisect; thresholds fixed in `bench/run.sh`, not flags) plus the fixed-rate latency sweep at 30/50/70/90% of the discovered peak (`LATENCY_RATES_PCT`), because the sweep's rates are fractions of the peak found in the same invocation.
+- Nearest-equivalent Nginx comparisons: every algorithm runs head-to-head with Nginx — round-robin and least-connections **matched**, consistent-hash (`hash $remote_addr consistent`, no bounded loads) and p2c-ewma (`random two least_conn`, no latency signal) **nearest-equivalent**, each stating its gap.
+- A `degraded` slice: one backend 50 ms slow for the whole run, all four algorithms × both competitors at one absolute rate, headline result the per-backend request share.
+- Reload runs: a **no-op reload** and a **drain reload** (one backend removed under load), each judged PASS/FAIL against criteria fixed before the run — zero non-2xx/transport errors, post-reload p99 ≤ 2× pre-reload p99, and the removed backend receives zero arrivals after the reload is applied.
+- `make bench-repro` — the one-command reproducer (preflight, certs, images, smoke, full matrix) behind the exit criterion; S5.T11 (orchestration manifests) is dropped per ADR-0019.
 - Published numbers: p50 / p99 / p99.9 and throughput ceilings, with `.txt` summaries and `.hdr` histograms committed alongside the harness.
 - README with architecture diagram (Mermaid or Excalidraw export).
 - `docs/design-decisions.md` — rationale-heavy doc covering every non-trivial choice.
 - `docs/what-id-do-differently.md` — honest retrospective.
 
 **Exit criteria**:
-- `bench/run.sh` reproduces all published numbers from a clean checkout.
+- `make bench-repro` (built on `bench/run.sh`) reproduces all published numbers from a clean checkout, refusing to start on a dirty tree, running containers, or fewer than eight Docker vCPUs.
 - README opens with architecture diagram and 3-sentence project summary.
 - Design decisions doc covers: why stdlib over frameworks, why bounded-loads CH, why P2C, reload architecture, failure-mode interaction, and honest benchmark comparison with Nginx.
 

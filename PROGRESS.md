@@ -227,26 +227,86 @@ Scoped in `.scratch/s5-t1-t4-http2-benchmarks/` as one spec plus six tickets: 01
 
 ## Sprint 5 — Benchmark Execution & Publication (S5.T5–T12)
 
-Scoped in `.scratch/s5-t5-t12-bench-execution/` as one bundle spec plus 20 tickets. The bundle's `spec.md` is the authoritative scope boundary; every story and implementation decision is tagged with exactly one ticket there. Order: S5.T5.1 → S5.T5.2 → S5.T5.3 (the smoke gate), with S5.T5.5.1 → S5.T5.5.2 and S5.T5.6 running in parallel on disjoint modules; then S5.T5.7.1 → S5.T5.7.2 → S5.T5.7.3 → S5.T12 → S5.T8.1 → S5.T8.2 → S5.T9.1 → S5.T9.2 → S5.T6 → S5.T10.1/2/3 (built against fixtures) → S5.T10.4. Everything from S5.T5.7.1 onward is serial because each edits `bench/run.sh`. **S5.T7 is merged into S5.T6** — the latency sweep's rates are fractions of the peak found in the same invocation. **S5.T11 is dropped per ADR-0019** — orchestration manifests are unused surface for a target the project does not adopt. S5.D0 is in progress; S5.T5–S5.T10 are pending.
+Scoped in `.scratch/s5-t5-t12-bench-execution/` as one bundle spec plus 20 tickets. The bundle's `spec.md` is the authoritative scope boundary; every story and implementation decision is tagged with exactly one ticket there. Order: S5.T5.1 → S5.T5.2 → S5.T5.3 (the smoke gate), with S5.T5.5.1 → S5.T5.5.2 and S5.T5.6 running in parallel on disjoint modules; then S5.T5.7.1 → S5.T5.7.2 → S5.T5.7.3 → S5.T12 → S5.T8.1 → S5.T8.2 → S5.T9.1 → S5.T9.2 → S5.T6 → S5.T10.1/2/3 (built against fixtures) → S5.T10.4. Everything from S5.T5.7.1 onward is serial because each edits `bench/run.sh`. **S5.T7 is merged into S5.T6** — the latency sweep's rates are fractions of the peak found in the same invocation. **S5.T11 is dropped per ADR-0019** — orchestration manifests are unused surface for a target the project does not adopt. S5.D0 is [DONE]; S5.T5–S5.T10 are pending.
 
-- [IN_PROGRESS] S5.D0 — Tracking amendment
-- [PENDING] S5.T5.1 — Nginx configs mirror the LB layout (rename-only prefactor)
-- [PENDING] S5.T5.2 — Nearest-equivalent competitors
-- [PENDING] S5.T5.3 — Smoke slice
-- [PENDING] S5.T5.5.1 — Backend logging switch
-- [PENDING] S5.T5.5.2 — Backend arrival counter
-- [PENDING] S5.T5.6 — LB startup runtime fields
-- [PENDING] S5.T5.7.1 — CPU pinning and run-time verification
-- [PENDING] S5.T5.7.2 — Progress and ETA lines
-- [PENDING] S5.T5.7.3 — Provenance record
-- [PENDING] S5.T12 — `make bench-repro` — one-command reproducer
-- [PENDING] S5.T8.1 — Hot-key distribution on consistent-hash runs
-- [PENDING] S5.T8.2 — `degraded` slice — static slow backend
-- [PENDING] S5.T9.1 — No-op reload with a pass/fail verdict
-- [PENDING] S5.T9.2 — Drain reload
-- [PENDING] S5.T10.1 — Results generator — core, protocol, methodology
-- [PENDING] S5.T10.2 — Results generator — failure, degraded, hot-key sections
-- [PENDING] S5.T10.3 — Narrative number check
-- [PENDING] S5.T6 — Published run (absorbs S5.T7)
-- [PENDING] S5.T10.4 — `RESULTS.md` narrative
+- [DONE] S5.D0 — Tracking amendment
+  - Spec: `.scratch/s5-t5-t12-bench-execution/issues/01-d0-tracking-amendment.md`
+  - Depends: none
+  - Completed: 2026-09-30. PROGRESS.md gains this bundle paragraph and the 19 `[TODO]` entries below with their blocking edges; S5.T7 recorded as merged into S5.T6 and S5.T11 as dropped per ADR-0019; S5.T13–T15 listed as proposed. MILESTONES.md Sprint 5 deliverables gain the nearest-equivalent comparisons, the `degraded` slice, the no-op and drain reload runs, and `make bench-repro`. The spec and the four `CONTEXT.md` glossary entries (**No-op reload**, **Competitor**, **Nearest-equivalent**, **Hot key**) landed in `96853d3`. Docs-only, no code or harness changes (TDD-exempt per AGENTS.md).
+
+- [TODO] S5.T5.1 — Nginx configs mirror the LB layout (rename-only prefactor)
+  - Spec: `.scratch/s5-t5-t12-bench-execution/issues/02-t5-1-nginx-layout-rename.md`
+  - Depends: S5.D0
+
+- [TODO] S5.T5.2 — Nearest-equivalent competitors
+  - Spec: `.scratch/s5-t5-t12-bench-execution/issues/03-t5-2-nearest-equivalent-competitors.md`
+  - Depends: S5.T5.1
+
+- [TODO] S5.T5.3 — Smoke slice
+  - Spec: `.scratch/s5-t5-t12-bench-execution/issues/04-t5-3-smoke-slice.md`
+  - Depends: S5.T5.2
+
+- [TODO] S5.T5.5.1 — Backend logging switch
+  - Spec: `.scratch/s5-t5-t12-bench-execution/issues/05-t5-5-1-backend-logging-switch.md`
+  - Depends: S5.D0
+
+- [TODO] S5.T5.5.2 — Backend arrival counter
+  - Spec: `.scratch/s5-t5-t12-bench-execution/issues/06-t5-5-2-backend-arrival-counter.md`
+  - Depends: S5.T5.5.1
+
+- [TODO] S5.T5.6 — LB startup runtime fields
+  - Spec: `.scratch/s5-t5-t12-bench-execution/issues/07-t5-6-lb-startup-runtime-fields.md`
+  - Depends: S5.D0
+
+- [TODO] S5.T5.7.1 — CPU pinning and run-time verification
+  - Spec: `.scratch/s5-t5-t12-bench-execution/issues/08-t5-7-1-cpu-pinning-and-verification.md`
+  - Depends: S5.T5.3, S5.T5.6
+
+- [TODO] S5.T5.7.2 — Progress and ETA lines
+  - Spec: `.scratch/s5-t5-t12-bench-execution/issues/09-t5-7-2-progress-and-eta.md`
+  - Depends: S5.T5.7.1
+
+- [TODO] S5.T5.7.3 — Provenance record
+  - Spec: `.scratch/s5-t5-t12-bench-execution/issues/10-t5-7-3-provenance-record.md`
+  - Depends: S5.T5.7.2
+
+- [TODO] S5.T12 — `make bench-repro` — one-command reproducer
+  - Spec: `.scratch/s5-t5-t12-bench-execution/issues/11-t12-make-bench-repro.md`
+  - Depends: S5.T5.5.2, S5.T5.7.3
+
+- [TODO] S5.T8.1 — Hot-key distribution on consistent-hash runs
+  - Spec: `.scratch/s5-t5-t12-bench-execution/issues/12-t8-1-hot-key-distribution.md`
+  - Depends: S5.T12
+
+- [TODO] S5.T8.2 — `degraded` slice — static slow backend
+  - Spec: `.scratch/s5-t5-t12-bench-execution/issues/13-t8-2-degraded-slice.md`
+  - Depends: S5.T8.1
+
+- [TODO] S5.T9.1 — No-op reload with a pass/fail verdict
+  - Spec: `.scratch/s5-t5-t12-bench-execution/issues/14-t9-1-noop-reload-verdict.md`
+  - Depends: S5.T8.2
+
+- [TODO] S5.T9.2 — Drain reload
+  - Spec: `.scratch/s5-t5-t12-bench-execution/issues/15-t9-2-drain-reload.md`
+  - Depends: S5.T9.1, S5.T5.5.2
+
+- [TODO] S5.T10.1 — Results generator — core, protocol, methodology
+  - Spec: `.scratch/s5-t5-t12-bench-execution/issues/16-t10-1-generator-core-protocol-methodology.md`
+  - Depends: S5.T5.7.3
+
+- [TODO] S5.T10.2 — Results generator — failure, degraded, hot-key sections
+  - Spec: `.scratch/s5-t5-t12-bench-execution/issues/17-t10-2-generator-failure-degraded-hotkey.md`
+  - Depends: S5.T9.2, S5.T10.1
+
+- [TODO] S5.T10.3 — Narrative number check
+  - Spec: `.scratch/s5-t5-t12-bench-execution/issues/18-t10-3-narrative-number-check.md`
+  - Depends: S5.T10.1
+
+- [TODO] S5.T6 — Published run (absorbs S5.T7)
+  - Spec: `.scratch/s5-t5-t12-bench-execution/issues/19-t6-published-run.md`
+  - Depends: S5.T9.2
+
+- [TODO] S5.T10.4 — `RESULTS.md` narrative
+  - Spec: `.scratch/s5-t5-t12-bench-execution/issues/20-t10-4-results-narrative.md`
+  - Depends: S5.T10.2, S5.T10.3, S5.T6
 
