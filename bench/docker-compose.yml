@@ -1,0 +1,95 @@
+# Benchmark rig (S5.T4-infra): the LB, Nginx, four dummy backends, and a
+# vegeta load generator on a single flat bridge network. Container-to-container
+# networking is identical for every service, so host OS networking variability
+# cancels out of the LB-vs-Nginx comparison (spec §22–§23).
+#
+# Default `docker compose up` runs the plain-HTTP topology:
+#   lb     → bench/configs/http11/roundrobin.yaml
+#   nginx  → bench/nginx/http11.conf
+#   backends serve plain HTTP
+#
+# The TLS+HTTP/2 protocol slice is the same topology with the h2 configs. It
+# needs the shared cert and the backend TLS env vars (the h2 LB configs are
+# issue 06):
+#   scripts/generate-cert.sh
+#   BACKEND_TLS_CERT_FILE=/certs/server.crt BACKEND_TLS_KEY_FILE=/certs/server.key \
+#     LB_CONFIG=./configs/h2/roundrobin.yaml NGINX_CONF=h2.conf \
+#     docker compose up
+#
+# Vegeta idles until used (its entrypoint is overridden to sleep so `up` can
+# start it). Drive a run in-compose with an explicit entrypoint:
+#   docker compose run --rm --entrypoint vegeta vegeta attack -targets=/dev/stdin ...
+#
+# The cert script output is mounted into every TLS-capable service — lb, nginx,
+# and the backends (spec: cert output is mounted into TLS-enabled containers);
+# in the plain default it is simply unused.
+
+name: l7loadbalancer-bench
+
+# Shared backend definition: four identical dummy backends differing only in
+# -name. TLS_* are empty by default (plain HTTP); the h2 slice sets them, and
+# the empty values are treated as "unset" by the backend's env check.
+x-backend: &backend
+  build:
+    context: ../deployments/docker/dummy-backend
+  environment:
+    TLS_CERT_FILE: ${BACKEND_TLS_CERT_FILE:-}
+    TLS_KEY_FILE: ${BACKEND_TLS_KEY_FILE:-}
+  volumes:
+    - ../certs:/certs:ro
+
+services:
+  backend1:
+    <<: *backend
+    command: ["-name", "backend1"]
+
+  backend2:
+    <<: *backend
+    command: ["-name", "backend2"]
+
+  backend3:
+    <<: *backend
+    command: ["-name", "backend3"]
+
+  backend4:
+    <<: *backend
+    command: ["-name", "backend4"]
+
+  lb:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    depends_on: [backend1, backend2, backend3, backend4]
+    ports:
+      - "8080:8080" # client traffic
+      - "8081:8081" # health endpoint (probe + demo)
+    volumes:
+      # Default is the plain-HTTP round-robin config; swap in an h2 config for
+      # the protocol slice (S5.T4-infra). Relative paths resolve against bench/.
+      - ${LB_CONFIG:-./configs/http11/roundrobin.yaml}:/etc/l7lb/config.yaml:ro
+      - ../certs:/certs:ro
+    healthcheck:
+      test: ["CMD", "/l7lb", "probe", "http://127.0.0.1:8081/livez"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+
+  nginx:
+    image: nginx:1.27-alpine
+    depends_on: [backend1, backend2, backend3, backend4]
+    ports:
+      - "8090:80" # plain HTTP/1.1
+      - "8443:443" # TLS + HTTP/2
+    volumes:
+      # Both configs are mounted; the default selects http11.conf via NGINX_CONF.
+      - ./nginx:/etc/nginx/bench:ro
+      - ../certs:/certs:ro
+    command: ["nginx", "-g", "daemon off;", "-c", "/etc/nginx/bench/${NGINX_CONF:-http11.conf}"]
+
+  vegeta:
+    build:
+      context: ./vegeta
+    depends_on: [lb]
+    # Overridden so `docker compose up` leaves vegeta idling; `compose run`
+    # passes `--entrypoint vegeta` (see the header) to execute a real run.
+    entrypoint: ["/bin/sleep", "2147483647"]
