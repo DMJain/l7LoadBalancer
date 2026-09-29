@@ -121,9 +121,9 @@ func TestBuildTLSModeServerConstruction(t *testing.T) {
 	assert.Nil(t, application.healthSrv.TLSConfig, "health endpoint stays plain HTTP")
 }
 
-// TestBuildPlainModeServerConstruction pins the unchanged plain-HTTP path: no
-// TLSConfig, ReadTimeout from config, and IdleTimeout left unset so net/http
-// derives the idle bound from ReadTimeout as it did before Sprint 5.
+// TestBuildPlainModeServerConstruction pins the plain-HTTP path: no TLSConfig,
+// ReadTimeout from config, and IdleTimeout from config (the knob is never
+// accepted-but-ignored).
 func TestBuildPlainModeServerConstruction(t *testing.T) {
 	silenceDefault(t)
 
@@ -133,8 +133,10 @@ func TestBuildPlainModeServerConstruction(t *testing.T) {
 	t.Cleanup(backend.Close)
 
 	read := 30 * time.Second
+	idle := 75 * time.Second
 	cfg := testConfig([]config.BackendConfig{{Name: "backend-a", URL: backend.URL}})
 	cfg.Server.ReadTimeout = &read
+	cfg.Server.IdleTimeout = &idle
 	require.NoError(t, cfg.Validate())
 
 	application, err := Build(cfg, discardLogger())
@@ -142,7 +144,7 @@ func TestBuildPlainModeServerConstruction(t *testing.T) {
 
 	assert.Nil(t, application.srv.TLSConfig)
 	assert.Equal(t, read, application.srv.ReadTimeout)
-	assert.Zero(t, application.srv.IdleTimeout)
+	assert.Equal(t, idle, application.srv.IdleTimeout)
 }
 
 // TestBuildTLSMissingCertFails proves the cert pair is loaded at build time, so

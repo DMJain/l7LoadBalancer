@@ -202,6 +202,12 @@ func TestNonBackendChanges(t *testing.T) {
 			want: []string{"tls"},
 		},
 		{
+			name: "tls block removed differs",
+			old:  oneBackendConfigYAML(base + "tls:\n  cert_file: \"a.crt\"\n  key_file: \"a.key\"\n"),
+			new:  oneBackendConfigYAML(base),
+			want: []string{"tls"},
+		},
+		{
 			name: "h2c differs",
 			old:  oneBackendConfigYAML(base),
 			new:  oneBackendConfigYAML(base + "h2c: true\n"),

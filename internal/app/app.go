@@ -340,25 +340,28 @@ func serve(srv *http.Server, label string, errCh chan<- runError) {
 }
 
 // buildClientServer constructs the client-facing http.Server for the config's
-// listener mode. Plain HTTP sets ReadTimeout from config (the slow-loris bound
-// of S4.T7). TLS mode loads the configured cert pair into the server's
-// TLSConfig up front — so a bad path is a startup error, not a silent plaintext
-// listener — which also makes net/http's ListenAndServeTLS negotiate HTTP/2 via
-// ALPN. It deliberately does NOT set srv.TLSNextProto: an empty map there would
-// silently disable HTTP/2 (S5.T1).
+// listener mode. IdleTimeout is taken from config in every mode, so the knob is
+// never accepted-but-ignored. Plain HTTP sets ReadTimeout from config (the
+// slow-loris bound of S4.T7). TLS mode loads the configured cert pair into the
+// server's TLSConfig up front — so a bad path is a startup error, not a silent
+// plaintext listener — which also makes net/http's ListenAndServeTLS negotiate
+// HTTP/2 via ALPN. It deliberately does NOT set srv.TLSNextProto: an empty map
+// there would silently disable HTTP/2 (S5.T1).
 //
 // ReadTimeout is hardcoded to 0 in TLS mode, not configurable. net/http's
 // ReadTimeout applies to the whole connection, so on a multiplexed HTTP/2
 // connection it would kill every active stream after N seconds regardless of
 // activity; HTTP/2 stream-level flow control is the slow-client bound instead
 // (see https://pkg.go.dev/net/http#Server.ReadTimeout and the HTTP/2
-// MaxConcurrentStreams default of 250). IdleTimeout, set from config, is what
-// reclaims idle connections. h2c mode joins this branch in a later ticket.
+// MaxConcurrentStreams default of 250). IdleTimeout is what reclaims idle
+// connections. h2c mode joins this branch in a later ticket, where it will
+// likewise disable ReadTimeout.
 func buildClientServer(cfg *config.Config, handler http.Handler) (*http.Server, error) {
 	srv := &http.Server{
 		Addr:              cfg.Listen,
 		Handler:           handler,
 		ReadHeaderTimeout: readHeaderTimeout,
+		IdleTimeout:       *cfg.Server.IdleTimeout,
 	}
 	if cfg.TLS != nil {
 		cert, err := tls.LoadX509KeyPair(cfg.TLS.CertFile, cfg.TLS.KeyFile)
@@ -366,14 +369,13 @@ func buildClientServer(cfg *config.Config, handler http.Handler) (*http.Server, 
 			return nil, fmt.Errorf("app: tls key pair load failed: %w", err)
 		}
 		srv.TLSConfig = &tls.Config{Certificates: []tls.Certificate{cert}}
-		srv.IdleTimeout = *cfg.Server.IdleTimeout
+		// ReadTimeout deliberately left at its zero value (see above).
 		return srv, nil
 	}
 	// Plain HTTP: ReadTimeout bounds the full client request read including the
 	// body, the slow-body slow-loris vector (S4.T7). WriteTimeout is
 	// deliberately omitted: it would span the whole response copy and trip on a
-	// slow-but-healthy upstream. IdleTimeout is left unset so net/http derives
-	// the idle bound from ReadTimeout, preserving the pre-Sprint-5 behavior.
+	// slow-but-healthy upstream. See Config.ServerConfig.
 	srv.ReadTimeout = *cfg.Server.ReadTimeout
 	return srv, nil
 }

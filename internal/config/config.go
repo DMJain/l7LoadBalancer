@@ -91,9 +91,10 @@ const (
 	// held open before it is closed, when server.idle_timeout is omitted. In
 	// HTTP/2 modes (TLS, h2c) it is the primary connection-lifetime bound:
 	// ReadTimeout is disabled there because it spans the whole multiplexed
-	// connection, and IdleTimeout is what reclaims idle connections. Kept at
-	// the stdlib transport default (90s); generous for HTTP/2 keep-alives.
-	// S5.T1.
+	// connection, and IdleTimeout is what reclaims idle connections. 90s is a
+	// deliberate server keep-alive bound, generous enough for multiplexed
+	// HTTP/2 connections; http.Server itself has no non-zero default (left
+	// unset it would derive from ReadTimeout). S5.T1.
 	DefaultIdleTimeout = 90 * time.Second
 	// DefaultDialTimeout bounds dialing a backend when transport.dial_timeout
 	// is omitted. LAN backends accept in milliseconds; 5s is generous headroom
@@ -127,7 +128,9 @@ type Config struct {
 	TLS *TLSConfig `yaml:"tls"`
 	// H2C selects cleartext HTTP/2 mode when true. It is mutually exclusive
 	// with a present `tls:` block; Validate rejects them together naming both
-	// (S5.T1). Plain HTTP is the absence of both.
+	// (S5.T1). Plain HTTP is the absence of both. The h2c handler chain itself
+	// lands in a later ticket; until then h2c validates but the client server
+	// still serves plain HTTP.
 	H2C            bool                 `yaml:"h2c"`
 	Algorithm      string               `yaml:"algorithm"`
 	Health         HealthConfig         `yaml:"health"`
@@ -218,19 +221,15 @@ type ServerConfig struct {
 	// rejected (S4.T7).
 	//
 	// It applies in plain HTTP mode only. In the HTTP/2 modes (TLS, h2c) the
-	// server sets ReadTimeout to 0 and uses IdleTimeout instead, because
-	// ReadTimeout spans the whole connection and would kill every multiplexed
-	// stream on it (S5.T1). In plain mode it also bounds an idle keep-alive
-	// connection: net/http derives the idle timeout as IdleTimeout else
-	// ReadTimeout, so with no IdleTimeout set this value is the idle bound
-	// too — dead clients cannot accumulate idle connections past it.
+	// server sets ReadTimeout to 0 because ReadTimeout spans the whole
+	// connection and would kill every multiplexed stream on it; IdleTimeout is
+	// the connection-lifetime bound there instead (S5.T1).
 	ReadTimeout *time.Duration `yaml:"read_timeout"`
 	// IdleTimeout bounds an idle client keep-alive connection. Omitted →
-	// DefaultIdleTimeout. It is the primary connection-lifetime bound in the
-	// HTTP/2 modes, where ReadTimeout is disabled (S5.T1). In plain HTTP mode
-	// it is left unset by app.Build, preserving the pre-Sprint-5 behavior that
-	// derived the idle bound from ReadTimeout. Not reloadable:
-	// NonBackendChanges names "server" when it differs.
+	// DefaultIdleTimeout. It applies in every mode: in plain HTTP it is the
+	// idle keep-alive bound, and in the HTTP/2 modes it is the primary
+	// connection-lifetime bound, where ReadTimeout is disabled (S5.T1). Not
+	// reloadable: NonBackendChanges names "server" when it differs.
 	IdleTimeout *time.Duration `yaml:"idle_timeout"`
 }
 
