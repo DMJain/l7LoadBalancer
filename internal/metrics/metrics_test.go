@@ -48,20 +48,28 @@ func labelsMatch(pairs []*dto.LabelPair, want map[string]string) bool {
 func TestCollectorObserveRequest(t *testing.T) {
 	t.Parallel()
 	c := NewCollector()
-	labels := map[string]string{"backend": "backend-a", "method": "GET", "status_class": "2xx"}
+	labels := map[string]string{"backend": "backend-a", "method": "GET", "status_class": "2xx", "protocol": "http/1.1"}
 
 	assert.Nil(t, findMetric(t, c, "lb_requests_total", labels), "no series before the first observation")
 
-	c.ObserveRequest("backend-a", "GET", "2xx", 12*time.Millisecond)
-	c.ObserveRequest("backend-a", "GET", "2xx", 8*time.Millisecond)
+	c.ObserveRequest("backend-a", "GET", "2xx", "http/1.1", 12*time.Millisecond)
+	c.ObserveRequest("backend-a", "GET", "2xx", "http/1.1", 8*time.Millisecond)
 
 	m := findMetric(t, c, "lb_requests_total", labels)
 	require.NotNil(t, m)
 	assert.Equal(t, 2.0, m.GetCounter().GetValue())
 
+	// The protocol label is part of identity: an HTTP/2 request to the same
+	// backend/method/status is a distinct series (S5.T3-main).
+	c.ObserveRequest("backend-a", "GET", "2xx", "h2", 5*time.Millisecond)
+	h2 := findMetric(t, c, "lb_requests_total",
+		map[string]string{"backend": "backend-a", "method": "GET", "status_class": "2xx", "protocol": "h2"})
+	require.NotNil(t, h2, "a different protocol must be a distinct counter series")
+	assert.Equal(t, 1.0, h2.GetCounter().GetValue())
+
 	// A different label combination is a distinct series.
-	c.ObserveRequest("backend-b", "POST", "5xx", 30*time.Millisecond)
-	other := findMetric(t, c, "lb_requests_total", map[string]string{"backend": "backend-b", "method": "POST", "status_class": "5xx"})
+	c.ObserveRequest("backend-b", "POST", "5xx", "h2c", 30*time.Millisecond)
+	other := findMetric(t, c, "lb_requests_total", map[string]string{"backend": "backend-b", "method": "POST", "status_class": "5xx", "protocol": "h2c"})
 	require.NotNil(t, other)
 	assert.Equal(t, 1.0, other.GetCounter().GetValue())
 }
@@ -69,7 +77,7 @@ func TestCollectorObserveRequest(t *testing.T) {
 func TestCollectorObserveRequestHistogram(t *testing.T) {
 	t.Parallel()
 	c := NewCollector()
-	c.ObserveRequest("backend-a", "GET", "2xx", 12*time.Millisecond)
+	c.ObserveRequest("backend-a", "GET", "2xx", "http/1.1", 12*time.Millisecond)
 
 	h := findMetric(t, c, "lb_request_duration_seconds",
 		map[string]string{"backend": "backend-a", "method": "GET", "status_class": "2xx"}).GetHistogram()
@@ -247,19 +255,19 @@ func TestCollectorInstancesIndependent(t *testing.T) {
 	c1 := NewCollector()
 	c2 := NewCollector()
 
-	c1.ObserveRequest("backend-a", "GET", "2xx", time.Millisecond)
+	c1.ObserveRequest("backend-a", "GET", "2xx", "http/1.1", time.Millisecond)
 
 	assert.Nil(t, findMetric(t, c2, "lb_requests_total",
-		map[string]string{"backend": "backend-a", "method": "GET", "status_class": "2xx"}),
+		map[string]string{"backend": "backend-a", "method": "GET", "status_class": "2xx", "protocol": "http/1.1"}),
 		"a second collector must not see the first collector's series")
 	require.NotNil(t, findMetric(t, c1, "lb_requests_total",
-		map[string]string{"backend": "backend-a", "method": "GET", "status_class": "2xx"}))
+		map[string]string{"backend": "backend-a", "method": "GET", "status_class": "2xx", "protocol": "http/1.1"}))
 }
 
 func TestCollectorExpositionEndpoint(t *testing.T) {
 	t.Parallel()
 	c := NewCollector()
-	c.ObserveRequest("backend-a", "GET", "2xx", 12*time.Millisecond)
+	c.ObserveRequest("backend-a", "GET", "2xx", "http/1.1", 12*time.Millisecond)
 	c.SetBackendHealthy("backend-a", true)
 	c.SetCircuitState("backend-a", CircuitStateOpen)
 	c.SetActiveRequests("backend-a", 1)
@@ -278,7 +286,7 @@ func TestCollectorExpositionEndpoint(t *testing.T) {
 
 	// Label names are emitted in alphabetical order by the exposition format.
 	wants := []string{
-		`lb_requests_total{backend="backend-a",method="GET",status_class="2xx"} 1`,
+		`lb_requests_total{backend="backend-a",method="GET",protocol="http/1.1",status_class="2xx"} 1`,
 		`lb_request_duration_seconds_count{backend="backend-a",method="GET",status_class="2xx"} 1`,
 		`lb_request_duration_seconds_bucket{backend="backend-a",method="GET",status_class="2xx",le="+Inf"} 1`,
 		`lb_backend_healthy{backend="backend-a"} 1`,

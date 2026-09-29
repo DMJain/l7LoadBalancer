@@ -3,6 +3,7 @@ package proxy
 import (
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -93,7 +94,7 @@ func TestProxyObservesWholeRequestOnEveryExitPath(t *testing.T) {
 			method:     http.MethodPost,
 			path:       "/ok",
 			wantStatus: http.StatusOK,
-			wantLabels: map[string]string{"backend": "backend-a", "method": "POST", "status_class": "2xx"},
+			wantLabels: map[string]string{"backend": "backend-a", "method": "POST", "status_class": "2xx", "protocol": "http/1.1"},
 		},
 		{
 			name: "no healthy backend 503",
@@ -108,7 +109,7 @@ func TestProxyObservesWholeRequestOnEveryExitPath(t *testing.T) {
 			method:     http.MethodGet,
 			path:       "/none",
 			wantStatus: http.StatusServiceUnavailable,
-			wantLabels: map[string]string{"backend": "", "method": "GET", "status_class": "5xx"},
+			wantLabels: map[string]string{"backend": "", "method": "GET", "status_class": "5xx", "protocol": "http/1.1"},
 		},
 		{
 			name: "circuit-denied 503",
@@ -127,7 +128,7 @@ func TestProxyObservesWholeRequestOnEveryExitPath(t *testing.T) {
 			wantStatus: http.StatusServiceUnavailable,
 			// The real backend label, distinct from the no-healthy case above:
 			// Select identified "backend-a" before Allow denied the dispatch.
-			wantLabels: map[string]string{"backend": "backend-a", "method": "GET", "status_class": "5xx"},
+			wantLabels: map[string]string{"backend": "backend-a", "method": "GET", "status_class": "5xx", "protocol": "http/1.1"},
 		},
 		{
 			name: "backend error via ErrorHandler 502",
@@ -141,7 +142,7 @@ func TestProxyObservesWholeRequestOnEveryExitPath(t *testing.T) {
 			method:     http.MethodGet,
 			path:       "/dead",
 			wantStatus: http.StatusBadGateway,
-			wantLabels: map[string]string{"backend": "backend-a", "method": "GET", "status_class": "5xx"},
+			wantLabels: map[string]string{"backend": "backend-a", "method": "GET", "status_class": "5xx", "protocol": "http/1.1"},
 		},
 	}
 
@@ -158,7 +159,11 @@ func TestProxyObservesWholeRequestOnEveryExitPath(t *testing.T) {
 			assert.Equal(t, 1.0, counter.GetCounter().GetValue(),
 				"exactly one request was served, so the counter must be 1")
 
-			hist := labeledSeries(t, c, "lb_request_duration_seconds", tt.wantLabels)
+			// The protocol label rides only the request counter (S5.T3-main);
+			// the duration histogram keeps its three-label set.
+			histLabels := maps.Clone(tt.wantLabels)
+			delete(histLabels, "protocol")
+			hist := labeledSeries(t, c, "lb_request_duration_seconds", histLabels)
 			require.NotNil(t, hist, "the duration histogram must have a series for the expected labels")
 			assert.Equal(t, uint64(1), hist.GetHistogram().GetSampleCount(),
 				"exactly one observation must be recorded")
@@ -169,7 +174,7 @@ func TestProxyObservesWholeRequestOnEveryExitPath(t *testing.T) {
 			// unless that case explicitly expects it.
 			if tt.wantLabels["backend"] != "" {
 				blank := labeledSeries(t, c, "lb_requests_total",
-					map[string]string{"backend": "", "method": tt.method, "status_class": tt.wantLabels["status_class"]})
+					map[string]string{"backend": "", "method": tt.method, "status_class": tt.wantLabels["status_class"], "protocol": "http/1.1"})
 				assert.Nil(t, blank, "a request with a chosen backend must not be counted under backend=\"\"")
 			}
 		})

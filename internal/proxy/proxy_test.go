@@ -3,6 +3,7 @@ package proxy
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"io"
@@ -499,6 +500,37 @@ func TestProxyLogsRequestCompleteOnSuccess(t *testing.T) {
 	assert.Equal(t, "/ok", got["path"])
 	assert.NotEmpty(t, got["remote_addr"])
 	assert.Contains(t, got, "latency_ms")
+	// backend_proto exposes the backend-side protocol the round trip
+	// negotiated, distinct from the client-facing protocol label (S5.T3-main).
+	assert.Equal(t, "HTTP/1.1", got["backend_proto"])
+}
+
+// TestProtocolLabelMapsRequestProtocol pins the closed lb_requests_total
+// protocol vocabulary (S5.T3-main): HTTP/2 over TLS is "h2", cleartext HTTP/2
+// (h2c) is "h2c", and every HTTP/1.x request is "http/1.1". TLS presence is
+// what separates h2 from h2c, since both report Proto "HTTP/2.0".
+func TestProtocolLabelMapsRequestProtocol(t *testing.T) {
+	http11 := httptest.NewRequest(http.MethodGet, "/", nil)
+	h2 := httptest.NewRequest(http.MethodGet, "/", nil)
+	h2.Proto, h2.ProtoMajor, h2.ProtoMinor = "HTTP/2.0", 2, 0
+	h2.TLS = &tls.ConnectionState{}
+	h2c := httptest.NewRequest(http.MethodGet, "/", nil)
+	h2c.Proto, h2c.ProtoMajor, h2c.ProtoMinor = "HTTP/2.0", 2, 0
+
+	cases := []struct {
+		name string
+		req  *http.Request
+		want string
+	}{
+		{name: "http/1.1", req: http11, want: "http/1.1"},
+		{name: "http/2 over TLS", req: h2, want: "h2"},
+		{name: "cleartext http/2", req: h2c, want: "h2c"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, protocolLabel(tc.req))
+		})
+	}
 }
 
 func TestProxyLogsRequestCompleteOn503(t *testing.T) {

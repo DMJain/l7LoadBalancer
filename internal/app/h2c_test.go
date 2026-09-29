@@ -52,8 +52,8 @@ func waitForListener(t *testing.T, addr string) {
 }
 
 // startTestApp builds and runs the app on a free loopback port, returning the
-// listen address. Run is torn down on cleanup.
-func startTestApp(t *testing.T, cfg *config.Config) string {
+// running app and its listen address. Run is torn down on cleanup.
+func startTestApp(t *testing.T, cfg *config.Config) (*App, string) {
 	t.Helper()
 	cfg.Listen = freeAddr(t)
 	require.NoError(t, cfg.Validate())
@@ -72,7 +72,7 @@ func startTestApp(t *testing.T, cfg *config.Config) string {
 			t.Fatal("Run did not return after cancellation")
 		}
 	})
-	return cfg.Listen
+	return application, cfg.Listen
 }
 
 // TestBuildH2CModeServerConstruction pins the h2c path: no TLSConfig, a
@@ -120,7 +120,7 @@ func TestRunH2CListenerServesHTTP2PriorKnowledge(t *testing.T) {
 	t.Cleanup(backend.Close)
 
 	cfg := h2cTestConfig(t, backend.URL, nil)
-	addr := startTestApp(t, cfg)
+	_, addr := startTestApp(t, cfg)
 	waitForListener(t, addr)
 
 	client := &http.Client{Transport: &http2.Transport{
@@ -154,7 +154,7 @@ func TestRunH2CListenerUpgrade(t *testing.T) {
 	t.Cleanup(backend.Close)
 
 	cfg := h2cTestConfig(t, backend.URL, nil)
-	addr := startTestApp(t, cfg)
+	_, addr := startTestApp(t, cfg)
 	waitForListener(t, addr)
 
 	conn, err := net.Dial("tcp", addr)

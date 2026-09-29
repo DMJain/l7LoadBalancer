@@ -226,6 +226,18 @@ func TestNonBackendChanges(t *testing.T) {
 			want: []string{"transport"},
 		},
 		{
+			name: "transport force_http2 differs",
+			old:  oneBackendConfigYAML(base),
+			new:  oneBackendConfigYAML(base + "transport:\n  force_http2: false\n"),
+			want: []string{"transport"},
+		},
+		{
+			name: "transport tls_skip_verify differs",
+			old:  oneBackendConfigYAML(base),
+			new:  oneBackendConfigYAML(base + "transport:\n  tls_skip_verify: true\n"),
+			want: []string{"transport"},
+		},
+		{
 			name: "omitted fields equal explicit defaults",
 			old:  oneBackendConfigYAML(base),
 			new: oneBackendConfigYAML(base +
@@ -236,7 +248,7 @@ func TestNonBackendChanges(t *testing.T) {
 				"health_endpoint:\n  listen: \"" + DefaultHealthEndpointListen + "\"\n" +
 				"reload:\n  drain_window: \"" + DefaultDrainWindow.String() + "\"\n" +
 				"server:\n  read_timeout: \"" + DefaultReadTimeout.String() + "\"\n  idle_timeout: \"" + DefaultIdleTimeout.String() + "\"\n" +
-				"transport:\n  dial_timeout: \"" + DefaultDialTimeout.String() + "\"\n  response_header_timeout: \"" + DefaultResponseHeaderTimeout.String() + "\"\n  max_idle_conns_per_host: " + strconv.Itoa(DefaultMaxIdleConnsPerHost) + "\n  idle_conn_timeout: \"" + DefaultIdleConnTimeout.String() + "\"\n"),
+				"transport:\n  dial_timeout: \"" + DefaultDialTimeout.String() + "\"\n  response_header_timeout: \"" + DefaultResponseHeaderTimeout.String() + "\"\n  max_idle_conns_per_host: " + strconv.Itoa(DefaultMaxIdleConnsPerHost) + "\n  idle_conn_timeout: \"" + DefaultIdleConnTimeout.String() + "\"\n  force_http2: " + strconv.FormatBool(DefaultForceHTTP2) + "\n  tls_skip_verify: false\n"),
 		},
 		{
 			name: "multiple fields come back in fixed order",

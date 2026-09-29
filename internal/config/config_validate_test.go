@@ -241,6 +241,18 @@ func TestValidate(t *testing.T) {
 			},
 		},
 		{
+			name: "mixed http and https backends are accepted",
+			yaml: "listen: \":8080\"\nbackends:\n" +
+				backendYAML("backend-a", "http://127.0.0.1:9001") +
+				backendYAML("backend-b", "https://127.0.0.1:9002"),
+			check: func(t *testing.T, cfg *Config) {
+				t.Helper()
+				require.Len(t, cfg.Backends, 2)
+				assert.Equal(t, "http://127.0.0.1:9001", cfg.Backends[0].URL)
+				assert.Equal(t, "https://127.0.0.1:9002", cfg.Backends[1].URL)
+			},
+		},
+		{
 			name: "happy-path round-trip populates every field",
 			yaml: threeBackendYAML(),
 			check: func(t *testing.T, cfg *Config) {
@@ -491,10 +503,13 @@ func TestValidate(t *testing.T) {
 				require.NotNil(t, cfg.Transport.ResponseHeaderTimeout)
 				require.NotNil(t, cfg.Transport.MaxIdleConnsPerHost)
 				require.NotNil(t, cfg.Transport.IdleConnTimeout)
+				require.NotNil(t, cfg.Transport.ForceHTTP2)
 				assert.Equal(t, DefaultDialTimeout, *cfg.Transport.DialTimeout)
 				assert.Equal(t, DefaultResponseHeaderTimeout, *cfg.Transport.ResponseHeaderTimeout)
 				assert.Equal(t, DefaultMaxIdleConnsPerHost, *cfg.Transport.MaxIdleConnsPerHost)
 				assert.Equal(t, DefaultIdleConnTimeout, *cfg.Transport.IdleConnTimeout)
+				assert.Equal(t, DefaultForceHTTP2, *cfg.Transport.ForceHTTP2)
+				assert.False(t, cfg.Transport.TLSSkipVerify)
 			},
 		},
 		{
@@ -512,6 +527,24 @@ func TestValidate(t *testing.T) {
 				assert.Equal(t, 10*time.Second, *cfg.Transport.ResponseHeaderTimeout)
 				assert.Equal(t, 42, *cfg.Transport.MaxIdleConnsPerHost)
 				assert.Equal(t, 45*time.Second, *cfg.Transport.IdleConnTimeout)
+			},
+		},
+		{
+			name: "transport force_http2 set false is kept",
+			yaml: configWithTransportYAML("transport:\n  force_http2: false\n"),
+			check: func(t *testing.T, cfg *Config) {
+				t.Helper()
+				require.NotNil(t, cfg.Transport.ForceHTTP2)
+				assert.False(t, *cfg.Transport.ForceHTTP2,
+					"an explicit false must not be re-defaulted to true")
+			},
+		},
+		{
+			name: "transport tls_skip_verify set true is kept",
+			yaml: configWithTransportYAML("transport:\n  tls_skip_verify: true\n"),
+			check: func(t *testing.T, cfg *Config) {
+				t.Helper()
+				assert.True(t, cfg.Transport.TLSSkipVerify)
 			},
 		},
 		{
