@@ -1,0 +1,23 @@
+# Benchmark config (S5.T4-harness): plain-HTTP client, power-of-two-choices
+# EWMA LB, four plain-HTTP backends. Self-contained by design (spec §31) — no
+# templating, no sed, readable in isolation.
+#
+# Solo benchmark (LB only): nginx has no P2C-EWMA equivalent, so mapping it to
+# `least_conn` would conflate algorithm with implementation (spec §25).
+listen: ":8080"
+algorithm: "p2c_ewma"
+metrics:
+  listen: ":9090"
+health_endpoint:
+  listen: ":8081"
+transport:
+  max_idle_conns_per_host: 100
+backends:
+  - name: "backend1"
+    url: "http://backend1:8080"
+  - name: "backend2"
+    url: "http://backend2:8080"
+  - name: "backend3"
+    url: "http://backend3:8080"
+  - name: "backend4"
+    url: "http://backend4:8080"

@@ -60,6 +60,14 @@ services:
       context: ..
       dockerfile: Dockerfile
     depends_on: [backend1, backend2, backend3, backend4]
+    environment:
+      # The h2 slice points the LB at https:// backends. The proxy's transport
+      # skips backend TLS verification from config (transport.tls_skip_verify),
+      # but the active health checker uses its own default-cloned transport
+      # (ADR-0011 d11) that config cannot reach. Trusting the shared SAN cert
+      # as a root (its SAN list already covers backend1–4) makes the probes
+      # pass, so backends are not ejected after three failures. Issue 06.
+      SSL_CERT_FILE: /certs/server.crt
     ports:
       - "8080:8080" # client traffic
       - "8081:8081" # health endpoint (probe + demo)

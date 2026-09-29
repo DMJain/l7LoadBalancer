@@ -1,0 +1,34 @@
+# Benchmark config (S5.T4-harness): TLS+ALPN client (HTTP/2), least-connections
+# LB, four https:// backends so the LB↔backend leg also negotiates HTTP/2
+# (S5.T3). Self-contained by design (spec §31) — no templating, no sed,
+# readable in isolation. Matched head-to-head by bench/nginx/h2.conf (nginx
+# `least_conn`).
+#
+# The TLS block is the shared SAN cert from scripts/generate-cert.sh, mounted
+# at /certs. The backends serve TLS because bench/docker-compose.yml sets
+# TLS_CERT_FILE/TLS_KEY_FILE. tls_skip_verify is required for that self-signed
+# cert; the active health checker uses its own default-cloned transport
+# (ADR-0011 d11) which the knob does not reach, so the compose lb service also
+# sets SSL_CERT_FILE=/certs/server.crt to trust it.
+listen: ":8080"
+tls:
+  cert_file: "/certs/server.crt"
+  key_file: "/certs/server.key"
+algorithm: "least_conn"
+metrics:
+  listen: ":9090"
+health_endpoint:
+  listen: ":8081"
+transport:
+  force_http2: true
+  tls_skip_verify: true
+  max_idle_conns_per_host: 100
+backends:
+  - name: "backend1"
+    url: "https://backend1:8080"
+  - name: "backend2"
+    url: "https://backend2:8080"
+  - name: "backend3"
+    url: "https://backend3:8080"
+  - name: "backend4"
+    url: "https://backend4:8080"

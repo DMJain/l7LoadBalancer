@@ -22,6 +22,8 @@ coverage.*
 
 # Benchmark artifacts (raw outputs kept intentionally in bench/results/)
 bench/tmp/
+# Raw per-attack scratch (gob/csv/report) written by bench/run.sh
+bench/results/.tmp/
 
 # Go build cache (not usually needed but just in case)
 /vendor/

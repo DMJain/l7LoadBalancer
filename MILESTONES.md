@@ -86,8 +86,10 @@ Strategic plan. Each sprint = one weekend of focused work. Tasks under each spri
 **Deliverables**:
 - HTTP/2 client-facing: TLS with self-signed cert + ALPN; also h2c via `golang.org/x/net/http2/h2c`.
 - HTTP/2 to backends: `http.Transport` with `ForceAttemptHTTP2: true`.
-- Benchmark rig in `bench/`: docker-compose with LB + Nginx + 4 backends, wrk and vegeta harness, response-size matrix (200B, 10KB, 1MB), concurrency sweep, failure-mode benchmarks.
-- Published numbers: p50 / p99 / p99.9 at 50% and 90% of peak, plus throughput ceilings. Raw wrk/vegeta output committed alongside.
+- Benchmark rig in `bench/`: docker-compose with LB + Nginx + 4 backends and a vegeta load generator (wrk dropped — no HTTP/2 support; ADR-0020), response-size matrix (200B, 10KB, 1MB), and protocol and failure-mode benchmarks.
+- S5.T6 — vegeta peak-throughput discovery: binary-search the highest sustainable request rate (seed, double, bisect); thresholds fixed in `bench/run.sh`, not flags.
+- S5.T7 — vegeta fixed-rate latency profiling: p50 / p99 / p99.9 at a set fraction of discovered peak (the harness's `LATENCY_RATE_PCT`), with HDR histograms.
+- Published numbers: p50 / p99 / p99.9 and throughput ceilings, with `.txt` summaries and `.hdr` histograms committed alongside the harness.
 - README with architecture diagram (Mermaid or Excalidraw export).
 - `docs/design-decisions.md` — rationale-heavy doc covering every non-trivial choice.
 - `docs/what-id-do-differently.md` — honest retrospective.
