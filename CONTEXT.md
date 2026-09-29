@@ -191,3 +191,29 @@ CAS-transitioned) inside whichever request or selection read next observes
 that the cooldown has elapsed, so a backend nothing is routing to simply is
 not observed to recover yet. See ADR-0011 decision 6 and ADR-0012.
 _Avoid_: timeout (that is probe/transport concern), retry delay
+
+**No-op reload** (reload context):
+A reload whose re-read config yields only unchanged backends: nothing is added,
+removed, or drained. It measures the bare cost of the reload path. Contrast a
+**drain reload**, in which at least one backend is removed and drains.
+_Avoid_: empty reload, dry reload
+
+**Competitor** (benchmark context):
+The proxy under measurement in one benchmark run — the load balancer or Nginx.
+Both front the same backends with the same load generator.
+_Avoid_: target (vegeta's word for a request line), baseline
+
+**Nearest-equivalent** (benchmark context):
+An Nginx configuration compared against an algorithm Nginx does not implement
+exactly: `hash $remote_addr consistent` for consistent-hash (no bounded loads)
+and `random two least_conn` for p2c-ewma (no latency signal). Results from a
+nearest-equivalent comparison always state the gap. Contrast a **matched**
+comparison (round-robin, least-connections), where the algorithms are the same.
+_Avoid_: equivalent (unqualified), Nginx version of
+
+**Hot key** (consistent-hash-bounded-loads context):
+A hash key that carries a disproportionate share of requests. A single-address
+load generator is the extreme case: every request has one hash key, so an
+unbounded ring sends all traffic to one backend, while bounded loads spills
+the excess to the backends that follow it on the ring.
+_Avoid_: hotspot, sticky client
