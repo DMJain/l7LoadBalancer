@@ -128,9 +128,10 @@ type Config struct {
 	TLS *TLSConfig `yaml:"tls"`
 	// H2C selects cleartext HTTP/2 mode when true. It is mutually exclusive
 	// with a present `tls:` block; Validate rejects them together naming both
-	// (S5.T1). Plain HTTP is the absence of both. The h2c handler chain itself
-	// lands in a later ticket; until then h2c validates but the client server
-	// still serves plain HTTP.
+	// (S5.T1). Plain HTTP is the absence of both. In h2c mode app.Build wraps
+	// the proxy handler in golang.org/x/net/http2/h2c, which serves both
+	// prior-knowledge and HTTP/1.1-Upgrade h2c connections over the plaintext
+	// client listener (S5.T2).
 	H2C            bool                 `yaml:"h2c"`
 	Algorithm      string               `yaml:"algorithm"`
 	Health         HealthConfig         `yaml:"health"`

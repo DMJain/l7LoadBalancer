@@ -27,6 +27,8 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"golang.org/x/net/http2"
+	"golang.org/x/net/http2/h2c"
 
 	"github.com/DMJain/l7LoadBalancer/internal/backend"
 	"github.com/DMJain/l7LoadBalancer/internal/balancer"
@@ -106,7 +108,17 @@ func Build(cfg *config.Config, log *slog.Logger) (*App, error) {
 
 	checker := health.New(reg, *cfg.Health.ProbeInterval, *cfg.Health.ProbeTimeout, log, collector)
 
-	srv, err := buildClientServer(cfg, p)
+	// The client handler is built per listener mode: plain and TLS both serve
+	// the proxy handler directly (TLS wraps it in a TLSConfig on the server
+	// below), while h2c wraps it in the h2c handler. The wrap is outermost
+	// because h2c.NewHandler inspects the raw connection for the HTTP/2 preface
+	// (and the HTTP/1.1 Upgrade handshake) before any request reaches the
+	// proxy. Plain and TLS modes deliberately carry no h2c handler.
+	clientHandler := http.Handler(p)
+	if cfg.H2C {
+		clientHandler = h2c.NewHandler(p, &http2.Server{})
+	}
+	srv, err := buildClientServer(cfg, clientHandler)
 	if err != nil {
 		return nil, err
 	}
@@ -322,9 +334,11 @@ type runError struct {
 }
 
 // serve runs one server and reports a non-ErrServerClosed failure on errCh. A
-// server with a TLSConfig set serves TLS (and negotiates HTTP/2 via ALPN);
-// every other server — the client one in plain/h2c mode, and always the metrics
-// and health-endpoint ones — serves plain HTTP (S5.T1).
+// server with a TLSConfig set serves TLS (and negotiates HTTP/2 via ALPN). The
+// client server in h2c mode and in plain mode has no TLSConfig and so is served
+// with ListenAndServe: in h2c mode its handler is the h2c handler (cleartext
+// HTTP/2), in plain mode it is the proxy handler (HTTP/1.1). The metrics and
+// health-endpoint servers are always plain HTTP (S5.T1, S5.T2).
 func serve(srv *http.Server, label string, errCh chan<- runError) {
 	var err error
 	if srv.TLSConfig != nil {
@@ -346,16 +360,17 @@ func serve(srv *http.Server, label string, errCh chan<- runError) {
 // server's TLSConfig up front — so a bad path is a startup error, not a silent
 // plaintext listener — which also makes net/http's ListenAndServeTLS negotiate
 // HTTP/2 via ALPN. It deliberately does NOT set srv.TLSNextProto: an empty map
-// there would silently disable HTTP/2 (S5.T1).
+// there would silently disable HTTP/2 (S5.T1). h2c mode leaves TLSConfig nil
+// (its handler, built in Build, serves HTTP/2 over cleartext) and joins TLS in
+// disabling ReadTimeout.
 //
-// ReadTimeout is hardcoded to 0 in TLS mode, not configurable. net/http's
-// ReadTimeout applies to the whole connection, so on a multiplexed HTTP/2
-// connection it would kill every active stream after N seconds regardless of
-// activity; HTTP/2 stream-level flow control is the slow-client bound instead
-// (see https://pkg.go.dev/net/http#Server.ReadTimeout and the HTTP/2
-// MaxConcurrentStreams default of 250). IdleTimeout is what reclaims idle
-// connections. h2c mode joins this branch in a later ticket, where it will
-// likewise disable ReadTimeout.
+// ReadTimeout is hardcoded to 0 in both HTTP/2 modes (TLS and h2c), not
+// configurable. net/http's ReadTimeout applies to the whole connection, so on a
+// multiplexed HTTP/2 connection it would kill every active stream after N
+// seconds regardless of activity; HTTP/2 stream-level flow control is the
+// slow-client bound instead (see https://pkg.go.dev/net/http#Server.ReadTimeout
+// and the HTTP/2 MaxConcurrentStreams default of 250). IdleTimeout is what
+// reclaims idle connections.
 func buildClientServer(cfg *config.Config, handler http.Handler) (*http.Server, error) {
 	srv := &http.Server{
 		Addr:              cfg.Listen,
@@ -363,20 +378,25 @@ func buildClientServer(cfg *config.Config, handler http.Handler) (*http.Server, 
 		ReadHeaderTimeout: readHeaderTimeout,
 		IdleTimeout:       *cfg.Server.IdleTimeout,
 	}
-	if cfg.TLS != nil {
+	switch {
+	case cfg.TLS != nil:
 		cert, err := tls.LoadX509KeyPair(cfg.TLS.CertFile, cfg.TLS.KeyFile)
 		if err != nil {
 			return nil, fmt.Errorf("app: tls key pair load failed: %w", err)
 		}
 		srv.TLSConfig = &tls.Config{Certificates: []tls.Certificate{cert}}
 		// ReadTimeout deliberately left at its zero value (see above).
-		return srv, nil
+	case cfg.H2C:
+		// Cleartext HTTP/2; ReadTimeout deliberately left at its zero value.
+		// Same rationale as TLS: h2c is HTTP/2 regardless of encryption.
+	default:
+		// Plain HTTP: ReadTimeout bounds the full client request read
+		// including the body, the slow-body slow-loris vector (S4.T7).
+		// WriteTimeout is deliberately omitted: it would span the whole
+		// response copy and trip on a slow-but-healthy upstream. See
+		// Config.ServerConfig.
+		srv.ReadTimeout = *cfg.Server.ReadTimeout
 	}
-	// Plain HTTP: ReadTimeout bounds the full client request read including the
-	// body, the slow-body slow-loris vector (S4.T7). WriteTimeout is
-	// deliberately omitted: it would span the whole response copy and trip on a
-	// slow-but-healthy upstream. See Config.ServerConfig.
-	srv.ReadTimeout = *cfg.Server.ReadTimeout
 	return srv, nil
 }
 
