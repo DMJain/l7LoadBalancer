@@ -78,6 +78,24 @@ gap is attributable to implementation, not tuning. Each result header records
 which kind its comparison was, and every nearest-equivalent config states its
 gap ([ADR-0020](../docs/adr/0020-benchmark-tool-vegeta-over-wrk.md)).
 
+## CPU pinning and run-time checks
+
+The rig pins each role to a fixed slice of an 8-vCPU host so that a throughput
+difference cannot come from one competitor being starved or over-provisioned:
+**LB and Nginx: cores 0–1; backends 1–4: cores 2–5, one each; vegeta: cores
+6–7.** The split is set with `cpuset` in `docker-compose.yml` and is never
+scaled from the available CPU count — scaled splits give incomparable numbers.
+
+The harness proves at run time that the pinning took effect, aborting the slice
+with the check name and the value it saw otherwise:
+
+- after every LB (re)create, it reads `gomaxprocs` from the LB's startup line in
+  the container logs and requires **2** (cores 0–1);
+- after every Nginx (re)create, it waits until Nginx serves a 200 through its
+  listener (workers fork slightly after the container starts), then counts
+  worker processes and requires **2** (cores 0–1, matching the
+  `worker_processes 2` in every competitor config).
+
 Tear the stack down when finished:
 
 ```sh

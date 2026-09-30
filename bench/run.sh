@@ -150,13 +150,54 @@ vegeta_run() {
   "${COMPOSE[@]}" run --rm -T -v "$RESULTS:/results" --entrypoint sh vegeta -c "$1"
 }
 
-# set_lb <config-path-relative-to-bench> recreates the lb service on a config.
-# LB_CONFIG is assigned (not prefixed) so the value persists for the
-# subsequent `compose run` calls too; otherwise compose would see the old value
-# and recreate lb back onto the default config mid-slice.
+# ---------------------------------------------------------------------------
+# CPU-pinning verification (S5.T5.7.1). The compose cpusets are the pinning;
+# these checks prove at run time that they took effect, so a throughput
+# difference between the LB and Nginx cannot be "one of them was starved or
+# over-provisioned". Each aborts the slice, naming the check and the value seen.
+# ---------------------------------------------------------------------------
+
+# verify_lb_gomaxprocs reads `gomaxprocs` from the LB's startup line (S5.T5.6)
+# and aborts unless it is 2 — the LB's cpuset is cores 0–1. The startup line is
+# JSON, so the value is a plain integer field.
+verify_lb_gomaxprocs() {
+  local seen
+  seen=$("${COMPOSE[@]}" logs --no-color lb 2>/dev/null \
+    | grep -o '"gomaxprocs":[0-9]*' | tail -n1 | cut -d: -f2 || true)
+  if [[ "$seen" != "2" ]]; then
+    warn "lb cpu-pinning check FAILED: gomaxprocs=${seen:-unknown} (need 2)"
+    exit 1
+  fi
+}
+
+# verify_nginx_workers waits until Nginx serves a 200 through its listener (the
+# workers fork slightly after the container starts, so counting immediately can
+# see zero), then counts worker processes and aborts unless there are 2 — the
+# Nginx cpuset is cores 0–1. `[n]ginx` keeps grep from matching its own argv.
+verify_nginx_workers() { # <proto>
+  local proto="$1" url count
+  url=$(target_url "$proto" nginx "$SMOKE_SIZE")
+  if ! wait_target "$url"; then
+    warn "nginx worker check FAILED: listener never served a 200 at $url"
+    exit 1
+  fi
+  count=$("${COMPOSE[@]}" exec -T nginx ps 2>/dev/null \
+    | grep -c '[n]ginx: worker process' || true)
+  if [[ "$count" != "2" ]]; then
+    warn "nginx worker check FAILED: ${count:-unknown} worker process(es) (need 2)"
+    exit 1
+  fi
+}
+
+# set_lb <config-path-relative-to-bench> recreates the lb service on a config
+# and verifies its CPU pinning before the slice continues. LB_CONFIG is assigned
+# (not prefixed) so the value persists for the subsequent `compose run` calls
+# too; otherwise compose would see the old value and recreate lb back onto the
+# default config mid-slice.
 set_lb() {
   LB_CONFIG="$1"
   "${COMPOSE[@]}" up -d --force-recreate --wait lb
+  verify_lb_gomaxprocs
 }
 
 # up_h2 brings the four backends up serving TLS and nginx up as TLS+HTTP/2.
@@ -166,6 +207,7 @@ up_h2() {
   BACKEND_TLS_KEY_FILE=/certs/server.key
   NGINX_CONF=h2/roundrobin.conf
   "${COMPOSE[@]}" up -d --force-recreate backend1 backend2 backend3 backend4 nginx
+  verify_nginx_workers h2
 }
 
 # up_http11 brings the four backends up plain and nginx up as plain HTTP/1.1.
@@ -174,6 +216,7 @@ up_http11() {
   BACKEND_TLS_KEY_FILE=""
   NGINX_CONF=http11/roundrobin.conf
   "${COMPOSE[@]}" up -d --force-recreate backend1 backend2 backend3 backend4 nginx
+  verify_nginx_workers http11
 }
 
 target_url() { # <proto> <competitor> <size>
@@ -205,11 +248,14 @@ comparison_for() {
   esac
 }
 
-# set_nginx_conf <conf-file> recreates nginx on a config (the exported global
-# is updated so later `compose run` calls stay consistent).
+# set_nginx_conf <conf-file> recreates nginx on a config and verifies its CPU
+# pinning before the slice continues (the exported global is updated so later
+# `compose run` calls stay consistent). The proto is the config path's leading
+# segment, which is also the listener mode the readiness probe needs.
 set_nginx_conf() {
   NGINX_CONF="$1"
   "${COMPOSE[@]}" up -d --force-recreate nginx
+  verify_nginx_workers "${1%%/*}"
 }
 
 # ---------------------------------------------------------------------------

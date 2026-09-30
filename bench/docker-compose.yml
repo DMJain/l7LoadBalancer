@@ -23,6 +23,11 @@
 # The cert script output is mounted into every TLS-capable service — lb, nginx,
 # and the backends (spec: cert output is mounted into TLS-enabled containers);
 # in the plain default it is simply unused.
+#
+# CPU splitting is a fixed 8-vCPU split, never scaled from the host's core
+# count — scaled splits give incomparable numbers (spec Fairness). Reuse this
+# sentence verbatim as the methodology statement:
+# LB and Nginx: cores 0–1; backends 1–4: cores 2–5, one each; vegeta: cores 6–7.
 
 name: l7loadbalancer-bench
 
@@ -46,18 +51,22 @@ services:
   backend1:
     <<: *backend
     command: ["-name", "backend1"]
+    cpuset: "2"
 
   backend2:
     <<: *backend
     command: ["-name", "backend2"]
+    cpuset: "3"
 
   backend3:
     <<: *backend
     command: ["-name", "backend3"]
+    cpuset: "4"
 
   backend4:
     <<: *backend
     command: ["-name", "backend4"]
+    cpuset: "5"
 
   lb:
     build:
@@ -72,6 +81,8 @@ services:
       # as a root (its SAN list already covers backend1–4) makes the probes
       # pass, so backends are not ejected after three failures. Issue 06.
       SSL_CERT_FILE: /certs/server.crt
+    # LB and Nginx share cores 0–1: only one competitor is under load at a time.
+    cpuset: "0-1"
     ports:
       - "8080:8080" # client traffic
       - "8081:8081" # health endpoint (probe + demo)
@@ -89,6 +100,8 @@ services:
   nginx:
     image: nginx:1.27-alpine
     depends_on: [backend1, backend2, backend3, backend4]
+    # LB and Nginx share cores 0–1: only one competitor is under load at a time.
+    cpuset: "0-1"
     ports:
       - "8090:80" # plain HTTP/1.1
       - "8443:443" # TLS + HTTP/2
@@ -102,6 +115,7 @@ services:
     build:
       context: ./vegeta
     depends_on: [lb]
+    cpuset: "6-7"
     # Overridden so `docker compose up` leaves vegeta idling; `compose run`
     # passes `--entrypoint vegeta` (see the header) to execute a real run.
     entrypoint: ["/bin/sleep", "2147483647"]
