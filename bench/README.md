@@ -125,8 +125,11 @@ results generator are what refuse a dirty record.
 | `nginx_version`, `nginx_workers` | Nginx version and running worker count |
 | `vegeta_version` | the pinned vegeta source tag the image is built from (the `go install`-built binary embeds no version) |
 
-Fields only knowable once containers exist (`lb_*`, `nginx_*`) are `null` in the
-record written at start and populated when the run finishes.
+Fields only knowable once containers exist (`lb_*`, `nginx_*`) are best-effort:
+they are `null` when the container is not yet up (the record written at start)
+and populated when the run finishes. `git_dirty` ignores `bench/results/` — the
+harness's own output — so a repeated invocation is not reported dirty by a
+previous run's record.
 
 ## Manual smoke checks
 

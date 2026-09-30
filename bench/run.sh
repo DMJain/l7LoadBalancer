@@ -490,7 +490,15 @@ JSON
 # and arms the EXIT trap that finalizes it.
 provenance_start() {
   PROV_GIT_SHA=$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || printf 'unknown')
-  if [[ -n "$(git -C "$ROOT" status --porcelain 2>/dev/null)" ]]; then PROV_GIT_DIRTY=true; else PROV_GIT_DIRTY=false; fi
+  # bench/results/ is the harness's own output, not source: exclude it so a
+  # repeated invocation does not see the previous run's record/results as a
+  # dirty tree. `git_dirty` is about the code the numbers came from. The
+  # published run starts from a fresh clone, so this changes nothing there.
+  if [[ -n "$(git -C "$ROOT" status --porcelain -- ':!bench/results' 2>/dev/null)" ]]; then
+    PROV_GIT_DIRTY=true
+  else
+    PROV_GIT_DIRTY=false
+  fi
   PROV_SLICES=$(provenance_slices "$SLICE")
   PROV_START_TS=$(iso_now)
   PROV_VEGETA_VERSION=$(vegeta_version)
