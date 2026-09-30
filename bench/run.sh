@@ -8,15 +8,16 @@
 # same thresholds, and flags would invite "but I ran it with different
 # thresholds" comparisons (spec §28, §32).
 #
-# Usage:  ./bench/run.sh [core|protocol|failure|smoke|all]   (default: all)
+# Usage:  ./bench/run.sh [core|protocol|failure|degraded|smoke|all]   (default: all)
 #
 #   core      HTTP/2 (TLS+ALPN) matrix — 48 runs
 #   protocol  HTTP/1.1 round-robin comparison — 12 runs
 #   failure   backend-kill and SIGHUP-under-load — 2 runs
+#   degraded  one backend +50 ms, per-backend distribution — 8 runs
 #   smoke     a ~1-minute preflight over every (protocol, algorithm,
 #             competitor) combination the matrix uses — 10 attacks, not part
 #             of `all` (S5.T5.3)
-#   all       the full 62-run matrix (smoke excluded)
+#   all       the full 70-run matrix (smoke excluded)
 #
 # Every algorithm runs head-to-head with an Nginx competitor. Each result
 # header records `comparison=matched` (roundrobin, leastconn) or
@@ -62,6 +63,16 @@
 # shares, the plurality owner and whether spill occurred. The snapshots bracket
 # each measured attack, so they add no load during measurement; the reads go
 # straight to the backends and /stats is not counted (S5.T5.5.2).
+#
+# Degraded (S5.T8.2): backend3 is recreated 50 ms slow for the whole slice and
+# restored on exit, including on failure. Every one of the eight runs (four
+# algorithms × two competitors, h2, 10 KiB) is bracketed by arrival snapshots,
+# so the headline result is the per-backend share — which algorithms route around
+# a slow backend and which do not. All eight run at one absolute rate, half the
+# h2/round-robin/10 KiB LB peak: reused from the core slice when the same
+# invocation ran it, discovered here (with the backends still fast) otherwise.
+# The delay is on the payload path only, so health probes never see it and
+# backend3 is never ejected.
 
 set -euo pipefail
 
@@ -89,6 +100,16 @@ SETTLE_SECS=10            # settle time after restarting backend3 (two probe int
 # this share floor; the probe background (a few arrivals per window) stays far
 # below it at benchmark rates, while a real bounded-loads spill is far above.
 SPILL_MIN_SHARE_PCT=1
+
+# Degraded slice (S5.T8.2): one backend is 50 ms slow for the whole slice and
+# the headline result is where the traffic went, not only the aggregate latency.
+# All eight runs use one absolute rate — half the h2/round-robin/10 KiB LB peak —
+# so their distributions and latencies are directly comparable.
+DEGRADED_BACKEND=backend3  # the backend recreated with the injected delay
+DEGRADED_SLEEP_MS=50       # its injected delay, in milliseconds
+DEGRADED_SECS=30           # measured window per run (plus the standard warmup)
+DEGRADED_RATE_PCT=50       # absolute rate, as % of the h2/roundrobin/10kb LB peak
+DEGRADED_SIZE=10kb         # the one size the degraded slice measures
 
 # Smoke slice (S5.T5.3) — a preflight, not part of `all`. Every (protocol,
 # algorithm, competitor) combination the matrix uses must serve 100% in a
@@ -121,6 +142,7 @@ BACKEND_PORT=8080
 CORE_RUNS=$(( ${#ALGOS[@]} * ${#SIZES[@]} * 2 * 2 ))   # algos × sizes × competitors × {peak, latency}
 PROTOCOL_RUNS=$(( 1 * ${#SIZES[@]} * 2 * 2 ))
 FAILURE_RUNS=2
+DEGRADED_RUNS=$(( ${#ALGOS[@]} * 2 ))    # algos × competitors, one measured run each
 SMOKE_RUNS=$(( ${#ALGOS[@]} * 2 + 2 ))   # h2 × algos × competitors + http11/roundrobin × competitors
 
 # ---------------------------------------------------------------------------
@@ -140,22 +162,33 @@ export NGINX_CONF="http11/roundrobin.conf"
 export BACKEND_TLS_CERT_FILE=""
 # shellcheck disable=SC2034
 export BACKEND_TLS_KEY_FILE=""
+# The degraded slice raises SLEEP_MS to 50 before force-recreating backend3 only
+# (S5.T8.2); the compose anchor reads it. Reset to 0 everywhere else.
+# shellcheck disable=SC2034
+export SLEEP_MS=0
+
+# The h2/round-robin/10 KiB LB peak, captured by the core slice so the degraded
+# slice can reuse the same invocation's measurement (S5.T8.2). Empty when the
+# core slice did not run, which makes the degraded slice discover its own.
+CORE_RR_10KB_LB_PEAK=""
+DEGRADED_BACKEND3_SLOW=0
 
 usage() {
   cat <<'EOF'
 bench/run.sh — the benchmark execution harness (S5.T4-harness).
 
-Usage: bench/run.sh [core|protocol|failure|smoke|all]   (default: all)
+Usage: bench/run.sh [core|protocol|failure|degraded|smoke|all]   (default: all)
 
   core      HTTP/2 (TLS+ALPN) matrix — 48 runs
   protocol  HTTP/1.1 round-robin comparison — 12 runs
   failure   backend-kill and SIGHUP-under-load — 2 runs
+  degraded  one backend +50 ms, per-backend distribution — 8 runs
   smoke     preflight: every (protocol, algorithm, competitor) combination
             the matrix uses, 10 short attacks, 100% required, not part of all
-  all       the full 62-run matrix (smoke excluded)
+  all       the full 70-run matrix (smoke excluded)
 
 Results land as .txt summaries + .hdr HDR histograms under
-bench/results/{core,protocol,failure}/ with parameter-encoded filenames, and
+bench/results/{core,protocol,failure,degraded}/ with parameter-encoded filenames, and
 each slice prints a summary table to stdout. All parameters are constants at
 the top of this script; see the header comment for the methodology.
 EOF
@@ -179,8 +212,9 @@ run_total() {
     core)     printf '%d' "$CORE_RUNS" ;;
     protocol) printf '%d' "$PROTOCOL_RUNS" ;;
     failure)  printf '%d' "$FAILURE_RUNS" ;;
+    degraded) printf '%d' "$DEGRADED_RUNS" ;;
     smoke)    printf '%d' "$SMOKE_RUNS" ;;
-    all)      printf '%d' "$(( CORE_RUNS + PROTOCOL_RUNS + FAILURE_RUNS ))" ;;
+    all)      printf '%d' "$(( CORE_RUNS + PROTOCOL_RUNS + FAILURE_RUNS + DEGRADED_RUNS ))" ;;
     *)        printf '0' ;;
   esac
 }
@@ -428,13 +462,16 @@ hotkey_block() {
     }' "$1"
 }
 
-# measured_attack <scheme> <url> <rate> <secs> runs one measured attack,
-# bracketed by arrival-counter snapshots when the scheme is non-empty (a
-# consistent-hash hot-key run). The distribution lands in $TMP/distribution.txt,
-# empty for every other algorithm so their results are unchanged. The deltas are
-# computed once, in the same file-based style attack_filtered uses.
+# measured_attack <scheme> <url> <rate> <secs> [hotkey] runs one measured attack,
+# bracketed by arrival-counter snapshots when the scheme is non-empty. The
+# distribution lands in $TMP/distribution.txt, empty when the scheme is empty so
+# a non-bracketed algorithm's result is unchanged. `hotkey` defaults to yes (the
+# core slice brackets only consistent-hash, which is always a hot key); the
+# degraded slice brackets every algorithm but asks for the hot-key line only on
+# consistent-hash. The deltas are computed once, in the same file-based style
+# attack_filtered uses.
 measured_attack() {
-  local scheme="$1" url="$2" rate="$3" secs="$4"
+  local scheme="$1" url="$2" rate="$3" secs="$4" hotkey="${5:-yes}"
   : > "$TMP/distribution.txt"
   [[ -n "$scheme" ]] && read_arrivals "$scheme" "$TMP/arrivals-before.tsv"
   attack_filtered "$url" "$rate" "$secs"
@@ -442,7 +479,9 @@ measured_attack() {
     read_arrivals "$scheme" "$TMP/arrivals-after.tsv"
     arrival_deltas "$TMP/arrivals-before.tsv" "$TMP/arrivals-after.tsv" > "$TMP/arrivals-delta.tsv"
     distribution_block "$TMP/arrivals-delta.tsv" > "$TMP/distribution.txt"
-    hotkey_block "$TMP/arrivals-delta.tsv" >> "$TMP/distribution.txt"
+    if [[ "$hotkey" == yes ]]; then
+      hotkey_block "$TMP/arrivals-delta.tsv" >> "$TMP/distribution.txt"
+    fi
   fi
 }
 
@@ -455,6 +494,12 @@ json_field() { # <file> <key>
 }
 
 ns_to_ms() { awk -v n="${1:-0}" 'BEGIN { printf "%.3f", n / 1e6 }'; }
+
+# result_peak <throughput-txt> prints the peak_rps= value from a result header
+# (empty when the file is absent or carries none).
+result_peak() {
+  sed -n 's/.* peak_rps=\([0-9][0-9]*\).*/\1/p' "$1" 2>/dev/null | head -n1 || true
+}
 
 # passes reports whether the metrics from the last attack clear the thresholds.
 passes() {
@@ -561,7 +606,7 @@ vegeta_version() {
 
 provenance_slices() { # <slice> — the slices actually run (`all` expands).
   case "$1" in
-    all) printf '["core", "protocol", "failure"]' ;;
+    all) printf '["core", "protocol", "failure", "degraded"]' ;;
     *)   printf '["%s"]' "$1" ;;
   esac
 }
@@ -782,6 +827,10 @@ run_core() {
       done
     done
   done
+  # Capture the h2/round-robin/10 KiB LB peak for the degraded slice. Set here,
+  # from the result just written, so it is only non-empty when the core slice ran
+  # in this invocation (S5.T8.2); a stale file from a previous run is ignored.
+  CORE_RR_10KB_LB_PEAK=$(result_peak "$RESULTS/core/roundrobin-10kb-lb-throughput.txt")
 }
 
 run_protocol() {
@@ -928,6 +977,94 @@ run_failure() {
 }
 
 # ---------------------------------------------------------------------------
+# Degraded slice (S5.T8.2). backend3 is recreated 50 ms slow for the whole
+# slice; every other backend stays fast. All eight runs (four algorithms × two
+# competitors, h2, 10 KiB) use one absolute rate — half the h2/round-robin/
+# 10 KiB LB peak — so their distributions and latencies are comparable, and
+# every run is bracketed by arrival snapshots so the headline result is the
+# per-backend share. The slow backend is restored on exit, including on failure.
+# ---------------------------------------------------------------------------
+
+# restore_degraded recreates backend3 with no delay. The flag gates it, so the
+# EXIT trap can call it whether or not the slice ever injected the delay, and a
+# second call is a no-op.
+restore_degraded() {
+  [[ "${DEGRADED_BACKEND3_SLOW:-0}" == 1 ]] || return 0
+  SLEEP_MS=0
+  "${COMPOSE[@]}" up -d --force-recreate "$DEGRADED_BACKEND" >/dev/null 2>&1 || true
+  DEGRADED_BACKEND3_SLOW=0
+}
+
+run_degraded() {
+  log "=== degraded slice: ${DEGRADED_BACKEND} +${DEGRADED_SLEEP_MS}ms, 8 runs ==="
+  : > "$TMP/degraded_summary.tsv"
+  local peak rate
+  SLEEP_MS=0
+  up_h2
+  if [[ -n "$CORE_RR_10KB_LB_PEAK" ]]; then
+    peak=$CORE_RR_10KB_LB_PEAK
+    log "  rate from this invocation's core result: peak=${peak}/s"
+  else
+    log "  no core result in this invocation; discovering the h2/roundrobin/10kb/lb peak ..."
+    set_lb "./configs/h2/roundrobin.yaml"
+    peak=$(discover_peak "$(target_url h2 lb "$DEGRADED_SIZE")")
+    log "  discovered peak=${peak}/s"
+  fi
+  if (( peak == 0 )); then
+    warn "degraded slice reached no sustainable rate at seed ${SEED_RATE}/s; skipped"
+    return
+  fi
+  rate=$(( peak * DEGRADED_RATE_PCT / 100 ))
+  (( rate > 0 )) || rate=1
+  log "  absolute rate=${rate}/s (${DEGRADED_RATE_PCT}% of ${peak}/s for all 8 runs)"
+
+  # Inject the delay, then arm an EXIT trap that restores backend3 before the
+  # provenance record is finalized, so an abort cannot leave it degraded.
+  SLEEP_MS=$DEGRADED_SLEEP_MS
+  "${COMPOSE[@]}" up -d --force-recreate "$DEGRADED_BACKEND"
+  DEGRADED_BACKEND3_SLOW=1
+  trap 'restore_degraded; provenance_finish' EXIT
+
+  local scheme algo comp url hotkey base meta p50 p99 shares
+  scheme=$(backend_scheme h2)
+  for algo in "${ALGOS[@]}"; do
+    set_lb "./configs/h2/$algo.yaml"
+    set_nginx_conf "$(nginx_conf_for h2 "$algo")"
+    for comp in lb nginx; do
+      url=$(target_url h2 "$comp" "$DEGRADED_SIZE")
+      hotkey=no
+      if [[ "$algo" == consistent-hash ]]; then hotkey=yes; fi
+      progress h2 "$algo" "$DEGRADED_SIZE" "$comp" degraded
+      measured_attack "$scheme" "$url" "$rate" "$DEGRADED_SECS" "$hotkey"
+      p50=$(ns_to_ms "$(json_field "$TMP/metrics.json" 50th)")
+      p99=$(ns_to_ms "$(json_field "$TMP/metrics.json" 99th)")
+      shares=$(awk -F'\t' '{ printf "%s\t", $3 }' "$TMP/arrivals-delta.tsv")
+      printf '%s\t%s\t%s\t%s\t%s\n' "$algo" "$comp" "$p50" "$p99" "$shares" \
+        >> "$TMP/degraded_summary.tsv"
+      base="${algo}-${DEGRADED_SIZE}-${comp}-degraded"
+      meta="algorithm=$algo size=$DEGRADED_SIZE competitor=$comp load=degraded comparison=$(comparison_for "$algo") rate_rps=$rate backend3_sleep_ms=$DEGRADED_SLEEP_MS
+$(cat "$TMP/distribution.txt")"
+      save_result degraded "$base" "$meta"
+    done
+  done
+
+  restore_degraded
+}
+
+# print_degraded_summary prints the slice's table — algorithm, competitor, p50,
+# p99, and each backend's share of the arrivals — different columns from the
+# peak/latency summary, so it has its own reader.
+print_degraded_summary() {
+  [[ -s "$TMP/degraded_summary.tsv" ]] || return 0
+  printf '\n%-14s %-6s %9s %9s %10s %10s %10s %10s\n' \
+    algorithm comp "p50(ms)" "p99(ms)" "backend1%" "backend2%" "backend3%" "backend4%"
+  printf '%.0s-' {1..84}; printf '\n'
+  awk -F'\t' '{ printf "%-14s %-6s %9s %9s %10s %10s %10s %10s\n", $1, $2, $3, $4, $5, $6, $7, $8 }' \
+    "$TMP/degraded_summary.tsv"
+  : > "$TMP/degraded_summary.tsv"
+}
+
+# ---------------------------------------------------------------------------
 # Smoke slice (S5.T5.3).
 # ---------------------------------------------------------------------------
 
@@ -1046,10 +1183,10 @@ SLICE="${1:-all}"
 require_docker
 case "$SLICE" in
   -h|--help|help) usage; exit 0 ;;
-  core|protocol|failure|smoke|all) ;;
+  core|protocol|failure|degraded|smoke|all) ;;
   *) warn "unknown slice '$SLICE'"; usage; exit 2 ;;
 esac
-mkdir -p "$TMP" "$RESULTS/core" "$RESULTS/protocol" "$RESULTS/failure"
+mkdir -p "$TMP" "$RESULTS/core" "$RESULTS/protocol" "$RESULTS/failure" "$RESULTS/degraded"
 provenance_start
 
 RUN_TOTAL=$(run_total "$SLICE")
@@ -1059,8 +1196,9 @@ case "$SLICE" in
   core) run_core; print_summary ;;
   protocol) run_protocol; print_summary ;;
   failure) run_failure; print_summary ;;
+  degraded) run_degraded; print_degraded_summary ;;
   smoke) run_smoke; exit 0 ;;
-  all) run_core; print_summary; run_protocol; print_summary; run_failure; print_summary ;;
+  all) run_core; print_summary; run_protocol; print_summary; run_failure; print_summary; run_degraded; print_degraded_summary ;;
 esac
 
 log ""

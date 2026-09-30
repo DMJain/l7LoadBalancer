@@ -44,6 +44,11 @@ x-backend: &backend
     TLS_CERT_FILE: ${BACKEND_TLS_CERT_FILE:-}
     TLS_KEY_FILE: ${BACKEND_TLS_KEY_FILE:-}
     LOG_REQUESTS: "false"
+    # The degraded slice (S5.T8.2) exports SLEEP_MS=50 and force-recreates only
+    # backend3, so the other three keep the default 0. `/health` and `/stats`
+    # bypass the sleep, so health probes never see the delay and backend3 is
+    # never ejected.
+    SLEEP_MS: ${SLEEP_MS:-0}
   volumes:
     - ../certs:/certs:ro
 

@@ -6,16 +6,16 @@ networking is identical for every service and the LB-vs-Nginx comparison is
 consistent across hosts. vegeta is the only load generator — wrk has no HTTP/2
 support ([ADR-0020](../docs/adr/0020-benchmark-tool-vegeta-over-wrk.md)).
 
-`./bench/run.sh all` runs the full 62-run matrix and writes reproducible
+`./bench/run.sh all` runs the full 70-run matrix and writes reproducible
 `.txt` summaries and `.hdr` histograms under `bench/results/`.
 
 ## Layout
 
 - `run.sh` — the execution harness and the single source of truth for the
   matrix parameters (rates, durations, warmup, thresholds). Slices: `core`
-  (48 runs, HTTP/2), `protocol` (12 runs, HTTP/1.1), `failure` (2 runs), `all`
-  (62 runs), and `smoke` (10 short attacks, a preflight that is deliberately
-  **not** part of `all`).
+  (48 runs, HTTP/2), `protocol` (12 runs, HTTP/1.1), `failure` (2 runs),
+  `degraded` (8 runs, one backend slow), `all` (70 runs), and `smoke` (10 short
+  attacks, a preflight that is deliberately **not** part of `all`).
 - `docker-compose.yml` — the topology: `lb`, `nginx`, `backend1`–`backend4`, `vegeta`.
 - `nginx/http11/roundrobin.conf`, `nginx/h2/{roundrobin,leastconn,consistent-hash,p2c-ewma}.conf`
   — Nginx plain HTTP/1.1 and TLS+HTTP/2 (`http2 on;`), four backends, keepalive
@@ -29,8 +29,9 @@ support ([ADR-0020](../docs/adr/0020-benchmark-tool-vegeta-over-wrk.md)).
   `p2c-ewma`). No templating; each is readable in isolation.
 - `vegeta/Dockerfile` — pinned vegeta built for the host architecture (the
   popular prebuilt image is amd64-only and would run under emulation on arm64).
-- `results/{core,protocol,failure}/` — the harness's output; `.txt` + `.hdr`
-  are committed, raw `.gob`/`.csv` scratch lands in the gitignored `results/.tmp/`.
+- `results/{core,protocol,failure,degraded}/` — the harness's output; `.txt` +
+  `.hdr` are committed, raw `.gob`/`.csv` scratch lands in the gitignored
+  `results/.tmp/`.
 - `results/provenance.json` — the machine-readable record of the invocation that
   produced the results beside it (see *Provenance record*).
 
@@ -39,7 +40,7 @@ support ([ADR-0020](../docs/adr/0020-benchmark-tool-vegeta-over-wrk.md)).
 The whole matrix from the repo root:
 
 ```sh
-./bench/run.sh all      # ~2h; use core|protocol|failure to run one slice
+./bench/run.sh all      # ~2h; use core|protocol|failure|degraded to run one slice
 ```
 
 Before a full run, `./bench/run.sh smoke` is the preflight gate: it brings up
@@ -79,6 +80,32 @@ consistent-hash without bounded loads, p2c-ewma without a latency signal) — so
 gap is attributable to implementation, not tuning. Each result header records
 which kind its comparison was, and every nearest-equivalent config states its
 gap ([ADR-0020](../docs/adr/0020-benchmark-tool-vegeta-over-wrk.md)).
+
+## Degraded slice
+
+`./bench/run.sh degraded` recreates `backend3` with a 50 ms injected delay for
+the whole slice, runs the four algorithms × both competitors over TLS+HTTP/2 on
+the 10 KiB endpoint (8 runs, 30 s each plus the standard 5 s warmup), and
+restores `backend3` to 0 ms when it ends — including on failure. All eight runs
+use one absolute rate, half the h2/round-robin/10 KiB **LB** peak, so their
+distributions and latencies are directly comparable; when `all` runs, that peak
+is reused from the core slice in the same invocation, and when `degraded` runs
+alone it is discovered first with the backends still fast.
+
+Unlike the core slice, every degraded result is bracketed by `/stats` reads, so
+the headline is the per-backend request share (counts and percentages), with the
+summary table showing p50, p99 and all four shares. Its files live under
+`results/degraded/`. The expected shape, which the numbers should show:
+
+- **p2c-ewma** and **leastconn** shift load away from the slow `backend3` (its
+  latency signal and its held connections make it the least attractive);
+- **round-robin** splits evenly, so roughly a quarter of the requests pay the
+  50 ms;
+- the LB's **consistent-hash** spills if `backend3` owns the hot key (bounded
+  loads cap its share), while Nginx's `hash $remote_addr consistent` does not.
+
+Health probes and `/stats` reads bypass the injected delay, so `backend3` stays
+healthy and is never ejected for the whole run.
 
 ## Reproducing the published numbers
 
