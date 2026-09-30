@@ -10,10 +10,15 @@
 #
 # Usage:  ./bench/run.sh [core|protocol|failure|all]     (default: all)
 #
-#   core      HTTP/2 (TLS+ALPN) matrix — 36 runs
+#   core      HTTP/2 (TLS+ALPN) matrix — 48 runs
 #   protocol  HTTP/1.1 round-robin comparison — 12 runs
 #   failure   backend-kill and SIGHUP-under-load — 2 runs
-#   all       the full 50-run matrix
+#   all       the full 62-run matrix
+#
+# Every algorithm runs head-to-head with an Nginx competitor. Each result
+# header records `comparison=matched` (roundrobin, leastconn) or
+# `comparison=nearest-equivalent` (consistent-hash, p2c-ewma), and every
+# nearest-equivalent competitor's header states its gap (S5.T5.2).
 #
 # Results land as .txt summaries + .hdr HDR histograms under
 # bench/results/{core,protocol,failure}/ with parameter-encoded filenames, and
@@ -61,8 +66,7 @@ SETTLE_SECS=10            # settle time after restarting backend3 (two probe int
 # it for a run, and record the value alongside the numbers.
 
 SIZES=(200b 10kb 1mb)
-MATCHED_ALGOS=(roundrobin leastconn)
-SOLO_ALGOS=(consistent-hash p2c-ewma)
+ALGOS=(roundrobin leastconn consistent-hash p2c-ewma)
 
 # ---------------------------------------------------------------------------
 # Paths and compose plumbing.
@@ -88,10 +92,10 @@ bench/run.sh — the benchmark execution harness (S5.T4-harness).
 
 Usage: bench/run.sh [core|protocol|failure|all]     (default: all)
 
-  core      HTTP/2 (TLS+ALPN) matrix — 36 runs
+  core      HTTP/2 (TLS+ALPN) matrix — 48 runs
   protocol  HTTP/1.1 round-robin comparison — 12 runs
   failure   backend-kill and SIGHUP-under-load — 2 runs
-  all       the full 50-run matrix
+  all       the full 62-run matrix
 
 Results land as .txt summaries + .hdr HDR histograms under
 bench/results/{core,protocol,failure}/ with parameter-encoded filenames, and
@@ -162,16 +166,22 @@ target_url() { # <proto> <competitor> <size>
   esac
 }
 
-# nginx_conf_for <proto> <algorithm> maps a scenario to the Nginx config that
-# matches the LB's algorithm (spec §24). leastconn needs an explicit
-# `least_conn` upstream; roundrobin is Nginx's default. Empty means the
-# algorithm has no Nginx equivalent (solo benchmarks).
+# nginx_conf_for <proto> <algorithm> maps a scenario to its Nginx competitor by
+# path join: the competitor configs mirror the LB's `<proto>/<algo>` layout
+# (S5.T5.1–S5.T5.2). Every algorithm in the matrix now has a competitor, so the
+# old solo path is gone.
 nginx_conf_for() {
-  case "$1:$2" in
-    h2:roundrobin) printf 'h2/roundrobin.conf' ;;
-    h2:leastconn) printf 'h2/leastconn.conf' ;;
-    http11:roundrobin) printf 'http11/roundrobin.conf' ;;
-    *) printf '' ;;
+  printf '%s/%s.conf' "$1" "$2"
+}
+
+# comparison_for <algorithm> labels whether the Nginx competitor implements the
+# LB's algorithm exactly (`matched`) or only approximates it
+# (`nearest-equivalent`), per the CONTEXT.md glossary. The nearest-equivalent
+# configs state their gap in their header comments.
+comparison_for() {
+  case "$1" in
+    roundrobin|leastconn) printf 'matched' ;;
+    consistent-hash|p2c-ewma) printf 'nearest-equivalent' ;;
   esac
 }
 
@@ -282,7 +292,8 @@ add_summary() { # <algorithm> <size> <competitor> <load> [throughput-override]
 # ("http11" in the protocol slice, empty in core — spec §30).
 run_scenario() { # <outdir> <proto> <algorithm> <size> <competitor> <url>
   local outdir="$1" proto="$2" algo="$3" size="$4" comp="$5" url="$6"
-  local peak base latrate pct
+  local peak base latrate pct cmp
+  cmp=$(comparison_for "$algo")
   peak=$(discover_peak "$url")
   if (( peak == 0 )); then
     warn "$algo/$size/$comp reached no sustainable rate at seed ${SEED_RATE}/s; skipped"
@@ -296,11 +307,11 @@ run_scenario() { # <outdir> <proto> <algorithm> <size> <competitor> <url>
 
   attack_filtered "$url" "$peak" "$STEP_SECS"
   save_result "$outdir" "${base}-throughput" \
-    "algorithm=$algo size=$size competitor=$comp load=throughput peak_rps=$peak"
+    "algorithm=$algo size=$size competitor=$comp load=throughput comparison=$cmp peak_rps=$peak"
   add_summary "$algo" "$size" "$comp" throughput "$peak"
 
-  { printf '# algorithm=%s size=%s competitor=%s load=latency peak_rps=%s rates_pct=%s\n' \
-      "$algo" "$size" "$comp" "$peak" "${LATENCY_RATES_PCT[*]}"; } \
+  { printf '# algorithm=%s size=%s competitor=%s load=latency comparison=%s peak_rps=%s rates_pct=%s\n' \
+      "$algo" "$size" "$comp" "$cmp" "$peak" "${LATENCY_RATES_PCT[*]}"; } \
     > "$RESULTS/$outdir/${base}-latency.txt"
   for pct in "${LATENCY_RATES_PCT[@]}"; do
     latrate=$(( peak * pct / 100 ))
@@ -318,26 +329,19 @@ run_scenario() { # <outdir> <proto> <algorithm> <size> <competitor> <url>
 # ---------------------------------------------------------------------------
 
 run_core() {
-  log "=== core slice: HTTP/2 (TLS+ALPN), 36 runs ==="
+  log "=== core slice: HTTP/2 (TLS+ALPN), 48 runs ==="
   : > "$TMP/summary.tsv"
   up_h2
   local algo size comp url nginx_conf
-  for algo in "${MATCHED_ALGOS[@]}"; do
+  for algo in "${ALGOS[@]}"; do
     set_lb "./configs/h2/$algo.yaml"
     nginx_conf=$(nginx_conf_for h2 "$algo")
-    [[ -n "$nginx_conf" ]] && set_nginx_conf "$nginx_conf"
+    set_nginx_conf "$nginx_conf"
     for size in "${SIZES[@]}"; do
       for comp in lb nginx; do
         url=$(target_url h2 "$comp" "$size")
         run_scenario core "" "$algo" "$size" "$comp" "$url"
       done
-    done
-  done
-  for algo in "${SOLO_ALGOS[@]}"; do
-    set_lb "./configs/h2/$algo.yaml"
-    for size in "${SIZES[@]}"; do
-      url=$(target_url h2 lb "$size")
-      run_scenario core "" "$algo" "$size" lb "$url"
     done
   done
 }
@@ -450,11 +454,14 @@ failure_event() { # <kill|sighup> <url> <rate>
   fi
 
   mkdir -p "$RESULTS/failure"
-  { printf '# algorithm=roundrobin size=10kb competitor=lb load=%s rate_rps=%s\n' "$mode" "$rate"
+  { printf '# algorithm=roundrobin size=10kb competitor=lb load=%s comparison=%s rate_rps=%s\n' \
+      "$mode" "$(comparison_for roundrobin)" "$rate"
     cat "$TMP/report.txt"
     printf '\n%s\n' "$analysis"; } > "$RESULTS/failure/$base.txt"
   cp "$TMP/report.hdr" "$RESULTS/failure/$base.hdr"
-  cp "$TMP/timeseries.jsonl" "$RESULTS/failure/$base-timeseries.txt"
+  { printf '# algorithm=roundrobin size=10kb competitor=lb load=%s comparison=%s rate_rps=%s\n' \
+      "$mode" "$(comparison_for roundrobin)" "$rate"
+    cat "$TMP/timeseries.jsonl"; } > "$RESULTS/failure/$base-timeseries.txt"
   add_summary roundrobin 10kb lb "$mode" "$rate"
   log "  failure $mode: errors=$errors event_at_s=$event_offset p99=${p99}ms"
 }

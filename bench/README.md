@@ -6,20 +6,23 @@ networking is identical for every service and the LB-vs-Nginx comparison is
 consistent across hosts. vegeta is the only load generator — wrk has no HTTP/2
 support ([ADR-0020](../docs/adr/0020-benchmark-tool-vegeta-over-wrk.md)).
 
-`./bench/run.sh all` runs the full 50-run matrix and writes reproducible
+`./bench/run.sh all` runs the full 62-run matrix and writes reproducible
 `.txt` summaries and `.hdr` histograms under `bench/results/`.
 
 ## Layout
 
 - `run.sh` — the execution harness and the single source of truth for the
   matrix parameters (rates, durations, warmup, thresholds). Slices: `core`
-  (36 runs, HTTP/2), `protocol` (12 runs, HTTP/1.1), `failure` (2 runs), `all`.
+  (48 runs, HTTP/2), `protocol` (12 runs, HTTP/1.1), `failure` (2 runs), `all`
+  (62 runs).
 - `docker-compose.yml` — the topology: `lb`, `nginx`, `backend1`–`backend4`, `vegeta`.
-- `nginx/http11/roundrobin.conf`, `nginx/h2/roundrobin.conf` and
-  `nginx/h2/leastconn.conf` (`least_conn`) — Nginx plain HTTP/1.1 and
-  TLS+HTTP/2 (`http2 on;`), constrained-matched to the LB's algorithm, four
-  backends, keepalive 100. Organised by protocol then algorithm, mirroring
-  `configs/`.
+- `nginx/http11/roundrobin.conf`, `nginx/h2/{roundrobin,leastconn,consistent-hash,p2c-ewma}.conf`
+  — Nginx plain HTTP/1.1 and TLS+HTTP/2 (`http2 on;`), four backends, keepalive
+  100, `worker_processes 2`. `roundrobin` and `leastconn` (`least_conn`) are
+  **matched**; `consistent-hash` (`hash $remote_addr consistent`, no bounded
+  loads) and `p2c-ewma` (`random two least_conn`, no latency signal) are
+  **nearest-equivalent** and their headers state the gap. Organised by protocol
+  then algorithm, mirroring `configs/`.
 - `configs/http11/`, `configs/h2/` — eight self-contained LB configs, one per
   algorithm × client protocol (`roundrobin`, `leastconn`, `consistent-hash`,
   `p2c-ewma`). No templating; each is readable in isolation.
@@ -58,9 +61,13 @@ Detection time is dominated by the active health checker's cadence: no bench
 config sets `health.probe_interval`, so runs use the default 5 s with 3
 consecutive failures before ejection (set it in a config to change it).
 
-Nginx and the LB are compared under a constrained match — same algorithm, same
-topology, same keepalive pool — so a gap is attributable to implementation, not
-tuning ([ADR-0020](../docs/adr/0020-benchmark-tool-vegeta-over-wrk.md)).
+Nginx and the LB are compared under a constrained match — same topology, same
+keepalive pool, and either the same algorithm (**matched**: round-robin,
+least-connections) or Nginx's nearest equivalent (**nearest-equivalent**:
+consistent-hash without bounded loads, p2c-ewma without a latency signal) — so a
+gap is attributable to implementation, not tuning. Each result header records
+which kind its comparison was, and every nearest-equivalent config states its
+gap ([ADR-0020](../docs/adr/0020-benchmark-tool-vegeta-over-wrk.md)).
 
 Tear the stack down when finished:
 
