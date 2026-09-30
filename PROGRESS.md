@@ -300,9 +300,10 @@ Scoped in `.scratch/s5-t5-t12-bench-execution/` as one bundle spec plus 20 ticke
   - Acceptance: before and after every measured consistent-hash run in the core slice (both competitors, all sizes, peak and latency) the harness reads each backend's arrival counter from inside the compose network and records the per-backend deltas as counts and shares in the result file; each result names the plurality owner and whether spill occurred; the reads are outside the measured window; the reader/differ is reusable by T8.2 and T9.2; `shellcheck -S style`, `bash -n`, a green smoke, and a reduced-constant local consistent-hash core run (Nginx ~100% on one backend, the LB's distribution and spill flag) are recorded in the session log.
   - Test approach: none — shell-only, TDD-exempt (AGENTS.md); the awk delta/owner/spill logic was checked directly against sample snapshots, and the end-to-end behaviour was exercised by the smoke and reduced core runs.
 
-- [TODO] S5.T8.2 — `degraded` slice — static slow backend
+- [IN_PROGRESS] S5.T8.2 — `degraded` slice — static slow backend
   - Spec: `.scratch/s5-t5-t12-bench-execution/issues/13-t8-2-degraded-slice.md`
   - Depends: S5.T8.1
+  - Claimed 2026-10-01T01:33:51+05:30 by OpenCode (deepseek-v4.1-flash).
 
 - [TODO] S5.T9.1 — No-op reload with a pass/fail verdict
   - Spec: `.scratch/s5-t5-t12-bench-execution/issues/14-t9-1-noop-reload-verdict.md`
