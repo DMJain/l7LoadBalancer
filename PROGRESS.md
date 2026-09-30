@@ -292,9 +292,10 @@ Scoped in `.scratch/s5-t5-t12-bench-execution/` as one bundle spec plus 20 ticke
   - Completed: `bench/repro.sh` plus the `bench-repro` Makefile target run the five steps in order, stopping at the first failure: preflight (Docker, Compose v2, `openssl`, `make` present; `docker info` `NCPU` ≥ `MIN_VCPUS` 8; no container running — listed by ID and image, never stopped by the script; clean tree including untracked — listed), `scripts/generate-cert.sh`, `docker compose build`, `bench/run.sh smoke`, `bench/run.sh all`. Refusal lives here at the publication boundary; the harness `bench/run.sh` stays a development tool that only records `git_dirty`/containers (spec §219). `make help` lists the target with its ~2–2.5 h duration; `bench/README.md` gains a *Reproducing the published numbers* section (Docker Desktop ≥ 8 vCPUs, openssl, make; the one command; the duration; the five steps and the refusals). No ADR: the spec fixes the scope and a reproducer is a benchmark tool, so ADR-0019 stands. TDD-exempt (shell/config, AGENTS.md).
   - Verified (session log): `bash -n` and `shellcheck -S style` clean; each refusal fires — a dirty tree (the implementation itself, files listed), a running container (ID and image listed, container left running), a locally raised `MIN_VCPUS` (99 > 8), and a missing tool (`docker` under a stripped `PATH`); from a cloned copy of this commit, `make bench-repro` passes preflight, generates certificates, builds all images, and reaches a green smoke — all 10 combinations 100% (`smoke PASSED`) — with the full matrix left to the published run (ticket 19). `make test`, `go vet ./...`, and `gofmt -l .` clean.
 
-- [TODO] S5.T8.1 — Hot-key distribution on consistent-hash runs
+- [IN_PROGRESS] S5.T8.1 — Hot-key distribution on consistent-hash runs
   - Spec: `.scratch/s5-t5-t12-bench-execution/issues/12-t8-1-hot-key-distribution.md`
   - Depends: S5.T12
+  - Claimed 2026-09-30T19:43:40Z by OpenCode (deepseek-v4.1-flash): bracketing every measured consistent-hash core run with per-backend `/stats` snapshots and recording counts, shares, owner and spill in the result file.
 
 - [TODO] S5.T8.2 — `degraded` slice — static slow backend
   - Spec: `.scratch/s5-t5-t12-bench-execution/issues/13-t8-2-degraded-slice.md`
