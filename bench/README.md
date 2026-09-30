@@ -31,6 +31,8 @@ support ([ADR-0020](../docs/adr/0020-benchmark-tool-vegeta-over-wrk.md)).
   popular prebuilt image is amd64-only and would run under emulation on arm64).
 - `results/{core,protocol,failure}/` — the harness's output; `.txt` + `.hdr`
   are committed, raw `.gob`/`.csv` scratch lands in the gitignored `results/.tmp/`.
+- `results/provenance.json` — the machine-readable record of the invocation that
+  produced the results beside it (see *Provenance record*).
 
 ## Running
 
@@ -99,6 +101,32 @@ Tear the stack down when finished:
 ```sh
 docker compose -f bench/docker-compose.yml down
 ```
+
+## Provenance record
+
+Every invocation writes `bench/results/provenance.json` when it starts and
+updates it when it finishes (an aborted slice still leaves a record), so any
+result set traces back to exact code and hardware. The harness never refuses a
+dirty tree or running containers — it records them; the reproducer and the
+results generator are what refuse a dirty record.
+
+| Field | Meaning |
+|---|---|
+| `git_sha` | the commit the run started from |
+| `git_dirty` | whether the tree had uncommitted or untracked changes — a separate boolean, never a `-dirty` suffix |
+| `slices` | the slices actually run (`all` expands to `core`, `protocol`, `failure`) |
+| `start_time`, `finish_time` | UTC ISO-8601 timestamps |
+| `host_os` | host OS, kernel and architecture (`uname -srm`) |
+| `host_cpu` | host CPU model (`sysctl` on macOS, `/proc/cpuinfo` on Linux) |
+| `docker_version`, `compose_version` | Docker engine and Compose plugin versions |
+| `docker_cpus`, `docker_memory_bytes` | vCPUs and memory as Docker reports them |
+| `cpusets` | the per-service cpuset split read from the resolved compose config |
+| `lb_go_version`, `lb_gomaxprocs` | the LB's Go version and effective GOMAXPROCS, from its startup line |
+| `nginx_version`, `nginx_workers` | Nginx version and running worker count |
+| `vegeta_version` | the pinned vegeta source tag the image is built from (the `go install`-built binary embeds no version) |
+
+Fields only knowable once containers exist (`lb_*`, `nginx_*`) are `null` in the
+record written at start and populated when the run finishes.
 
 ## Manual smoke checks
 

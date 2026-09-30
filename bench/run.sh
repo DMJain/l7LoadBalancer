@@ -25,7 +25,10 @@
 #
 # Results land as .txt summaries + .hdr HDR histograms under
 # bench/results/{core,protocol,failure}/ with parameter-encoded filenames, and
-# each slice prints a summary table to stdout (spec §27, §30, §32).
+# each slice prints a summary table to stdout (spec §27, §30, §32). Every
+# invocation also writes bench/results/provenance.json — the commit, dirty
+# state, host, tool versions, cpusets and start/finish times a reader needs to
+# interpret the numbers (S5.T5.7.3).
 #
 # Progress (S5.T5.7.2) goes to stderr before every run, so the stdout summary
 # tables stay clean for piping.
@@ -335,6 +338,171 @@ passes() {
   (( p99 < P99_CEILING_MS * 1000000 )) || return 1
   awk -v s="$success" -v e="$ERROR_CEILING_PCT" \
     'BEGIN { exit !((100 * (1 - s)) < e) }'
+}
+
+# ---------------------------------------------------------------------------
+# Provenance record (S5.T5.7.3). Every invocation writes
+# bench/results/provenance.json when it starts and updates it when it finishes
+# (an EXIT trap, so a slice that aborts still leaves a record). It is a
+# development tool: it *records* a dirty tree or running containers, it never
+# refuses them — enforcement lives at the publication boundary (the reproducer
+# S5.T12 and the results generator S5.T10), which refuse a dirty `git_dirty`.
+# ---------------------------------------------------------------------------
+
+PROVENANCE="$RESULTS/provenance.json"
+PROV_GIT_SHA=""
+PROV_GIT_DIRTY="false"
+PROV_SLICES="[]"
+PROV_START_TS=""
+PROV_FINISH_TS=""
+PROV_DOCKER_CPUS=""
+PROV_DOCKER_MEM=""
+PROV_LB_GO_VERSION=""
+PROV_LB_GOMAXPROCS=""
+PROV_NGINX_VERSION=""
+PROV_NGINX_WORKERS=""
+PROV_VEGETA_VERSION=""
+
+iso_now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+
+# json_escape <string> escapes backslashes, quotes and newlines for a JSON
+# string value (host CPU models can contain characters that need it).
+json_escape() {
+  local s="$1"
+  s="${s//\\/\\\\}"
+  s="${s//\"/\\\"}"
+  s="${s//$'\n'/ }"
+  s="${s//$'\r'/}"
+  printf '%s' "$s"
+}
+
+json_string_or_null() { # <string>
+  if [[ -n "$1" ]]; then printf '"%s"' "$(json_escape "$1")"; else printf 'null'; fi
+}
+
+json_int_or_null() { # <value>
+  if [[ "$1" =~ ^[0-9]+$ ]]; then printf '%s' "$1"; else printf 'null'; fi
+}
+
+# json_str_field <file> <key> extracts a JSON *string* field's value. json_field
+# (above) only matches numerics, so the string fields need their own reader.
+json_str_field() {
+  grep -o "\"$2\":\"[^\"]*\"" "$1" 2>/dev/null | head -n1 | cut -d: -f2- | tr -d '"'
+}
+
+host_os() { uname -srm; }
+
+# host_cpu reads the CPU model on the host (the harness runs there): macOS via
+# sysctl, Linux via /proc/cpuinfo, falling back to the architecture.
+host_cpu() {
+  local cpu=""
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    cpu=$(sysctl -n machdep.cpu.brand_string 2>/dev/null || true)
+  fi
+  if [[ -z "$cpu" && -r /proc/cpuinfo ]]; then
+    cpu=$(awk -F': ' '/model name/ { print $2; exit }' /proc/cpuinfo)
+  fi
+  printf '%s' "${cpu:-$(uname -m)}"
+}
+
+docker_version() {
+  docker version --format '{{.Server.Version}}' 2>/dev/null \
+    || docker version --format '{{.Client.Version}}' 2>/dev/null \
+    || true
+}
+
+compose_version() { docker compose version --short 2>/dev/null || true; }
+
+# cpusets_json renders the per-service cpuset split from the resolved compose
+# config, so the record states what the rig is actually pinned to.
+cpusets_json() {
+  local raw
+  raw=$("${COMPOSE[@]}" config 2>/dev/null | awk '
+    /^  [A-Za-z0-9_.-]+:/ && $0 !~ /^    / { svc=$1; sub(/:$/, "", svc) }
+    /^    cpuset:/ { v=$2; gsub(/"/, "", v); if (n++) printf ", "; printf "\"%s\": \"%s\"", svc, v }
+  ')
+  printf '{%s}' "$raw"
+}
+
+# vegeta_version reads the pinned source tag the vegeta image is built from.
+# The `go install`-built binary carries no version metadata (`vegeta -version`
+# prints an empty Version), so the Dockerfile pin is the authoritative version.
+vegeta_version() {
+  grep -o 'vegeta/v12@v[0-9][^ ]*' "$ROOT/bench/vegeta/Dockerfile" 2>/dev/null \
+    | head -n1 | sed 's/.*@//'
+}
+
+provenance_slices() { # <slice> — the slices actually run (`all` expands).
+  case "$1" in
+    all) printf '["core", "protocol", "failure"]' ;;
+    *)   printf '["%s"]' "$1" ;;
+  esac
+}
+
+# gather_runtime_facts fills the fields only knowable once the containers exist.
+# Best-effort: a container that is not up leaves its field null. Called at start
+# and again when the record is finalized.
+gather_runtime_facts() {
+  PROV_DOCKER_CPUS=$(docker info --format '{{.NCPU}}' 2>/dev/null || true)
+  PROV_DOCKER_MEM=$(docker info --format '{{.MemTotal}}' 2>/dev/null || true)
+  "${COMPOSE[@]}" logs --no-color lb > "$TMP/lb.log" 2>/dev/null || true
+  PROV_LB_GO_VERSION=$(json_str_field "$TMP/lb.log" go_version || true)
+  PROV_LB_GOMAXPROCS=$(json_field "$TMP/lb.log" gomaxprocs || true)
+  if "${COMPOSE[@]}" ps -q nginx 2>/dev/null | grep -q .; then
+    PROV_NGINX_VERSION=$("${COMPOSE[@]}" exec -T nginx nginx -v 2>&1 \
+      | sed -n 's#.*nginx/##p' | tr -d '\r' | head -n1 || true)
+    PROV_NGINX_WORKERS=$("${COMPOSE[@]}" exec -T nginx ps 2>/dev/null \
+      | grep -c '[n]ginx: worker process' || true)
+  fi
+}
+
+# write_provenance renders the record in place. Called once at start (runtime
+# fields null) and once from the EXIT trap (populated).
+write_provenance() {
+  local finish_json
+  if [[ -n "$PROV_FINISH_TS" ]]; then finish_json=$(json_string_or_null "$PROV_FINISH_TS"); else finish_json='null'; fi
+  mkdir -p "$RESULTS"
+  cat > "$PROVENANCE" <<JSON
+{
+  "git_sha": $(json_string_or_null "$PROV_GIT_SHA"),
+  "git_dirty": $PROV_GIT_DIRTY,
+  "slices": $PROV_SLICES,
+  "start_time": $(json_string_or_null "$PROV_START_TS"),
+  "finish_time": $finish_json,
+  "host_os": $(json_string_or_null "$(host_os)"),
+  "host_cpu": $(json_string_or_null "$(host_cpu)"),
+  "docker_version": $(json_string_or_null "$(docker_version)"),
+  "compose_version": $(json_string_or_null "$(compose_version)"),
+  "docker_cpus": $(json_int_or_null "$PROV_DOCKER_CPUS"),
+  "docker_memory_bytes": $(json_int_or_null "$PROV_DOCKER_MEM"),
+  "cpusets": $(cpusets_json),
+  "lb_go_version": $(json_string_or_null "$PROV_LB_GO_VERSION"),
+  "lb_gomaxprocs": $(json_int_or_null "$PROV_LB_GOMAXPROCS"),
+  "nginx_version": $(json_string_or_null "$PROV_NGINX_VERSION"),
+  "nginx_workers": $(json_int_or_null "$PROV_NGINX_WORKERS"),
+  "vegeta_version": $(json_string_or_null "$PROV_VEGETA_VERSION")
+}
+JSON
+}
+
+# provenance_start captures the immutable facts before any result is written
+# (git state, start time, the slices, the vegeta pin), records the initial file,
+# and arms the EXIT trap that finalizes it.
+provenance_start() {
+  PROV_GIT_SHA=$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || printf 'unknown')
+  if [[ -n "$(git -C "$ROOT" status --porcelain 2>/dev/null)" ]]; then PROV_GIT_DIRTY=true; else PROV_GIT_DIRTY=false; fi
+  PROV_SLICES=$(provenance_slices "$SLICE")
+  PROV_START_TS=$(iso_now)
+  PROV_VEGETA_VERSION=$(vegeta_version)
+  gather_runtime_facts
+  write_provenance
+  trap provenance_finish EXIT
+}
+
+provenance_finish() {
+  PROV_FINISH_TS=$(iso_now)
+  gather_runtime_facts
+  write_provenance 2>/dev/null || true
 }
 
 # ---------------------------------------------------------------------------
@@ -732,7 +900,11 @@ print_summary() {
 
 SLICE="${1:-all}"
 require_docker
+case "$SLICE" in
+  -h|--help|help) usage; exit 0 ;;
+esac
 mkdir -p "$TMP" "$RESULTS/core" "$RESULTS/protocol" "$RESULTS/failure"
+provenance_start
 
 RUN_TOTAL=$(run_total "$SLICE")
 RUN_START=$(date +%s)
@@ -743,7 +915,6 @@ case "$SLICE" in
   failure) run_failure; print_summary ;;
   smoke) run_smoke; exit 0 ;;
   all) run_core; print_summary; run_protocol; print_summary; run_failure; print_summary ;;
-  -h|--help|help) usage; exit 0 ;;
   *) warn "unknown slice '$SLICE'"; usage; exit 2 ;;
 esac
 
