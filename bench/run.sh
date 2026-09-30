@@ -162,8 +162,8 @@ vegeta_run() {
 # JSON, so the value is a plain integer field.
 verify_lb_gomaxprocs() {
   local seen
-  seen=$("${COMPOSE[@]}" logs --no-color lb 2>/dev/null \
-    | grep -o '"gomaxprocs":[0-9]*' | tail -n1 | cut -d: -f2 || true)
+  "${COMPOSE[@]}" logs --no-color lb > "$TMP/lb.log" 2>/dev/null || true
+  seen=$(json_field "$TMP/lb.log" gomaxprocs)
   if [[ "$seen" != "2" ]]; then
     warn "lb cpu-pinning check FAILED: gomaxprocs=${seen:-unknown} (need 2)"
     exit 1
@@ -173,11 +173,14 @@ verify_lb_gomaxprocs() {
 # verify_nginx_workers waits until Nginx serves a 200 through its listener (the
 # workers fork slightly after the container starts, so counting immediately can
 # see zero), then counts worker processes and aborts unless there are 2 — the
-# Nginx cpuset is cores 0–1. `[n]ginx` keeps grep from matching its own argv.
+# Nginx cpuset is cores 0–1. wait_target leaves its last response in
+# $TMP/ready.json; the extra smoke_ok_200 rejects a 3xx, which wait_target's
+# readiness signal (vegeta `success`) would accept but the ticket's "200" would
+# not. `[n]ginx` keeps grep from matching its own argv.
 verify_nginx_workers() { # <proto>
   local proto="$1" url count
   url=$(target_url "$proto" nginx "$SMOKE_SIZE")
-  if ! wait_target "$url"; then
+  if ! wait_target "$url" || ! smoke_ok_200 "$TMP/ready.json"; then
     warn "nginx worker check FAILED: listener never served a 200 at $url"
     exit 1
   fi
@@ -610,8 +613,10 @@ smoke_attack() { # <combination> <url>
 }
 
 # smoke_proto <proto> <algorithm...> brings the protocol's backends and nginx
-# up and checks both competitors for each algorithm. set_lb is allowed to fail
-# so the combination is still probed and named by smoke_attack.
+# up and checks both competitors for each algorithm. A set_lb that fails to
+# start (compose error) is allowed to fail so the combination is still probed
+# and named by smoke_attack; a CPU-pinning mismatch is not — that aborts the
+# slice from inside set_lb/up_h2 (S5.T5.7.1).
 smoke_proto() { # <proto> <algorithm...>
   local proto="$1"
   shift

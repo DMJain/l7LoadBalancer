@@ -81,10 +81,8 @@ gap ([ADR-0020](../docs/adr/0020-benchmark-tool-vegeta-over-wrk.md)).
 ## CPU pinning and run-time checks
 
 The rig pins each role to a fixed slice of an 8-vCPU host so that a throughput
-difference cannot come from one competitor being starved or over-provisioned:
-**LB and Nginx: cores 0–1; backends 1–4: cores 2–5, one each; vegeta: cores
-6–7.** The split is set with `cpuset` in `docker-compose.yml` and is never
-scaled from the available CPU count — scaled splits give incomparable numbers.
+difference cannot come from one competitor being starved or over-provisioned.
+The split, reused verbatim as the methodology statement: **LB and Nginx: cores 0–1; backends 1–4: cores 2–5, one each; vegeta: cores 6–7.** It is set with `cpuset` in `docker-compose.yml` and is never scaled from the available CPU count — scaled splits give incomparable numbers.
 
 The harness proves at run time that the pinning took effect, aborting the slice
 with the check name and the value it saw otherwise:
