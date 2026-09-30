@@ -982,23 +982,28 @@ failure_event() { # <kill|sighup> <url> <rate>
   # detection-window count equals the total error count.
   detwindow=$(awk -v a="$first" -v b="$last" 'BEGIN { printf "%.3f", b - a }')
 
-  local base analysis verdict_label pre_p99 post_p99
+  local base analysis verdict verdict_label non_2xx pre_p99 post_p99
   if [[ "$mode" == kill ]]; then
     base="roundrobin-10kb-backend-kill"
+    verdict=""
     verdict_label=""
     analysis=$(printf 'measurements: mode=backend-kill event=docker-compose-stop-backend3 event_at_s=%s total_errors=%s detection_window_errors=%s error_first_s=%s error_last_s=%s time_to_detection_s=%s p50_ms=%s p99_ms=%s p99_recovery_s=%s' \
       "$event_offset" "$errors" "$errors" "$first" "$last" "$detwindow" "$p50" "$p99" "$rec")
   else
     base="roundrobin-10kb-sighup-noop"
     drops=$errors
+    # `errors` counts every failed request, transport errors included (they are
+    # status 0). The two judged criteria are disjoint status classes, so peel
+    # transport out: non-2xx are real HTTP responses outside 2xx (spec §37).
+    non_2xx=$(( errors - transport ))
     maxp=$(max_p99_ms "$TMP/timeseries.jsonl")
     reload_window_reports "$WARMUP_SECS" "$FAILURE_EVENT_AT"
     pre_p99=$(ns_to_ms "$(json_field "$TMP/pre.json" 99th)")
     post_p99=$(ns_to_ms "$(json_field "$TMP/post.json" 99th)")
-    verdict_label=$(reload_verdict "$errors" "$transport" "$pre_p99" "$post_p99")
-    analysis=$(printf 'measurements: mode=sighup-noop event=docker-compose-kill-s-HUP-lb event_at_s=%s errors=%s transport_errors=%s drops=%s pre_p99_ms=%s post_p99_ms=%s p99_factor=%s p50_ms=%s p99_ms=%s p99_peak_ms=%s p99_recovery_s=%s\nverdict=%s' \
-      "$event_offset" "$errors" "$transport" "$drops" "$pre_p99" "$post_p99" "$RELOAD_P99_FACTOR" "$p50" "$p99" "$maxp" "$rec" "$verdict_label")
-    verdict_label="${verdict_label%% *}"
+    verdict=$(reload_verdict "$non_2xx" "$transport" "$pre_p99" "$post_p99")
+    analysis=$(printf 'measurements: mode=sighup-noop event=docker-compose-kill-s-HUP-lb event_at_s=%s non_2xx=%s transport_errors=%s drops=%s pre_p99_ms=%s post_p99_ms=%s p99_factor=%s p50_ms=%s p99_ms=%s p99_peak_ms=%s p99_recovery_s=%s\nverdict=%s' \
+      "$event_offset" "$non_2xx" "$transport" "$drops" "$pre_p99" "$post_p99" "$RELOAD_P99_FACTOR" "$p50" "$p99" "$maxp" "$rec" "$verdict")
+    verdict_label="${verdict%% *}"
   fi
 
   mkdir -p "$RESULTS/failure"
