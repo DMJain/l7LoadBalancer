@@ -286,9 +286,10 @@ Scoped in `.scratch/s5-t5-t12-bench-execution/` as one bundle spec plus 20 ticke
   - Completed: `bench/run.sh` writes `bench/results/provenance.json` when an invocation starts and updates it from an `EXIT` trap, so a slice that aborts still leaves a record. Fields: `git_sha`; `git_dirty` (a separate boolean, never a `-dirty` suffix on the SHA); `slices` (`all` expands to `core`/`protocol`/`failure`); `start_time`/`finish_time` (UTC ISO-8601); `host_os` (`uname -srm`); `host_cpu` (`sysctl` on macOS, `/proc/cpuinfo` on Linux, architecture fallback); `docker_version`/`compose_version`; `docker_cpus`/`docker_memory_bytes`; per-service `cpusets` parsed from `docker compose config`; `lb_go_version`/`lb_gomaxprocs` from the LB startup line; `nginx_version`/`nginx_workers` from the running container; and `vegeta_version` from the pinned Dockerfile tag (the `go install`-built binary's `-version` prints an empty Version). Runtime-only fields are `null` at start and populated at finish. The harness refuses neither a dirty tree nor running containers — it records `git_dirty` only; refusal belongs to the reproducer (S5.T12) and generator (S5.T10). `--help` is handled before the record is armed. `bench/README.md` gains a *Provenance record* section documenting every field. TDD-exempt (shell/config, AGENTS.md).
   - Verified: `bash -n`, `shellcheck -S style`, `make test`, `go vet ./...`, `gofmt -l .` clean. `./bench/run.sh smoke` on a dirty tree (`docs/resume/` untracked) exits 0 with every field plausible and `git_dirty: true`; a second smoke on a clean tree (untracked dir moved aside, prior record removed) leaves `git_dirty: false`. Both records are shown in the session log.
 
-- [TODO] S5.T12 — `make bench-repro` — one-command reproducer
+- [IN_PROGRESS] S5.T12 — `make bench-repro` — one-command reproducer
   - Spec: `.scratch/s5-t5-t12-bench-execution/issues/11-t12-make-bench-repro.md`
   - Depends: S5.T5.5.2, S5.T5.7.3
+  - Claimed 2026-09-30T19:29:14Z by OpenCode (deepseek-v4.1-flash).
 
 - [TODO] S5.T8.1 — Hot-key distribution on consistent-hash runs
   - Spec: `.scratch/s5-t5-t12-bench-execution/issues/12-t8-1-hot-key-distribution.md`
