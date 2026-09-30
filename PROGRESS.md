@@ -324,7 +324,7 @@ Scoped in `.scratch/s5-t5-t12-bench-execution/` as one bundle spec plus 20 ticke
   - Test approach: none — shell-only, TDD-exempt (AGENTS.md); verified by static checks, a green smoke, and reduced-constant `failure` runs.
   - Verified (session log): `bash -n`, `shellcheck -S style`, `make test`, `go vet ./...`, `gofmt -l .` and `docker compose config` clean; green `./bench/run.sh smoke` (all 10 combinations 100%). A reduced-constant `failure` run (uncommitted copy: seed 50, peak cap 200, 30 s runs) showed `sighup-noop:PASS` and `sighup-drain:PASS` with `drain_before_applied_backend4=39 drain_applied_end_backend4=0` and all three snapshot blocks; the same reduced run with `cp` swapped for `mv` locally/uncommitted aborted at the inode assertion (`drain reload: config inode changed (… -> …)`) with exit 1.
 
-- [TODO] S5.T10.1 — Results generator — core, protocol, methodology
+- [IN_PROGRESS] S5.T10.1 — Results generator — core, protocol, methodology (OpenCode (deepseek-v4.1-flash), started 2026-09-30T21:53:49Z)
   - Spec: `.scratch/s5-t5-t12-bench-execution/issues/16-t10-1-generator-core-protocol-methodology.md`
   - Depends: S5.T5.7.3
 
