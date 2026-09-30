@@ -1,11 +1,17 @@
 package main
 
 import (
+	"bufio"
+	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"syscall"
 	"testing"
 	"time"
 
@@ -121,4 +127,85 @@ func TestBinaryLogsInjectedVersionAndCommit(t *testing.T) {
 
 	assert.Contains(t, string(out), `"version":"9.9.9"`)
 	assert.Contains(t, string(out), `"commit":"deadbeef"`)
+}
+
+// TestBinaryLogsStartupRuntimeFields covers the benchmark methodology's two
+// runtime facts (S5.T5.6): the "l7LoadBalancer starting" line reports the
+// effective GOMAXPROCS and the Go version the binary was built with. The
+// harness reads gomaxprocs to prove CPU pinning took effect (Go derives
+// GOMAXPROCS from CPU affinity), and go_version is the only way a distroless
+// image can name its toolchain. It runs the built binary with GOMAXPROCS=2 and
+// a temp config, reads the startup JSON line, then SIGTERMs the process.
+func TestBinaryLogsStartupRuntimeFields(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "l7lb")
+	build := exec.Command("go", "build", "-o", bin, ".")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("go build failed: %v\n%s", err, out)
+	}
+
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer backend.Close()
+
+	cfg := fmt.Sprintf(`listen: "127.0.0.1:0"
+metrics:
+  listen: "127.0.0.1:0"
+health_endpoint:
+  listen: "127.0.0.1:0"
+backends:
+  - name: "backend"
+    url: %q
+`, backend.URL)
+	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+	require.NoError(t, os.WriteFile(cfgPath, []byte(cfg), 0o600))
+
+	cmd := exec.Command(bin, "-config", cfgPath)
+	cmd.Env = append(os.Environ(), "GOMAXPROCS=2")
+	stdout, err := cmd.StdoutPipe()
+	require.NoError(t, err)
+	cmd.Stderr = os.Stderr
+	require.NoError(t, cmd.Start())
+
+	entry, err := readStartupLine(stdout)
+	require.NoError(t, err)
+
+	assert.Equal(t, "l7LoadBalancer starting", entry.Msg)
+	assert.Equal(t, 2, entry.GOMAXPROCS)
+	assert.Equal(t, runtime.Version(), entry.GoVersion)
+
+	require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		_ = cmd.Process.Kill()
+		t.Fatal("process did not exit after SIGTERM")
+	}
+}
+
+// startupLine is the subset of the "l7LoadBalancer starting" JSON line this
+// test asserts on.
+type startupLine struct {
+	Msg        string `json:"msg"`
+	GOMAXPROCS int    `json:"gomaxprocs"`
+	GoVersion  string `json:"go_version"`
+}
+
+// readStartupLine scans r for the "l7LoadBalancer starting" JSON line and
+// decodes it, skipping the earlier "starting" line. It returns io.EOF if the
+// process exits before the line appears.
+func readStartupLine(r io.Reader) (startupLine, error) {
+	scanner := bufio.NewScanner(r)
+	for scanner.Scan() {
+		var entry startupLine
+		if err := json.Unmarshal(scanner.Bytes(), &entry); err != nil {
+			continue
+		}
+		if entry.Msg == "l7LoadBalancer starting" {
+			return entry, nil
+		}
+	}
+	return startupLine{}, io.EOF
 }
