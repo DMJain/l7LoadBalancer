@@ -60,6 +60,12 @@ func main() {
 		os.Exit(1)
 	}
 
+	logRequests, err := envBool("LOG_REQUESTS", true)
+	if err != nil {
+		logger.Error("invalid LOG_REQUESTS", "error", err)
+		os.Exit(1)
+	}
+
 	certFile, keyFile, err := tlsFilesFromEnv()
 	if err != nil {
 		logger.Error("invalid TLS configuration", "error", err)
@@ -68,7 +74,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:              *addr,
-		Handler:           newHandler(*name, sleepMS, failRate, logger),
+		Handler:           newHandler(*name, sleepMS, failRate, logRequests, logger),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
@@ -86,7 +92,7 @@ func main() {
 
 	logger.Info("dummy backend listening",
 		"backend", *name, "addr", *addr, "sleep_ms", sleepMS, "fail_rate", failRate,
-		"tls", certFile != "")
+		"log_requests", logRequests, "tls", certFile != "")
 
 	// server.TLSNextProto is deliberately left nil: ListenAndServeTLS
 	// auto-configures HTTP/2 via ALPN only while it is nil. Setting it to an
@@ -128,14 +134,14 @@ func tlsFilesFromEnv() (certFile, keyFile string, err error) {
 // /200b, /10kb, and /1mb serve fixed-size pre-generated bodies; every other
 // path answers with a JSON body identifying the backend so distribution stays
 // observable even through failing responses. Non-GET requests get a 405.
-func newHandler(name string, sleepMS int, failRate float64, logger *slog.Logger) http.Handler {
+func newHandler(name string, sleepMS int, failRate float64, logRequests bool, logger *slog.Logger) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 
 		if r.Method != http.MethodGet {
 			w.Header().Set("Allow", http.MethodGet)
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			logRequest(logger, r, name, http.StatusMethodNotAllowed, start)
+			logRequest(logger, logRequests, r, name, http.StatusMethodNotAllowed, start)
 			return
 		}
 
@@ -146,7 +152,7 @@ func newHandler(name string, sleepMS int, failRate float64, logger *slog.Logger)
 			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte("ok\n"))
-			logRequest(logger, r, name, http.StatusOK, start)
+			logRequest(logger, logRequests, r, name, http.StatusOK, start)
 			return
 		}
 
@@ -165,18 +171,24 @@ func newHandler(name string, sleepMS int, failRate float64, logger *slog.Logger)
 			w.Header().Set("Content-Type", "application/octet-stream")
 			w.WriteHeader(status)
 			_, _ = w.Write(payload)
-			logRequest(logger, r, name, status, start)
+			logRequest(logger, logRequests, r, name, status, start)
 			return
 		}
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
 		_ = json.NewEncoder(w).Encode(map[string]string{"backend": name})
-		logRequest(logger, r, name, status, start)
+		logRequest(logger, logRequests, r, name, status, start)
 	})
 }
 
-func logRequest(logger *slog.Logger, r *http.Request, name string, status int, start time.Time) {
+// logRequest is the single gate for every per-request line, so switching
+// LOG_REQUESTS off silences all paths (health and 405 included) by short-
+// circuiting here rather than testing the flag at each call site.
+func logRequest(logger *slog.Logger, logRequests bool, r *http.Request, name string, status int, start time.Time) {
+	if !logRequests {
+		return
+	}
 	logger.Info("request complete",
 		"backend", name,
 		"method", r.Method,
@@ -202,6 +214,25 @@ func envInt(key string, def int) (int, error) {
 		return 0, fmt.Errorf("%s: %d must be >= 0", key, v)
 	}
 	return v, nil
+}
+
+// envBool reads key as a bool, defaulting to def when unset or empty. Only the
+// exact strings "true" and "false" are accepted; anything else is an error so a
+// typo in compose fails loudly instead of silently taking a default (the
+// SLEEP_MS/FAIL_RATE convention).
+func envBool(key string, def bool) (bool, error) {
+	raw, ok := os.LookupEnv(key)
+	if !ok || raw == "" {
+		return def, nil
+	}
+	switch raw {
+	case "true":
+		return true, nil
+	case "false":
+		return false, nil
+	default:
+		return false, fmt.Errorf("%s: %q is not true or false", key, raw)
+	}
 }
 
 // envFloat reads key as a float64, defaulting to def when unset or empty.

@@ -29,12 +29,16 @@ name: l7loadbalancer-bench
 # Shared backend definition: four identical dummy backends differing only in
 # -name. TLS_* are empty by default (plain HTTP); the h2 slice sets them, and
 # the empty values are treated as "unset" by the backend's env check.
+# LOG_REQUESTS is off here so per-request backend logging cannot become the
+# throughput ceiling and make both competitors report the same number for a
+# reason unrelated to either (S5.T5.5.1). The demo stack keeps it on.
 x-backend: &backend
   build:
     context: ../deployments/docker/dummy-backend
   environment:
     TLS_CERT_FILE: ${BACKEND_TLS_CERT_FILE:-}
     TLS_KEY_FILE: ${BACKEND_TLS_KEY_FILE:-}
+    LOG_REQUESTS: "false"
   volumes:
     - ../certs:/certs:ro
 
