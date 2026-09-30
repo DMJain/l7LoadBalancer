@@ -12,7 +12,7 @@
 #
 #   core      HTTP/2 (TLS+ALPN) matrix — 48 runs
 #   protocol  HTTP/1.1 round-robin comparison — 12 runs
-#   failure   backend-kill and SIGHUP-under-load — 2 runs
+#   failure   backend-kill and no-op reload — 2 runs
 #   degraded  one backend +50 ms, per-backend distribution — 8 runs
 #   smoke     a ~1-minute preflight over every (protocol, algorithm,
 #             competitor) combination the matrix uses — 10 attacks, not part
@@ -49,6 +49,14 @@
 # `docker compose kill -s HUP lb` is the host-side form of the in-container
 # `kill -HUP 1` the ticket names: the distroless image has no shell or kill
 # binary, and the LB is PID 1 in its container (ADR-0019).
+#
+# No-op reload (S5.T9.1): the reload run re-reads an unchanged config and is
+# judged PASS/FAIL against criteria fixed as constants before any run — zero
+# non-2xx/transport errors over the whole run, and post-event p99 within
+# RELOAD_P99_FACTOR of the same run's pre-event p99 (warmup to the event). The
+# result file carries both windows' p99, the error counts and a verdict line
+# naming any failed criterion, so the writeup reports a verdict, not a judgment
+# call (spec §36, §37, §38, §44).
 #
 # The smoke slice (S5.T5.3) is the preflight gate: for every (protocol,
 # algorithm, competitor) combination the matrix uses, it runs a short low-rate
@@ -93,6 +101,7 @@ FAILURE_RATE_PCT=50       # failure-mode steady state as a percent of peak
 FAILURE_SECS=60           # failure-mode total duration (spec §29)
 FAILURE_EVENT_AT=30       # seconds into the failure run when the event fires
 SETTLE_SECS=10            # settle time after restarting backend3 (two probe intervals)
+RELOAD_P99_FACTOR=2       # no-op reload: post-event p99 must be <= factor x pre-event p99 (S5.T9.1)
 
 # Hot-key spill (S5.T8.1). The active health checker's probes are counted
 # arrivals — the probe target is the backend's own URL — and they land on every
@@ -182,7 +191,7 @@ Usage: bench/run.sh [core|protocol|failure|degraded|smoke|all]   (default: all)
 
   core      HTTP/2 (TLS+ALPN) matrix — 48 runs
   protocol  HTTP/1.1 round-robin comparison — 12 runs
-  failure   backend-kill and SIGHUP-under-load — 2 runs
+  failure   backend-kill and no-op reload — 2 runs
   degraded  one backend +50 ms, per-backend distribution — 8 runs
   smoke     preflight: every (protocol, algorithm, competitor) combination
             the matrix uses, 10 short attacks, 100% required, not part of all
@@ -885,11 +894,53 @@ max_p99_ms() { # <timeseries>
     END { printf "%.3f", m / 1e6 }' "$1"
 }
 
+# Reload runs (S5.T9.1). The no-op reload re-reads an unchanged config, so it
+# measures the reload path's own cost. Its verdict is computed here from fixed
+# thresholds, never left to the writeup.
+
+# reload_window_reports <warmup-secs> <event-secs> splits the run's CSV into the
+# pre-event window (the end of warmup to the event) and the post-event window
+# (the event to the end) and writes each window's vegeta JSON report to
+# $TMP/pre.json and $TMP/post.json. The percentiles come from vegeta, so they
+# are HDR-consistent with every other p99 in the results.
+reload_window_reports() { # <warmup-secs> <event-secs>
+  local warmup="$1" event="$2"
+  vegeta_run "
+set -e
+start=\$(head -n1 /results/.tmp/failure.csv | cut -d, -f1)
+pre=\$(( start + ${warmup} * 1000000000 ))
+post=\$(( start + ${event} * 1000000000 ))
+awk -F, -v a=\"\$pre\" -v b=\"\$post\" '\$1+0 >= a && \$1+0 < b' /results/.tmp/failure.csv > /results/.tmp/pre.csv
+awk -F, -v b=\"\$post\" '\$1+0 >= b' /results/.tmp/failure.csv > /results/.tmp/post.csv
+vegeta encode -to gob /results/.tmp/pre.csv | vegeta report -type=json > /results/.tmp/pre.json
+vegeta encode -to gob /results/.tmp/post.csv | vegeta report -type=json > /results/.tmp/post.json
+"
+}
+
+# reload_verdict <errors> <transport-errors> <pre-p99-ms> <post-p99-ms> prints
+# PASS, or FAIL naming each unmet criterion. The criteria and the p99 factor are
+# the constants fixed before any run (S5.T9.1): zero non-2xx responses, zero
+# transport errors, and post-event p99 within RELOAD_P99_FACTOR of the pre-event
+# p99. Ticket 15's drain reload reuses this verdict as one of its criteria.
+reload_verdict() { # <errors> <transport-errors> <pre-p99-ms> <post-p99-ms>
+  local errors="$1" transport="$2" pre="$3" post="$4" failed=""
+  if (( errors > 0 )); then failed="non_2xx"; fi
+  if (( transport > 0 )); then failed="${failed:+$failed,}transport_errors"; fi
+  if ! awk -v post="$post" -v pre="$pre" -v f="$RELOAD_P99_FACTOR" \
+       'BEGIN { exit !((post + 0) <= f * (pre + 0)) }'; then
+    failed="${failed:+$failed,}p99_factor"
+  fi
+  if [[ -z "$failed" ]]; then printf 'PASS'; else printf 'FAIL failed=%s' "$failed"; fi
+}
+
 # failure_event <mode> <url> <rate> fires the event at T+FAILURE_EVENT_AT while
-# the attack runs, then writes the failure result and its measurements.
+# the attack runs, then writes the failure result and its measurements. `kill`
+# is unchanged; `sighup` is the no-op reload, renamed `sighup-noop` and judged
+# against the fixed reload criteria (S5.T9.1).
 failure_event() { # <kill|sighup> <url> <rate>
-  local mode="$1" url="$2" rate="$3" scheduler
-  progress h2 roundrobin 10kb lb "$mode"
+  local mode="$1" url="$2" rate="$3" scheduler label
+  if [[ "$mode" == sighup ]]; then label=sighup-noop; else label="$mode"; fi
+  progress h2 roundrobin 10kb lb "$label"
   rm -f "$TMP/event_epoch"
   case "$mode" in
     kill)
@@ -907,15 +958,17 @@ failure_event() { # <kill|sighup> <url> <rate>
   failure_attack "$url" "$rate" "$FAILURE_SECS"
   wait "$scheduler" || warn "the $mode event command exited non-zero"
 
-  local errors first last p50 p99 rec start_epoch event_epoch event_offset maxp drops detwindow
-  read -r errors first last < <(awk -F, '
+  local errors transport first last p50 p99 rec start_epoch event_epoch event_offset maxp drops detwindow
+  read -r errors transport first last < <(awk -F, '
     NR == 1 { start = $1 }
-    ($2 + 0 < 200 || $2 + 0 >= 300) {
-      e++; off = ($1 - start) / 1e9
-      if (first == "") first = off
-      last = off
-    }
-    END { printf "%d %.3f %.3f\n", e + 0, (first == "" ? 0 : first), (last == "" ? 0 : last) }' \
+    { code = $2 + 0
+      if (code == 0) t++
+      if (code < 200 || code >= 300) {
+        e++; off = ($1 - start) / 1e9
+        if (first == "") first = off
+        last = off
+      } }
+    END { printf "%d %d %.3f %.3f\n", e + 0, t + 0, (first == "" ? 0 : first), (last == "" ? 0 : last) }' \
     "$TMP/failure.csv")
 
   p50=$(ns_to_ms "$(json_field "$TMP/metrics.json" 50th)")
@@ -929,34 +982,40 @@ failure_event() { # <kill|sighup> <url> <rate>
   # detection-window count equals the total error count.
   detwindow=$(awk -v a="$first" -v b="$last" 'BEGIN { printf "%.3f", b - a }')
 
-  local base analysis
+  local base analysis verdict_label pre_p99 post_p99
   if [[ "$mode" == kill ]]; then
     base="roundrobin-10kb-backend-kill"
+    verdict_label=""
     analysis=$(printf 'measurements: mode=backend-kill event=docker-compose-stop-backend3 event_at_s=%s total_errors=%s detection_window_errors=%s error_first_s=%s error_last_s=%s time_to_detection_s=%s p50_ms=%s p99_ms=%s p99_recovery_s=%s' \
       "$event_offset" "$errors" "$errors" "$first" "$last" "$detwindow" "$p50" "$p99" "$rec")
   else
-    base="roundrobin-10kb-sighup"
+    base="roundrobin-10kb-sighup-noop"
     drops=$errors
     maxp=$(max_p99_ms "$TMP/timeseries.jsonl")
-    analysis=$(printf 'measurements: mode=sighup-unchanged-config event=docker-compose-kill-s-HUP-lb event_at_s=%s drops=%s p50_ms=%s p99_ms=%s p99_peak_ms=%s p99_recovery_s=%s' \
-      "$event_offset" "$drops" "$p50" "$p99" "$maxp" "$rec")
+    reload_window_reports "$WARMUP_SECS" "$FAILURE_EVENT_AT"
+    pre_p99=$(ns_to_ms "$(json_field "$TMP/pre.json" 99th)")
+    post_p99=$(ns_to_ms "$(json_field "$TMP/post.json" 99th)")
+    verdict_label=$(reload_verdict "$errors" "$transport" "$pre_p99" "$post_p99")
+    analysis=$(printf 'measurements: mode=sighup-noop event=docker-compose-kill-s-HUP-lb event_at_s=%s errors=%s transport_errors=%s drops=%s pre_p99_ms=%s post_p99_ms=%s p99_factor=%s p50_ms=%s p99_ms=%s p99_peak_ms=%s p99_recovery_s=%s\nverdict=%s' \
+      "$event_offset" "$errors" "$transport" "$drops" "$pre_p99" "$post_p99" "$RELOAD_P99_FACTOR" "$p50" "$p99" "$maxp" "$rec" "$verdict_label")
+    verdict_label="${verdict_label%% *}"
   fi
 
   mkdir -p "$RESULTS/failure"
   { printf '# algorithm=roundrobin size=10kb competitor=lb load=%s comparison=%s rate_rps=%s\n' \
-      "$mode" "$(comparison_for roundrobin)" "$rate"
+      "$label" "$(comparison_for roundrobin)" "$rate"
     cat "$TMP/report.txt"
     printf '\n%s\n' "$analysis"; } > "$RESULTS/failure/$base.txt"
   cp "$TMP/report.hdr" "$RESULTS/failure/$base.hdr"
   { printf '# algorithm=roundrobin size=10kb competitor=lb load=%s comparison=%s rate_rps=%s\n' \
-      "$mode" "$(comparison_for roundrobin)" "$rate"
+      "$label" "$(comparison_for roundrobin)" "$rate"
     cat "$TMP/timeseries.jsonl"; } > "$RESULTS/failure/$base-timeseries.txt"
-  add_summary roundrobin 10kb lb "$mode" "$rate"
-  log "  failure $mode: errors=$errors event_at_s=$event_offset p99=${p99}ms"
+  add_summary roundrobin 10kb lb "${label}${verdict_label:+:$verdict_label}" "$rate"
+  log "  failure $label: errors=$errors event_at_s=$event_offset p99=${p99}ms"
 }
 
 run_failure() {
-  log "=== failure slice: backend-kill + SIGHUP-under-load, 2 runs ==="
+  log "=== failure slice: backend-kill + no-op reload, 2 runs ==="
   : > "$TMP/summary.tsv"
   up_h2
   set_lb "./configs/h2/roundrobin.yaml"

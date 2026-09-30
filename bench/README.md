@@ -54,8 +54,8 @@ top of `run.sh`.
 Each slice prints a summary table (algorithm, size, competitor, p50, p99,
 throughput) and writes per-run files named by their parameters, e.g.
 `results/core/roundrobin-10kb-nginx-throughput.txt` and
-`results/failure/roundrobin-10kb-sighup.txt`. Protocol-slice filenames carry an
-`http11` token (spec §30), e.g.
+`results/failure/roundrobin-10kb-sighup-noop.txt`. Protocol-slice filenames
+carry an `http11` token (spec §30), e.g.
 `results/protocol/roundrobin-10kb-http11-lb-throughput.txt`; the latency `.txt`
 holds one report per rate, with a `-latency-<pct>.hdr` histogram beside it.
 
@@ -66,9 +66,15 @@ measured step is discarded as warmup. These are constants at the top of
 `run.sh`, not flags.
 
 Failure mode runs round-robin at 10 KB over TLS+HTTP/2 at 50% of discovered
-peak for 60 s. `backend-kill` stops `backend3` at T+30 s; `sighup` sends an
-unchanged-config SIGHUP to the LB at T+30 s (zero drops is the target). Both
-write a `-timeseries.txt` (per-second cumulative stats) beside the summary.
+peak for 60 s. `backend-kill` stops `backend3` at T+30 s. The **no-op reload**
+(`sighup-noop`) sends an unchanged-config SIGHUP to the LB at T+30 s and is
+judged against criteria fixed before the run: zero non-2xx responses and zero
+transport errors over the whole run, and post-event p99 within
+`RELOAD_P99_FACTOR` (2×) of the same run's pre-event p99 (post-warmup to the
+event). The result file carries both windows' p99, the error counts and a
+`verdict=PASS|FAIL` line naming any failed criterion, and the summary table shows
+the verdict. Both runs write a `-timeseries.txt` (per-second cumulative stats)
+beside the summary.
 Detection time is dominated by the active health checker's cadence: no bench
 config sets `health.probe_interval`, so runs use the default 5 s with 3
 consecutive failures before ejection (set it in a config to change it).
