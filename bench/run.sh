@@ -1020,6 +1020,7 @@ failure_event() { # <kill|sighup|drain> <url> <rate>
           exit 1
         fi
         read_arrivals "$(backend_scheme h2)" "$TMP/drain-snap1.tsv"
+        rm -f "$TMP/drain-applied"
         seen=$(reload_seen_count)
         "${COMPOSE[@]}" kill -s HUP lb >/dev/null 2>&1
         now=$seen
@@ -1028,7 +1029,11 @@ failure_event() { # <kill|sighup|drain> <url> <rate>
           if (( now > seen )); then break; fi
           sleep "$DRAIN_POLL_SLEEP"
         done
-        (( now > seen )) || warn "drain reload: config_reloaded not seen after SIGHUP; snapshot 2 taken anyway"
+        if (( now > seen )); then
+          : > "$TMP/drain-applied"
+        else
+          warn "drain reload: config_reloaded not seen after SIGHUP; the run fails its applied criterion"
+        fi
         read_arrivals "$(backend_scheme h2)" "$TMP/drain-snap2.tsv" ) &
       ;;
     *) warn "unknown failure mode $mode"; return 1 ;;
@@ -1097,6 +1102,9 @@ failure_event() { # <kill|sighup|drain> <url> <rate>
         applied_end=$(arrival_deltas "$TMP/drain-snap2.tsv" "$TMP/drain-snap3.tsv" \
           | awk -F'\t' -v b="$DRAIN_BACKEND" '$1==b{print $2}')
         (( ${applied_end:-1} == 0 )) || extra="drain_isolation"
+        # A missed config_reloaded means the reload never applied, so neither
+        # the isolation window nor "never selected again" is meaningful.
+        [[ -f "$TMP/drain-applied" ]] || extra="${extra:+$extra,}reload_not_applied"
       else
         base="roundrobin-10kb-sighup-noop"
       fi
