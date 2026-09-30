@@ -263,7 +263,7 @@ Scoped in `.scratch/s5-t5-t12-bench-execution/` as one bundle spec plus 20 ticke
   - Depends: S5.T5.5.1
   - Completed: the dummy backend gains `GET /stats` returning 200 with `{"backend":"<name>","requests":<n>}`. The count is a per-handler `sync/atomic.Int64` (closure variable in `newHandler`, read with `Load`) incremented as the handler's first benchmark action, before any injected sleep or failure; the `/health` and `/stats` control paths return before the increment, so they are excluded, and both bypass `SLEEP_MS`/`FAIL_RATE`. The file doc comment gains the concurrency note naming the counter as the only shared mutable state. Tests (Red-first, through `newHandler` via `httptest`, HTTP-visible only): `TestStatsEndpointShape` (zeroed fresh handler), `TestStatsCountsArrivalsExcludesControl` (payload + default counted, `/health`/`/stats` not), `TestStatsCountsOnArrival` (an in-flight sleeping request is already reflected while its response is outstanding), `TestStatsBypassesChaos` (200 and no sleep under `SLEEP_MS=5000`/`FAIL_RATE=1.0`), and `TestStatsConcurrentArrivals` (100 goroutines yield exactly 100, race-checked). `make test`, `make test-race`, `go vet ./...`, and `make fmt` clean.
 
-- [TODO] S5.T5.6 — LB startup runtime fields
+- [IN_PROGRESS] S5.T5.6 — LB startup runtime fields (OpenCode (deepseek-v4.1-flash), started 2026-09-30T15:22:32Z)
   - Spec: `.scratch/s5-t5-t12-bench-execution/issues/07-t5-6-lb-startup-runtime-fields.md`
   - Depends: S5.D0
 
