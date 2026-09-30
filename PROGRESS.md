@@ -308,7 +308,7 @@ Scoped in `.scratch/s5-t5-t12-bench-execution/` as one bundle spec plus 20 ticke
   - Test approach: none — shell/config, TDD-exempt (AGENTS.md); `bash -n`, `shellcheck -S style`, `docker compose config`, a green smoke, and a reduced-constant standalone `degraded` run (results redirected to a temp dir; throwaway copy removed after).
   - Verified: `bash -n` and `shellcheck -S style` clean; `make test`, `go vet ./...`, and `gofmt -l .` clean (no Go changed); `docker compose config` clean with `SLEEP_MS: "0"` on all four backends; green `./bench/run.sh smoke` (all 10 combinations 100%). The reduced-constant standalone `degraded` run self-discovered its peak, ran all 8, showed the expected direction — roundrobin split 25/25/25/25 for both competitors; the LB's consistent-hash spilled (`owner=backend3 spill=yes`, 37.66% on backend3) while Nginx pinned (`spill=no`, 99.69%); p2c-ewma's LB shifted off backend3 (9.41%) while Nginx split evenly; leastconn's LB nudged off backend3 — and left backend3's startup line reading `sleep_ms: 0`.
 
-- [TODO] S5.T9.1 — No-op reload with a pass/fail verdict
+- [IN_PROGRESS] S5.T9.1 — No-op reload with a pass/fail verdict (OpenCode (deepseek-v4.1-flash), started 2026-09-30T20:26:01Z: rename the unchanged-config SIGHUP run to `sighup-noop` and judge it PASS/FAIL against fixed criteria)
   - Spec: `.scratch/s5-t5-t12-bench-execution/issues/14-t9-1-noop-reload-verdict.md`
   - Depends: S5.T8.2
 
