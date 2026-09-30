@@ -55,6 +55,13 @@
 # nonzero exit naming the combination otherwise. It catches broken configs in
 # about a minute (the class of routing bug that once had TLS upstreams return
 # 400) instead of hours into a run. It is deliberately not part of `all`.
+#
+# Hot key (S5.T8.1): the load generator has one address, so every consistent-hash
+# run is a hot-key scenario — one hash key. A result therefore records where the
+# traffic actually went: the per-backend arrival-counter deltas as counts and
+# shares, the plurality owner and whether spill occurred. The snapshots bracket
+# each measured attack, so they add no load during measurement; the reads go
+# straight to the backends and /stats is not counted (S5.T5.5.2).
 
 set -euo pipefail
 
@@ -75,6 +82,14 @@ FAILURE_SECS=60           # failure-mode total duration (spec §29)
 FAILURE_EVENT_AT=30       # seconds into the failure run when the event fires
 SETTLE_SECS=10            # settle time after restarting backend3 (two probe intervals)
 
+# Hot-key spill (S5.T8.1). The active health checker's probes are counted
+# arrivals — the probe target is the backend's own URL — and they land on every
+# backend, so a bare "more than one backend received traffic" would read yes on
+# every run and show nothing. A non-owner backend counts as spill only above
+# this share floor; the probe background (a few arrivals per window) stays far
+# below it at benchmark rates, while a real bounded-loads spill is far above.
+SPILL_MIN_SHARE_PCT=1
+
 # Smoke slice (S5.T5.3) — a preflight, not part of `all`. Every (protocol,
 # algorithm, competitor) combination the matrix uses must serve 100% in a
 # short, low-rate attack on one size.
@@ -91,6 +106,12 @@ SMOKE_READY_TRIES=5       # readiness polls before a smoke attack is judged
 
 SIZES=(200b 10kb 1mb)
 ALGOS=(roundrobin leastconn consistent-hash p2c-ewma)
+
+# The dummy backends expose a per-process arrival counter at /stats (S5.T5.5.2).
+# The harness reads them directly for the hot-key distribution (S5.T8.1); the
+# names must match the compose service/`-name` values in bench/docker-compose.yml.
+BACKENDS=(backend1 backend2 backend3 backend4)
+BACKEND_PORT=8080
 
 # Runs per slice, for the progress line's total (S5.T5.7.2). One "run" is one
 # result set: a scenario emits a peak-search run (peak discovery plus the
@@ -317,6 +338,102 @@ set_nginx_conf() {
   NGINX_CONF="$1"
   "${COMPOSE[@]}" up -d --force-recreate nginx
   verify_nginx_workers "${1%%/*}"
+}
+
+# ---------------------------------------------------------------------------
+# Arrival-counter distribution (S5.T8.1). The dummy backends expose a
+# per-process arrival counter at /stats (S5.T5.5.2). A single-address load
+# generator is one hash key, so every consistent-hash run is a hot-key
+# scenario: an unbounded ring pins all traffic to one backend, while bounded
+# loads spills the excess (CONTEXT.md Hot key). Bracketing each measured attack
+# with /stats reads records where the traffic actually went, without touching
+# the measured window: the reads go straight to the backends (never through the
+# load balancer) and /stats is not counted.
+# ---------------------------------------------------------------------------
+
+# backend_scheme <proto> prints the scheme the backends serve on for a slice:
+# the h2 slice runs TLS backends, everything else plain (S5.T4-infra).
+backend_scheme() {
+  case "$1" in
+    h2) printf 'https' ;;
+    *)  printf 'http' ;;
+  esac
+}
+
+# read_arrivals <scheme> <outfile> reads every backend's /stats in a single
+# one-off vegeta container (alpine busybox wget) and writes "<name>\t<count>"
+# lines. It fails loudly rather than write a partial snapshot: a run whose
+# distribution cannot be read is a broken run.
+read_arrivals() {
+  local scheme="$1" out="$2" b cmd='set -e; '
+  for b in "${BACKENDS[@]}"; do
+    cmd+="v=\$(wget -qO- --no-check-certificate '${scheme}://${b}:${BACKEND_PORT}/stats' | sed -n 's/.*\"requests\":\([0-9]*\).*/\1/p'); "
+    cmd+="[ -n \"\$v\" ] || { echo 'arrival read failed: ${b}' >&2; exit 1; }; "
+    cmd+="printf '${b}\t%s\n' \"\$v\"; "
+  done
+  "${COMPOSE[@]}" run --rm -T --entrypoint sh vegeta -c "$cmd" > "$out"
+}
+
+# arrival_deltas <before> <after> prints "<name>\t<delta>\t<share_pct>" per
+# backend: arrivals during the run and each backend's share of the total. Shared
+# by the hot-key (S5.T8.1), degraded (S5.T8.2) and drain-reload (S5.T9.2) reads.
+arrival_deltas() {
+  awk -F'\t' '
+    FNR == NR { before[$1] = $2 + 0; next }
+    {
+      d = $2 - before[$1]; if (d < 0) d = 0
+      delta[$1] = d; total += d; names[++n] = $1
+    }
+    END {
+      for (i = 1; i <= n; i++) {
+        name = names[i]
+        share = (total > 0) ? 100 * delta[name] / total : 0
+        printf "%s\t%d\t%.2f\n", name, delta[name], share
+      }
+    }
+  ' "$1" "$2"
+}
+
+# distribution_block <before> <after> prints the per-backend distribution as
+# result-header comment lines: "# arrivals backend=<name> count=<n>
+# share_pct=<p>", one per backend.
+distribution_block() {
+  local name count share
+  arrival_deltas "$1" "$2" | while IFS=$'\t' read -r name count share; do
+    printf '# arrivals backend=%s count=%s share_pct=%s\n' "$name" "$count" "$share"
+  done
+}
+
+# hotkey_block <before> <after> prints one "# hotkey owner=<name> spill=<yes|no>"
+# line: the plurality backend is the owner, and spill means a non-owner backend
+# received at least SPILL_MIN_SHARE_PCT of the traffic (bounded loads working).
+# The raw counts stay in the result too, so the exact distribution is never
+# hidden behind the flag.
+hotkey_block() {
+  arrival_deltas "$1" "$2" | awk -F'\t' -v floor="$SPILL_MIN_SHARE_PCT" '
+    { name[NR] = $1; share[NR] = $3 + 0
+      if ($2 + 0 > max) { max = $2 + 0; owner = $1 } }
+    END {
+      spill = "no"
+      for (i = 1; i <= NR; i++) if (name[i] != owner && share[i] >= floor) spill = "yes"
+      printf "# hotkey owner=%s spill=%s\n", (owner == "" ? "none" : owner), spill
+    }'
+}
+
+# measured_attack <scheme> <url> <rate> <secs> runs one measured attack,
+# bracketed by arrival-counter snapshots when the scheme is non-empty (a
+# consistent-hash hot-key run). The distribution lands in $TMP/distribution.txt,
+# empty for every other algorithm so their results are unchanged.
+measured_attack() {
+  local scheme="$1" url="$2" rate="$3" secs="$4"
+  : > "$TMP/distribution.txt"
+  [[ -n "$scheme" ]] && read_arrivals "$scheme" "$TMP/arrivals-before.tsv"
+  attack_filtered "$url" "$rate" "$secs"
+  if [[ -n "$scheme" ]]; then
+    read_arrivals "$scheme" "$TMP/arrivals-after.tsv"
+    distribution_block "$TMP/arrivals-before.tsv" "$TMP/arrivals-after.tsv" > "$TMP/distribution.txt"
+    hotkey_block "$TMP/arrivals-before.tsv" "$TMP/arrivals-after.tsv" >> "$TMP/distribution.txt"
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -589,11 +706,17 @@ add_summary() { # <algorithm> <size> <competitor> <load> [throughput-override]
 
 # run_scenario discovers peak, writes the throughput result at peak, then a
 # latency result sweeping LATENCY_RATES_PCT of peak. proto is a filename token
-# ("http11" in the protocol slice, empty in core — spec §30).
+# ("http11" in the protocol slice, empty in core — spec §30). Consistent-hash
+# runs are hot-key scenarios: every measured attack is bracketed by
+# arrival-counter snapshots and the distribution rides in the result file
+# (S5.T8.1).
 run_scenario() { # <outdir> <proto> <algorithm> <size> <competitor> <url>
   local outdir="$1" proto="$2" algo="$3" size="$4" comp="$5" url="$6"
-  local peak base latrate pct cmp proto_label="${proto:-h2}"
+  local peak base latrate pct cmp proto_label="${proto:-h2}" dist_scheme="" meta
   cmp=$(comparison_for "$algo")
+  if [[ "$algo" == consistent-hash ]]; then
+    dist_scheme=$(backend_scheme "$proto_label")
+  fi
   progress "$proto_label" "$algo" "$size" "$comp" peak-search
   peak=$(discover_peak "$url")
   if (( peak == 0 )); then
@@ -606,9 +729,11 @@ run_scenario() { # <outdir> <proto> <algorithm> <size> <competitor> <url>
   [[ -n "$proto" ]] && base="${base}-${proto}"
   base="${base}-${comp}"
 
-  attack_filtered "$url" "$peak" "$STEP_SECS"
-  save_result "$outdir" "${base}-throughput" \
-    "algorithm=$algo size=$size competitor=$comp load=throughput comparison=$cmp peak_rps=$peak"
+  measured_attack "$dist_scheme" "$url" "$peak" "$STEP_SECS"
+  meta="algorithm=$algo size=$size competitor=$comp load=throughput comparison=$cmp peak_rps=$peak"
+  [[ -s "$TMP/distribution.txt" ]] && meta="$meta
+$(cat "$TMP/distribution.txt")"
+  save_result "$outdir" "${base}-throughput" "$meta"
   add_summary "$algo" "$size" "$comp" throughput "$peak"
 
   { printf '# algorithm=%s size=%s competitor=%s load=latency comparison=%s peak_rps=%s rates_pct=%s\n' \
@@ -618,8 +743,9 @@ run_scenario() { # <outdir> <proto> <algorithm> <size> <competitor> <url>
   for pct in "${LATENCY_RATES_PCT[@]}"; do
     latrate=$(( peak * pct / 100 ))
     (( latrate > 0 )) || latrate=1
-    attack_filtered "$url" "$latrate" "$STEP_SECS"
+    measured_attack "$dist_scheme" "$url" "$latrate" "$STEP_SECS"
     { printf '\n# rate_rps=%s (%s%% of peak %s)\n' "$latrate" "$pct" "$peak"
+      [[ -s "$TMP/distribution.txt" ]] && cat "$TMP/distribution.txt"
       cat "$TMP/report.txt"; } >> "$RESULTS/$outdir/${base}-latency.txt"
     cp "$TMP/report.hdr" "$RESULTS/$outdir/${base}-latency-${pct}.hdr"
     add_summary "$algo" "$size" "$comp" "latency@${pct}%" ""
