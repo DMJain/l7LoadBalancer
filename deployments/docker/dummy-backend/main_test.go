@@ -159,6 +159,7 @@ func TestHandlerLoggingSwitch(t *testing.T) {
 		{name: "payload path", method: http.MethodGet, path: "/200b"},
 		{name: "default path", method: http.MethodGet, path: "/"},
 		{name: "health path", method: http.MethodGet, path: "/health"},
+		{name: "stats path", method: http.MethodGet, path: "/stats"},
 		{name: "non-GET branch", method: http.MethodPost, path: "/"},
 	}
 
@@ -198,17 +199,9 @@ func TestHandlerLoggingSwitch(t *testing.T) {
 func TestStatsEndpointShape(t *testing.T) {
 	h := newHandler("backend1", 0, 0, true, discardLogger())
 
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/stats", nil))
-
-	require.Equal(t, http.StatusOK, rec.Code)
-	var body struct {
-		Backend  string `json:"backend"`
-		Requests int64  `json:"requests"`
-	}
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-	assert.Equal(t, "backend1", body.Backend)
-	assert.EqualValues(t, 0, body.Requests)
+	got := getStats(t, h)
+	assert.Equal(t, "backend1", got.Backend)
+	assert.EqualValues(t, 0, got.Requests)
 }
 
 // TestStatsCountsArrivalsExcludesControl proves the counter counts benchmark
