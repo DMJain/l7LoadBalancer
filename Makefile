@@ -30,6 +30,10 @@ test-race: ## Run tests with race detector
 bench: ## Run Go benchmarks
 	go test -bench=. -benchmem $(PKG)
 
+.PHONY: bench-repro
+bench-repro: ## Reproduce the published numbers from a fresh clone: preflight, certs, images, smoke, full matrix (~2-2.5h)
+	./bench/repro.sh
+
 .PHONY: soak
 soak: ## Run the S4.T10 soak test, non-race, both tolerances (SOAK_DURATION=2m to shorten)
 	go test ./test/chaos -run TestChaosSoakConnectionLifecycle -soak -soak-duration=$(SOAK_DURATION) -timeout 2h -v

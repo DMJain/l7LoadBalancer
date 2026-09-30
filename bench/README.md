@@ -80,6 +80,38 @@ gap is attributable to implementation, not tuning. Each result header records
 which kind its comparison was, and every nearest-equivalent config states its
 gap ([ADR-0020](../docs/adr/0020-benchmark-tool-vegeta-over-wrk.md)).
 
+## Reproducing the published numbers
+
+`make bench-repro` takes a stranger from a fresh clone to the full result set in
+one command:
+
+```sh
+make bench-repro      # ~2–2.5 h on Docker Desktop
+```
+
+Prerequisites:
+
+- Docker Desktop with **at least 8 vCPUs** assigned — the fixed 8-vCPU split is
+  never scaled from the host, so fewer cannot honour the cpusets;
+- `openssl` (for `scripts/generate-cert.sh`);
+- `make`.
+
+It runs these steps in order, stopping at the first failure:
+
+1. **Preflight** — refuses to start unless Docker, Compose v2, `openssl` and
+   `make` are present, Docker reports at least 8 vCPUs, no container is running,
+   and the working tree is clean (untracked files included). Each refusal prints
+   what is wrong and how to fix it; running containers are listed by ID and
+   image, and the reproducer **never stops containers itself**.
+2. Generate the certificates.
+3. Build the bench images.
+4. Run the smoke slice (`smoke`, the preflight gate — not part of `all`).
+5. Run the full matrix (`all`).
+
+The published run is produced by this command from a fresh clone. The harness
+itself (`bench/run.sh`) is a development tool that only *records* a dirty tree or
+running containers; refusal lives here, at the publication boundary.
+
 ## CPU pinning and run-time checks
 
 The rig pins each role to a fixed slice of an 8-vCPU host so that a throughput
