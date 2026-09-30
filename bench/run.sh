@@ -902,6 +902,8 @@ SLICE="${1:-all}"
 require_docker
 case "$SLICE" in
   -h|--help|help) usage; exit 0 ;;
+  core|protocol|failure|smoke|all) ;;
+  *) warn "unknown slice '$SLICE'"; usage; exit 2 ;;
 esac
 mkdir -p "$TMP" "$RESULTS/core" "$RESULTS/protocol" "$RESULTS/failure"
 provenance_start
@@ -915,7 +917,6 @@ case "$SLICE" in
   failure) run_failure; print_summary ;;
   smoke) run_smoke; exit 0 ;;
   all) run_core; print_summary; run_protocol; print_summary; run_failure; print_summary ;;
-  *) warn "unknown slice '$SLICE'"; usage; exit 2 ;;
 esac
 
 log ""
