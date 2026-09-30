@@ -6,15 +6,15 @@ networking is identical for every service and the LB-vs-Nginx comparison is
 consistent across hosts. vegeta is the only load generator — wrk has no HTTP/2
 support ([ADR-0020](../docs/adr/0020-benchmark-tool-vegeta-over-wrk.md)).
 
-`./bench/run.sh all` runs the full 70-run matrix and writes reproducible
+`./bench/run.sh all` runs the full 71-run matrix and writes reproducible
 `.txt` summaries and `.hdr` histograms under `bench/results/`.
 
 ## Layout
 
 - `run.sh` — the execution harness and the single source of truth for the
   matrix parameters (rates, durations, warmup, thresholds). Slices: `core`
-  (48 runs, HTTP/2), `protocol` (12 runs, HTTP/1.1), `failure` (2 runs),
-  `degraded` (8 runs, one backend slow), `all` (70 runs), and `smoke` (10 short
+  (48 runs, HTTP/2), `protocol` (12 runs, HTTP/1.1), `failure` (3 runs),
+  `degraded` (8 runs, one backend slow), `all` (71 runs), and `smoke` (10 short
   attacks, a preflight that is deliberately **not** part of `all`).
 - `docker-compose.yml` — the topology: `lb`, `nginx`, `backend1`–`backend4`, `vegeta`.
 - `nginx/http11/roundrobin.conf`, `nginx/h2/{roundrobin,leastconn,consistent-hash,p2c-ewma}.conf`
@@ -66,15 +66,30 @@ measured step is discarded as warmup. These are constants at the top of
 `run.sh`, not flags.
 
 Failure mode runs round-robin at 10 KB over TLS+HTTP/2 at 50% of discovered
-peak for 60 s. `backend-kill` stops `backend3` at T+30 s. The **no-op reload**
-(`sighup-noop`) sends an unchanged-config SIGHUP to the LB at T+30 s and is
-judged against criteria fixed before the run: zero non-2xx responses and zero
-transport errors over the whole run, and post-event p99 within
-`RELOAD_P99_FACTOR` (2×) of the same run's pre-event p99 (post-warmup to the
-event). The result file carries both windows' p99, the error counts and a
-`verdict=PASS|FAIL` line naming any failed criterion, and the summary table shows
-the verdict. Both runs write a `-timeseries.txt` (per-second cumulative stats)
-beside the summary.
+peak for 60 s. `backend-kill` stops `backend3` at T+30 s. The two **reload**
+runs send a SIGHUP to the LB at T+30 s and are judged against criteria fixed
+before the run: zero non-2xx responses and zero transport errors over the whole
+run, and post-event p99 within `RELOAD_P99_FACTOR` (2×) of the same run's
+pre-event p99 (post-warmup to the event). Each result file carries both windows'
+p99, the error counts and a `verdict=PASS|FAIL` line naming any failed
+criterion, and the summary table shows the verdict. Both runs write a
+`-timeseries.txt` (per-second cumulative stats) beside the summary.
+
+- **no-op reload** (`sighup-noop`) re-reads an unchanged config, measuring the
+  bare cost of the reload path under load.
+- **drain reload** (`sighup-drain`) rewrites the mounted config in place — `cp`
+  over the same inode, never a rename — to drop `backend4`, then SIGHUPs. It
+  mounts a working copy of the committed round-robin h2 config in the results
+  scratch area, so the committed configs are never modified. It passes only if
+  the no-op criteria hold **and** `backend4`'s own arrival counter does not move
+  between "reload applied" (the LB's `config_reloaded` line) and the end of the
+  run. The counter is sampled just before the signal, once the reload is
+  applied, and at the end; all three snapshots and both deltas are recorded, but
+  only the second interval is judged — the first is legitimate pre-swap traffic.
+  After the run the LB is recreated on the committed config. A rename instead of
+  a `cp` trips an inode assertion and aborts the run, because the single-file
+  bind mount would keep pointing at the old file and the run would test nothing.
+
 Detection time is dominated by the active health checker's cadence: no bench
 config sets `health.probe_interval`, so runs use the default 5 s with 3
 consecutive failures before ejection (set it in a config to change it).

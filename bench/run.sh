@@ -12,12 +12,12 @@
 #
 #   core      HTTP/2 (TLS+ALPN) matrix — 48 runs
 #   protocol  HTTP/1.1 round-robin comparison — 12 runs
-#   failure   backend-kill and no-op reload — 2 runs
+#   failure   backend-kill, no-op reload, drain reload — 3 runs
 #   degraded  one backend +50 ms, per-backend distribution — 8 runs
 #   smoke     a ~1-minute preflight over every (protocol, algorithm,
 #             competitor) combination the matrix uses — 10 attacks, not part
 #             of `all` (S5.T5.3)
-#   all       the full 70-run matrix (smoke excluded)
+#   all       the full 71-run matrix (smoke excluded)
 #
 # Every algorithm runs head-to-head with an Nginx competitor. Each result
 # header records `comparison=matched` (roundrobin, leastconn) or
@@ -57,6 +57,17 @@
 # result file carries both windows' p99, the error counts and a verdict line
 # naming any failed criterion, so the writeup reports a verdict, not a judgment
 # call (spec §36, §37, §38, §44).
+#
+# Drain reload (S5.T9.2): the LB mounts a working copy of the committed
+# round-robin h2 config in the results scratch area and rewrites it in place
+# (cp over the same inode, never a rename) to drop backend4 at T+30s, then
+# SIGHUPs. The committed configs are never modified. It passes only if the
+# no-op criteria hold and backend4's own arrival counter does not move between
+# "reload applied" and the end of the run — the "zero drops while draining /
+# never selected again" claim, verified from the backend's side (spec §35, §39,
+# §40, §41). The counter is sampled just before the signal, once the LB logs
+# config_reloaded, and at the end; the first interval is recorded, only the
+# second is judged. After the run the LB is recreated on the committed config.
 #
 # The smoke slice (S5.T5.3) is the preflight gate: for every (protocol,
 # algorithm, competitor) combination the matrix uses, it runs a short low-rate
@@ -102,6 +113,13 @@ FAILURE_SECS=60           # failure-mode total duration (spec §29)
 FAILURE_EVENT_AT=30       # seconds into the failure run when the event fires
 SETTLE_SECS=10            # settle time after restarting backend3 (two probe intervals)
 RELOAD_P99_FACTOR=2       # no-op reload: post-event p99 must be <= factor x pre-event p99 (S5.T9.1)
+
+# Drain reload (S5.T9.2): backend4 is removed under load; its own arrival counter
+# must not move once the reload is applied. The applied signal is the LB's
+# config_reloaded log line, polled after the SIGHUP until it is seen.
+DRAIN_BACKEND=backend4    # the backend the drain reload removes
+DRAIN_POLL_TRIES=100      # config_reloaded polls after SIGHUP
+DRAIN_POLL_SLEEP=0.2      # seconds between polls
 
 # Hot-key spill (S5.T8.1). The active health checker's probes are counted
 # arrivals — the probe target is the backend's own URL — and they land on every
@@ -151,7 +169,7 @@ BACKEND_PORT=8080
 # added here.
 CORE_RUNS=$(( ${#ALGOS[@]} * ${#SIZES[@]} * 2 * 2 ))   # algos × sizes × competitors × {peak, latency}
 PROTOCOL_RUNS=$(( 1 * ${#SIZES[@]} * 2 * 2 ))
-FAILURE_RUNS=2
+FAILURE_RUNS=3
 DEGRADED_RUNS=$(( ${#ALGOS[@]} * 2 ))    # algos × competitors, one measured run each
 SMOKE_RUNS=$(( ${#ALGOS[@]} * 2 + 2 ))   # h2 × algos × competitors + http11/roundrobin × competitors
 
@@ -191,11 +209,11 @@ Usage: bench/run.sh [core|protocol|failure|degraded|smoke|all]   (default: all)
 
   core      HTTP/2 (TLS+ALPN) matrix — 48 runs
   protocol  HTTP/1.1 round-robin comparison — 12 runs
-  failure   backend-kill and no-op reload — 2 runs
+  failure   backend-kill, no-op reload and drain reload — 3 runs
   degraded  one backend +50 ms, per-backend distribution — 8 runs
   smoke     preflight: every (protocol, algorithm, competitor) combination
             the matrix uses, 10 short attacks, 100% required, not part of all
-  all       the full 70-run matrix (smoke excluded)
+  all       the full 71-run matrix (smoke excluded)
 
 Results land as .txt summaries + .hdr HDR histograms under
 bench/results/{core,protocol,failure,degraded}/ with parameter-encoded filenames, and
@@ -470,6 +488,17 @@ hotkey_block() {
       for (i = 1; i <= NR; i++) if (name[i] != owner && share[i] >= floor) spill = "yes"
       printf "# hotkey owner=%s spill=%s\n", (owner == "" ? "none" : owner), spill
     }' "$1"
+}
+
+# snapshot_block <label> <snapshot> prints the raw (not differenced) per-backend
+# /stats counts as result-header comment lines: "# snapshot=<label>
+# backend=<name> count=<n>". The drain reload emits its three snapshots this way
+# so the generator reads the arrivals at each event point, not just the deltas.
+snapshot_block() { # <label> <snapshot-file>
+  local label="$1" name count
+  while IFS=$'\t' read -r name count; do
+    printf '# snapshot=%s backend=%s count=%s\n' "$label" "$name" "$count"
+  done < "$2"
 }
 
 # measured_attack <scheme> <url> <rate> <secs> [hotkey] runs one measured attack,
@@ -898,6 +927,26 @@ max_p99_ms() { # <timeseries>
 # measures the reload path's own cost. Its verdict is computed here from fixed
 # thresholds, never left to the writeup.
 
+# inode_of <file> prints the file's inode. The drain reload must rewrite the
+# mounted config in place (cp over the same inode); a rename would swap the inode
+# under the bind mount and the LB would keep reading the old file, so the run
+# would pass while testing nothing (S5.T9.2). Darwin and Linux stat differ.
+inode_of() { # <file>
+  case "$(uname -s)" in
+    Darwin) stat -f %i "$1" ;;
+    *)      stat -c %i "$1" ;;
+  esac
+}
+
+# reload_seen_count refreshes the LB's log file and prints how many successful
+# reload lines it contains. config_reloaded is emitted once per applied SIGHUP
+# (internal/logger), so a count that grows across a signal means the drain
+# reload took effect. grep -c prints 0 and exits nonzero when there is no match.
+reload_seen_count() {
+  "${COMPOSE[@]}" logs --no-color lb > "$TMP/lb.log" 2>/dev/null || true
+  grep -c 'config_reloaded' "$TMP/lb.log" 2>/dev/null || true
+}
+
 # reload_window_reports <warmup-secs> <event-secs> splits the run's CSV into the
 # pre-event window (the end of warmup to the event) and the post-event window
 # (the event to the end) and writes each window's vegeta JSON report to
@@ -917,29 +966,36 @@ vegeta encode -to gob /results/.tmp/post.csv | vegeta report -type=json > /resul
 "
 }
 
-# reload_verdict <errors> <transport-errors> <pre-p99-ms> <post-p99-ms> prints
-# PASS, or FAIL naming each unmet criterion. The criteria and the p99 factor are
-# the constants fixed before any run (S5.T9.1): zero non-2xx responses, zero
-# transport errors, and post-event p99 within RELOAD_P99_FACTOR of the pre-event
-# p99. Ticket 15's drain reload reuses this verdict as one of its criteria.
-reload_verdict() { # <errors> <transport-errors> <pre-p99-ms> <post-p99-ms>
-  local errors="$1" transport="$2" pre="$3" post="$4" failed=""
+# reload_verdict <errors> <transport-errors> <pre-p99-ms> <post-p99-ms>
+# [extra-failed] prints PASS, or FAIL naming each unmet criterion. The criteria
+# and the p99 factor are the constants fixed before any run (S5.T9.1): zero
+# non-2xx responses, zero transport errors, and post-event p99 within
+# RELOAD_P99_FACTOR of the pre-event p99. The drain reload (S5.T9.2) passes its
+# own extra criterion name here so one verdict line names every failure.
+reload_verdict() { # <errors> <transport-errors> <pre-p99-ms> <post-p99-ms> [extra-failed]
+  local errors="$1" transport="$2" pre="$3" post="$4" extra="${5:-}" failed=""
   if (( errors > 0 )); then failed="non_2xx"; fi
   if (( transport > 0 )); then failed="${failed:+$failed,}transport_errors"; fi
   if ! awk -v post="$post" -v pre="$pre" -v f="$RELOAD_P99_FACTOR" \
        'BEGIN { exit !((post + 0) <= f * (pre + 0)) }'; then
     failed="${failed:+$failed,}p99_factor"
   fi
+  if [[ -n "$extra" ]]; then failed="${failed:+$failed,}$extra"; fi
   if [[ -z "$failed" ]]; then printf 'PASS'; else printf 'FAIL failed=%s' "$failed"; fi
 }
 
 # failure_event <mode> <url> <rate> fires the event at T+FAILURE_EVENT_AT while
 # the attack runs, then writes the failure result and its measurements. `kill`
-# is unchanged; `sighup` is the no-op reload, renamed `sighup-noop` and judged
-# against the fixed reload criteria (S5.T9.1).
-failure_event() { # <kill|sighup> <url> <rate>
+# is unchanged; `sighup` is the no-op reload (`sighup-noop`) and `drain` is the
+# drain reload (`sighup-drain`), each judged against the fixed reload criteria
+# (S5.T9.1, S5.T9.2).
+failure_event() { # <kill|sighup|drain> <url> <rate>
   local mode="$1" url="$2" rate="$3" scheduler label
-  if [[ "$mode" == sighup ]]; then label=sighup-noop; else label="$mode"; fi
+  case "$mode" in
+    sighup) label=sighup-noop ;;
+    drain)  label=sighup-drain ;;
+    *)      label="$mode" ;;
+  esac
   progress h2 roundrobin 10kb lb "$label"
   rm -f "$TMP/event_epoch"
   case "$mode" in
@@ -951,12 +1007,41 @@ failure_event() { # <kill|sighup> <url> <rate>
       ( sleep "$FAILURE_EVENT_AT"; date +%s > "$TMP/event_epoch"
         "${COMPOSE[@]}" kill -s HUP lb >/dev/null 2>&1 ) &
       ;;
+    drain)
+      # In-place rewrite then SIGHUP, with the three arrival snapshots. A rename
+      # would leave the bind mount on the old inode, so the inode is asserted
+      # unchanged and the run aborts otherwise (spec §41).
+      ( sleep "$FAILURE_EVENT_AT"; date +%s > "$TMP/event_epoch"
+        before=$(inode_of "$TMP/reload-config.yaml")
+        cp "$TMP/drain-config.yaml" "$TMP/reload-config.yaml"
+        after=$(inode_of "$TMP/reload-config.yaml")
+        if [[ "$before" != "$after" ]]; then
+          echo "drain reload: config inode changed ($before -> $after); the rewrite must be in place (cp), not a rename" >&2
+          exit 1
+        fi
+        read_arrivals "$(backend_scheme h2)" "$TMP/drain-snap1.tsv"
+        seen=$(reload_seen_count)
+        "${COMPOSE[@]}" kill -s HUP lb >/dev/null 2>&1
+        now=$seen
+        for ((i = 0; i < DRAIN_POLL_TRIES; i++)); do
+          now=$(reload_seen_count)
+          if (( now > seen )); then break; fi
+          sleep "$DRAIN_POLL_SLEEP"
+        done
+        (( now > seen )) || warn "drain reload: config_reloaded not seen after SIGHUP; snapshot 2 taken anyway"
+        read_arrivals "$(backend_scheme h2)" "$TMP/drain-snap2.tsv" ) &
+      ;;
     *) warn "unknown failure mode $mode"; return 1 ;;
   esac
   scheduler=$!
 
   failure_attack "$url" "$rate" "$FAILURE_SECS"
-  wait "$scheduler" || warn "the $mode event command exited non-zero"
+  if ! wait "$scheduler"; then
+    warn "the $mode event command exited non-zero"
+    if [[ "$mode" == drain ]]; then exit 1; fi
+  fi
+  # Snapshot 3: the end of the run.
+  if [[ "$mode" == drain ]]; then read_arrivals "$(backend_scheme h2)" "$TMP/drain-snap3.tsv"; fi
 
   local errors transport first last p50 p99 rec start_epoch event_epoch event_offset maxp drops detwindow
   read -r errors transport first last < <(awk -F, '
@@ -982,33 +1067,59 @@ failure_event() { # <kill|sighup> <url> <rate>
   # detection-window count equals the total error count.
   detwindow=$(awk -v a="$first" -v b="$last" 'BEGIN { printf "%.3f", b - a }')
 
-  local base analysis verdict verdict_label non_2xx pre_p99 post_p99
-  if [[ "$mode" == kill ]]; then
-    base="roundrobin-10kb-backend-kill"
-    verdict=""
-    verdict_label=""
-    analysis=$(printf 'measurements: mode=backend-kill event=docker-compose-stop-backend3 event_at_s=%s total_errors=%s detection_window_errors=%s error_first_s=%s error_last_s=%s time_to_detection_s=%s p50_ms=%s p99_ms=%s p99_recovery_s=%s' \
-      "$event_offset" "$errors" "$errors" "$first" "$last" "$detwindow" "$p50" "$p99" "$rec")
-  else
-    base="roundrobin-10kb-sighup-noop"
-    drops=$errors
-    # `errors` counts every failed request, transport errors included (they are
-    # status 0). The two judged criteria are disjoint status classes, so peel
-    # transport out: non-2xx are real HTTP responses outside 2xx (spec §37).
-    non_2xx=$(( errors - transport ))
-    maxp=$(max_p99_ms "$TMP/timeseries.jsonl")
-    reload_window_reports "$WARMUP_SECS" "$FAILURE_EVENT_AT"
-    pre_p99=$(ns_to_ms "$(json_field "$TMP/pre.json" 99th)")
-    post_p99=$(ns_to_ms "$(json_field "$TMP/post.json" 99th)")
-    verdict=$(reload_verdict "$non_2xx" "$transport" "$pre_p99" "$post_p99")
-    analysis=$(printf 'measurements: mode=sighup-noop event=docker-compose-kill-s-HUP-lb event_at_s=%s non_2xx=%s transport_errors=%s drops=%s pre_p99_ms=%s post_p99_ms=%s p99_factor=%s p50_ms=%s p99_ms=%s p99_peak_ms=%s p99_recovery_s=%s\nverdict=%s' \
-      "$event_offset" "$non_2xx" "$transport" "$drops" "$pre_p99" "$post_p99" "$RELOAD_P99_FACTOR" "$p50" "$p99" "$maxp" "$rec" "$verdict")
-    verdict_label="${verdict%% *}"
-  fi
+  local base analysis verdict verdict_label non_2xx pre_p99 post_p99 before_applied applied_end extra
+  case "$mode" in
+    kill)
+      base="roundrobin-10kb-backend-kill"
+      verdict=""
+      verdict_label=""
+      analysis=$(printf 'measurements: mode=backend-kill event=docker-compose-stop-backend3 event_at_s=%s total_errors=%s detection_window_errors=%s error_first_s=%s error_last_s=%s time_to_detection_s=%s p50_ms=%s p99_ms=%s p99_recovery_s=%s' \
+        "$event_offset" "$errors" "$errors" "$first" "$last" "$detwindow" "$p50" "$p99" "$rec")
+      ;;
+    sighup|drain)
+      drops=$errors
+      # `errors` counts every failed request, transport errors included (they are
+      # status 0). The two judged criteria are disjoint status classes, so peel
+      # transport out: non-2xx are real HTTP responses outside 2xx (spec §37).
+      non_2xx=$(( errors - transport ))
+      maxp=$(max_p99_ms "$TMP/timeseries.jsonl")
+      reload_window_reports "$WARMUP_SECS" "$FAILURE_EVENT_AT"
+      pre_p99=$(ns_to_ms "$(json_field "$TMP/pre.json" 99th)")
+      post_p99=$(ns_to_ms "$(json_field "$TMP/post.json" 99th)")
+      extra=""
+      if [[ "$mode" == drain ]]; then
+        base="roundrobin-10kb-sighup-drain"
+        # Snapshot 2 - snapshot 1 is recorded but not judged (legitimate
+        # pre-swap traffic); only snapshot 3 - snapshot 2 must be zero, the
+        # removed backend receiving nothing after the reload is applied.
+        before_applied=$(arrival_deltas "$TMP/drain-snap1.tsv" "$TMP/drain-snap2.tsv" \
+          | awk -F'\t' -v b="$DRAIN_BACKEND" '$1==b{print $2}')
+        applied_end=$(arrival_deltas "$TMP/drain-snap2.tsv" "$TMP/drain-snap3.tsv" \
+          | awk -F'\t' -v b="$DRAIN_BACKEND" '$1==b{print $2}')
+        (( ${applied_end:-1} == 0 )) || extra="drain_isolation"
+      else
+        base="roundrobin-10kb-sighup-noop"
+      fi
+      verdict=$(reload_verdict "$non_2xx" "$transport" "$pre_p99" "$post_p99" "$extra")
+      if [[ "$mode" == drain ]]; then
+        analysis=$(printf 'measurements: mode=sighup-drain event=docker-compose-kill-s-HUP-lb event_at_s=%s non_2xx=%s transport_errors=%s drops=%s pre_p99_ms=%s post_p99_ms=%s p99_factor=%s p50_ms=%s p99_ms=%s p99_peak_ms=%s p99_recovery_s=%s drain_before_applied_backend4=%s drain_applied_end_backend4=%s\nverdict=%s' \
+          "$event_offset" "$non_2xx" "$transport" "$drops" "$pre_p99" "$post_p99" "$RELOAD_P99_FACTOR" "$p50" "$p99" "$maxp" "$rec" "${before_applied:-0}" "${applied_end:-0}" "$verdict")
+      else
+        analysis=$(printf 'measurements: mode=sighup-noop event=docker-compose-kill-s-HUP-lb event_at_s=%s non_2xx=%s transport_errors=%s drops=%s pre_p99_ms=%s post_p99_ms=%s p99_factor=%s p50_ms=%s p99_ms=%s p99_peak_ms=%s p99_recovery_s=%s\nverdict=%s' \
+          "$event_offset" "$non_2xx" "$transport" "$drops" "$pre_p99" "$post_p99" "$RELOAD_P99_FACTOR" "$p50" "$p99" "$maxp" "$rec" "$verdict")
+      fi
+      verdict_label="${verdict%% *}"
+      ;;
+  esac
 
   mkdir -p "$RESULTS/failure"
   { printf '# algorithm=roundrobin size=10kb competitor=lb load=%s comparison=%s rate_rps=%s\n' \
       "$label" "$(comparison_for roundrobin)" "$rate"
+    if [[ "$mode" == drain ]]; then
+      snapshot_block before "$TMP/drain-snap1.tsv"
+      snapshot_block applied "$TMP/drain-snap2.tsv"
+      snapshot_block end "$TMP/drain-snap3.tsv"
+    fi
     cat "$TMP/report.txt"
     printf '\n%s\n' "$analysis"; } > "$RESULTS/failure/$base.txt"
   cp "$TMP/report.hdr" "$RESULTS/failure/$base.hdr"
@@ -1020,9 +1131,15 @@ failure_event() { # <kill|sighup> <url> <rate>
 }
 
 run_failure() {
-  log "=== failure slice: backend-kill + no-op reload, 2 runs ==="
+  log "=== failure slice: backend-kill, no-op reload, drain reload — 3 runs ==="
   : > "$TMP/summary.tsv"
   up_h2
+  # The reload runs mount a working copy in the results scratch area so the
+  # committed configs are never modified. The drain config (backend4 dropped) is
+  # derived here at run time, not committed as a ninth config (S5.T9.2).
+  cp "$ROOT/bench/configs/h2/roundrobin.yaml" "$TMP/reload-config.yaml"
+  grep -v "$DRAIN_BACKEND" "$TMP/reload-config.yaml" > "$TMP/drain-config.yaml"
+
   set_lb "./configs/h2/roundrobin.yaml"
   local url="https://lb:8080/10kb" peak rate
   peak=$(discover_peak "$url")
@@ -1038,7 +1155,15 @@ run_failure() {
   log "  restarting backend3 and settling ${SETTLE_SECS}s ..."
   "${COMPOSE[@]}" start backend3 >/dev/null
   sleep "$SETTLE_SECS"
+
+  # Mount the working copy for both reload runs; the drain run rewrites it in
+  # place so the bind mount really changes (S5.T9.2).
+  set_lb "./results/.tmp/reload-config.yaml"
   failure_event sighup "$url" "$rate"
+  failure_event drain "$url" "$rate"
+
+  # Recreate on the committed config so a later slice/run starts clean.
+  set_lb "./configs/h2/roundrobin.yaml"
 }
 
 # ---------------------------------------------------------------------------
