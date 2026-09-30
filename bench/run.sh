@@ -27,6 +27,11 @@
 # bench/results/{core,protocol,failure}/ with parameter-encoded filenames, and
 # each slice prints a summary table to stdout (spec §27, §30, §32).
 #
+# Progress (S5.T5.7.2) goes to stderr before every run — `[run N/total]
+# <proto>/<algo>/<size>/<competitor> <load-type>  elapsed … eta …` — so stdout
+# stays clean for piping. The total is the sum of the selected slices; the ETA
+# is naive (elapsed × total / completed) and `--` until the first run finishes.
+#
 # Everything runs in-compose via `docker compose run vegeta`; the host never
 # needs a vegeta binary (spec §22). The LB and Nginx are recreated per
 # algorithm/protocol by changing the mounted config, because only the backend
@@ -86,6 +91,16 @@ SMOKE_READY_TRIES=5       # readiness polls before a smoke attack is judged
 SIZES=(200b 10kb 1mb)
 ALGOS=(roundrobin leastconn consistent-hash p2c-ewma)
 
+# Runs per slice, for the progress line's total (S5.T5.7.2). One "run" is one
+# result set: a scenario emits a peak-search run (peak discovery plus the
+# throughput measurement at peak) and a latency run (the whole rate sweep).
+# Keep these in step with the slice functions — a run added there is a run
+# added here.
+CORE_RUNS=$(( ${#ALGOS[@]} * ${#SIZES[@]} * 2 * 2 ))   # algos × sizes × competitors × {peak, latency}
+PROTOCOL_RUNS=$(( 1 * ${#SIZES[@]} * 2 * 2 ))
+FAILURE_RUNS=2
+SMOKE_RUNS=10
+
 # ---------------------------------------------------------------------------
 # Paths and compose plumbing.
 # ---------------------------------------------------------------------------
@@ -126,6 +141,48 @@ EOF
 
 log() { printf '%s\n' "$*"; }
 warn() { printf 'WARN: %s\n' "$*" >&2; }
+
+# Progress (S5.T5.7.2): one stderr line before every run, so a multi-hour run is
+# not mistaken for a hang. stdout stays clean for piping (the summary tables).
+# The total is the sum of the selected slices, so it is right for a single
+# slice, smoke, and all. The ETA is deliberately naive — elapsed × total /
+# completed — and shown as `--` until the first run finishes.
+RUN_TOTAL=0
+RUN_DONE=0
+RUN_START=0
+
+# run_total <slice> prints the number of runs the slice will perform.
+run_total() {
+  case "$1" in
+    core)     printf '%d' "$CORE_RUNS" ;;
+    protocol) printf '%d' "$PROTOCOL_RUNS" ;;
+    failure)  printf '%d' "$FAILURE_RUNS" ;;
+    smoke)    printf '%d' "$SMOKE_RUNS" ;;
+    all)      printf '%d' "$(( CORE_RUNS + PROTOCOL_RUNS + FAILURE_RUNS ))" ;;
+    *)        printf '0' ;;
+  esac
+}
+
+fmt_hms() { # <seconds> -> HH:MM:SS
+  local s="${1:-0}"
+  printf '%02d:%02d:%02d' "$(( s / 3600 ))" "$(( (s % 3600) / 60 ))" "$(( s % 60 ))"
+}
+
+# progress <proto> <algorithm> <size> <competitor> <load-type> prints the
+# ordinal, scenario, elapsed and ETA to stderr, then advances the counter.
+progress() {
+  local n elapsed eta
+  n=$(( RUN_DONE + 1 ))
+  RUN_DONE=$n
+  elapsed=$(( $(date +%s) - RUN_START ))
+  if (( n == 1 )); then
+    eta='--'
+  else
+    eta=$(fmt_hms "$(( elapsed * RUN_TOTAL / (n - 1) ))")
+  fi
+  printf '[run %d/%d] %s/%s/%s/%s %s  elapsed %s  eta %s\n' \
+    "$n" "$RUN_TOTAL" "$1" "$2" "$3" "$4" "$5" "$(fmt_hms "$elapsed")" "$eta" >&2
+}
 
 require_docker() {
   command -v docker >/dev/null 2>&1 || { warn "docker is required"; exit 1; }
@@ -361,8 +418,9 @@ add_summary() { # <algorithm> <size> <competitor> <load> [throughput-override]
 # ("http11" in the protocol slice, empty in core — spec §30).
 run_scenario() { # <outdir> <proto> <algorithm> <size> <competitor> <url>
   local outdir="$1" proto="$2" algo="$3" size="$4" comp="$5" url="$6"
-  local peak base latrate pct cmp
+  local peak base latrate pct cmp proto_label="${proto:-h2}"
   cmp=$(comparison_for "$algo")
+  progress "$proto_label" "$algo" "$size" "$comp" peak-search
   peak=$(discover_peak "$url")
   if (( peak == 0 )); then
     warn "$algo/$size/$comp reached no sustainable rate at seed ${SEED_RATE}/s; skipped"
@@ -382,6 +440,7 @@ run_scenario() { # <outdir> <proto> <algorithm> <size> <competitor> <url>
   { printf '# algorithm=%s size=%s competitor=%s load=latency comparison=%s peak_rps=%s rates_pct=%s\n' \
       "$algo" "$size" "$comp" "$cmp" "$peak" "${LATENCY_RATES_PCT[*]}"; } \
     > "$RESULTS/$outdir/${base}-latency.txt"
+  progress "$proto_label" "$algo" "$size" "$comp" latency
   for pct in "${LATENCY_RATES_PCT[@]}"; do
     latrate=$(( peak * pct / 100 ))
     (( latrate > 0 )) || latrate=1
@@ -470,6 +529,7 @@ max_p99_ms() { # <timeseries>
 # the attack runs, then writes the failure result and its measurements.
 failure_event() { # <kill|sighup> <url> <rate>
   local mode="$1" url="$2" rate="$3" scheduler
+  progress h2 roundrobin 10kb lb "$mode"
   rm -f "$TMP/event_epoch"
   case "$mode" in
     kill)
@@ -636,6 +696,7 @@ smoke_proto() { # <proto> <algorithm...>
     for comp in lb nginx; do
       combo="$proto/$algo/$comp"
       url=$(target_url "$proto" "$comp" "$SMOKE_SIZE")
+      progress "$proto" "$algo" "$SMOKE_SIZE" "$comp" smoke
       smoke_attack "$combo" "$url"
     done
   done
@@ -674,6 +735,9 @@ print_summary() {
 SLICE="${1:-all}"
 require_docker
 mkdir -p "$TMP" "$RESULTS/core" "$RESULTS/protocol" "$RESULTS/failure"
+
+RUN_TOTAL=$(run_total "$SLICE")
+RUN_START=$(date +%s)
 
 case "$SLICE" in
   core) run_core; print_summary ;;
