@@ -27,10 +27,8 @@
 # bench/results/{core,protocol,failure}/ with parameter-encoded filenames, and
 # each slice prints a summary table to stdout (spec §27, §30, §32).
 #
-# Progress (S5.T5.7.2) goes to stderr before every run — `[run N/total]
-# <proto>/<algo>/<size>/<competitor> <load-type>  elapsed … eta …` — so stdout
-# stays clean for piping. The total is the sum of the selected slices; the ETA
-# is naive (elapsed × total / completed) and `--` until the first run finishes.
+# Progress (S5.T5.7.2) goes to stderr before every run, so the stdout summary
+# tables stay clean for piping.
 #
 # Everything runs in-compose via `docker compose run vegeta`; the host never
 # needs a vegeta binary (spec §22). The LB and Nginx are recreated per
@@ -99,7 +97,7 @@ ALGOS=(roundrobin leastconn consistent-hash p2c-ewma)
 CORE_RUNS=$(( ${#ALGOS[@]} * ${#SIZES[@]} * 2 * 2 ))   # algos × sizes × competitors × {peak, latency}
 PROTOCOL_RUNS=$(( 1 * ${#SIZES[@]} * 2 * 2 ))
 FAILURE_RUNS=2
-SMOKE_RUNS=10
+SMOKE_RUNS=$(( ${#ALGOS[@]} * 2 + 2 ))   # h2 × algos × competitors + http11/roundrobin × competitors
 
 # ---------------------------------------------------------------------------
 # Paths and compose plumbing.
