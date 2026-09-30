@@ -17,6 +17,12 @@
 //	                of lb_requests_total's client-facing protocol label
 //	                (S5.T3-main).
 //
+// Process-scoped fields (S5.T5.6). Present on the "l7LoadBalancer starting"
+// line:
+//
+//	gomaxprocs - the effective GOMAXPROCS value (Go derives it from CPU affinity)
+//	go_version - the runtime version string the binary was built with
+//
 // Transition-scoped fields (Sprint 3; values are the closed Go-constant
 // vocabularies in vocab.go). A transition line also carries the request-scoped
 // backend field, naming the backend the transition concerns:

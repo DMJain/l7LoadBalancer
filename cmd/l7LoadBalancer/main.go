@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime"
 	"syscall"
 	"time"
 
@@ -182,12 +183,16 @@ func main() {
 		os.Exit(1)
 	}
 
+	// gomaxprocs and go_version are the benchmark methodology's runtime
+	// observations (S5.T5.6).
 	log.Info("l7LoadBalancer starting",
 		"config", *configPath,
 		"listen", cfg.Listen,
 		"algorithm", cfg.Algorithm,
 		"backend_count", len(cfg.Backends),
 		"circuit_cooldown", *cfg.Circuit.Cooldown,
+		"gomaxprocs", runtime.GOMAXPROCS(0),
+		"go_version", runtime.Version(),
 	)
 
 	// SIGINT/SIGTERM cancel sigCtx, which Run shares with the active health

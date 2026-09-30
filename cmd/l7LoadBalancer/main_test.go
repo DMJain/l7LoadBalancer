@@ -166,40 +166,60 @@ backends:
 	require.NoError(t, err)
 	cmd.Stderr = os.Stderr
 	require.NoError(t, cmd.Start())
+	// If any assertion below fails, the child must not outlive the test.
+	t.Cleanup(func() { _ = cmd.Process.Kill() })
 
-	entry, err := readStartupLine(stdout)
-	require.NoError(t, err)
+	done := make(chan startupResult, 1)
+	go func() {
+		entry, err := readStartupLogEntry(stdout)
+		done <- startupResult{entry: entry, err: err}
+	}()
+
+	var entry startupLogEntry
+	select {
+	case result := <-done:
+		require.NoError(t, result.err)
+		entry = result.entry
+	case <-time.After(30 * time.Second):
+		t.Fatal("timed out waiting for the startup log line")
+	}
 
 	assert.Equal(t, "l7LoadBalancer starting", entry.Msg)
 	assert.Equal(t, 2, entry.GOMAXPROCS)
 	assert.Equal(t, runtime.Version(), entry.GoVersion)
 
 	require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
-	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
+	waitDone := make(chan error, 1)
+	go func() { waitDone <- cmd.Wait() }()
 	select {
-	case <-done:
+	case <-waitDone:
 	case <-time.After(10 * time.Second):
-		_ = cmd.Process.Kill()
 		t.Fatal("process did not exit after SIGTERM")
 	}
 }
 
-// startupLine is the subset of the "l7LoadBalancer starting" JSON line this
+// startupLogEntry is the subset of the "l7LoadBalancer starting" JSON line this
 // test asserts on.
-type startupLine struct {
+type startupLogEntry struct {
 	Msg        string `json:"msg"`
 	GOMAXPROCS int    `json:"gomaxprocs"`
 	GoVersion  string `json:"go_version"`
 }
 
-// readStartupLine scans r for the "l7LoadBalancer starting" JSON line and
-// decodes it, skipping the earlier "starting" line. It returns io.EOF if the
-// process exits before the line appears.
-func readStartupLine(r io.Reader) (startupLine, error) {
+// startupResult carries readStartupLogEntry's outcome off the pipe-reading
+// goroutine so the test can bound the wait.
+type startupResult struct {
+	entry startupLogEntry
+	err   error
+}
+
+// readStartupLogEntry scans r for the "l7LoadBalancer starting" JSON line and
+// decodes it, skipping the earlier "starting" line. It returns an error if the
+// process exits or the stream fails before the line appears.
+func readStartupLogEntry(r io.Reader) (startupLogEntry, error) {
 	scanner := bufio.NewScanner(r)
 	for scanner.Scan() {
-		var entry startupLine
+		var entry startupLogEntry
 		if err := json.Unmarshal(scanner.Bytes(), &entry); err != nil {
 			continue
 		}
@@ -207,5 +227,8 @@ func readStartupLine(r io.Reader) (startupLine, error) {
 			return entry, nil
 		}
 	}
-	return startupLine{}, io.EOF
+	if err := scanner.Err(); err != nil {
+		return startupLogEntry{}, err
+	}
+	return startupLogEntry{}, io.EOF
 }
