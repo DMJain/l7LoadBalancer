@@ -316,7 +316,7 @@ Scoped in `.scratch/s5-t5-t12-bench-execution/` as one bundle spec plus 20 ticke
   - Test approach: none — shell-only, TDD-exempt (AGENTS.md); verified by a green smoke and reduced-constant failure runs.
   - Verified (session log): `bash -n` and `shellcheck -S style` clean; `make test`, `go vet ./...`, `gofmt -l .` and `docker compose config` clean; green `./bench/run.sh smoke` (all 10 combinations 100%); a reduced-constant `failure` run showed `sighup-noop:PASS` (`non_2xx=0 transport_errors=0 pre_p99_ms=9.511 post_p99_ms=3.833`), and the same run with `RELOAD_P99_FACTOR=0` local/uncommitted showed `verdict=FAIL failed=p99_factor` and `sighup-noop:FAIL`.
 
-- [TODO] S5.T9.2 — Drain reload
+- [IN_PROGRESS] S5.T9.2 — Drain reload (OpenCode (deepseek-v4.1-flash), started 2026-09-30T20:49:35Z)
   - Spec: `.scratch/s5-t5-t12-bench-execution/issues/15-t9-2-drain-reload.md`
   - Depends: S5.T9.1, S5.T5.5.2
 
