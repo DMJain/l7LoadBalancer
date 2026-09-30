@@ -5,6 +5,13 @@
 // and failures, so selection-algorithm differences and (from Sprint 3)
 // resilience behavior are observable on `docker compose up` with no manual
 // configuration.
+//
+// Concurrency: net/http serves each request on its own goroutine, so handler
+// invocations run concurrently. The only shared mutable state is the
+// per-process arrival counter — a sync/atomic.Int64 incremented on entry and
+// read with Load (S5.T5.5.2). Each backend runs as its own container, so one
+// counter is the whole story. math/rand/v2's top-level functions are safe for
+// concurrent use.
 package main
 
 import (
@@ -19,6 +26,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -36,6 +44,13 @@ var payloads = map[string][]byte{
 	"/200b": make([]byte, 200),
 	"/10kb": make([]byte, 10*1024),
 	"/1mb":  make([]byte, 1<<20),
+}
+
+// statsResponse is the /stats body: the backend's name and how many benchmark
+// requests have arrived at it (S5.T5.5.2).
+type statsResponse struct {
+	Backend  string `json:"backend"`
+	Requests int64  `json:"requests"`
 }
 
 func main() {
@@ -129,12 +144,18 @@ func tlsFilesFromEnv() (certFile, keyFile string, err error) {
 }
 
 // newHandler returns the dummy backend's HTTP handler. Every GET except
-// /health sleeps for sleepMS, then fails with HTTP 500 with probability
-// failRate. /health is the always-200, chaos-free probe target. The paths
-// /200b, /10kb, and /1mb serve fixed-size pre-generated bodies; every other
-// path answers with a JSON body identifying the backend so distribution stays
+// /health and /stats sleeps for sleepMS, then fails with HTTP 500 with
+// probability failRate. /health is the always-200, chaos-free probe target;
+// /stats reports the arrival count of benchmark requests. The paths /200b,
+// /10kb, and /1mb serve fixed-size pre-generated bodies; every other path
+// answers with a JSON body identifying the backend so distribution stays
 // observable even through failing responses. Non-GET requests get a 405.
 func newHandler(name string, sleepMS int, failRate float64, logRequests bool, logger *slog.Logger) http.Handler {
+	// arrivals counts benchmark requests that reach this backend. It is read by
+	// /stats and incremented on arrival below; a plain atomic is all that is
+	// needed because a backend is a single process (S5.T5.5.2).
+	var arrivals atomic.Int64
+
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 
@@ -155,6 +176,20 @@ func newHandler(name string, sleepMS int, failRate float64, logRequests bool, lo
 			logRequest(logger, logRequests, r, name, http.StatusOK, start)
 			return
 		}
+
+		// /stats reports the arrival count. Like /health it is a control
+		// endpoint, so it bypasses SLEEP_MS/FAIL_RATE and is not itself counted.
+		if r.URL.Path == "/stats" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(statsResponse{Backend: name, Requests: arrivals.Load()})
+			logRequest(logger, logRequests, r, name, http.StatusOK, start)
+			return
+		}
+
+		// Arrival: counted before any injected latency or failure decision, so a
+		// request still in flight is already visible to /stats.
+		arrivals.Add(1)
 
 		if sleepMS > 0 {
 			time.Sleep(time.Duration(sleepMS) * time.Millisecond)

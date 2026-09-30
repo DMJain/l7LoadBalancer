@@ -2,17 +2,39 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// statsBody is the /stats response contract: the backend's name and how many
+// benchmark requests have arrived at it (S5.T5.5.2).
+type statsBody struct {
+	Backend  string `json:"backend"`
+	Requests int64  `json:"requests"`
+}
+
+// getStats drives GET /stats through the handler seam and decodes the counter.
+func getStats(t *testing.T, h http.Handler) statsBody {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/stats", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var got statsBody
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
+	return got
+}
 
 func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -168,6 +190,107 @@ func TestHandlerLoggingSwitch(t *testing.T) {
 			})
 		}
 	})
+}
+
+// TestStatsEndpointShape locks the /stats response contract (S5.T5.5.2): 200
+// with a JSON body naming the backend and its arrival count. A fresh handler
+// reports zero.
+func TestStatsEndpointShape(t *testing.T) {
+	h := newHandler("backend1", 0, 0, true, discardLogger())
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/stats", nil))
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	var body struct {
+		Backend  string `json:"backend"`
+		Requests int64  `json:"requests"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	assert.Equal(t, "backend1", body.Backend)
+	assert.EqualValues(t, 0, body.Requests)
+}
+
+// TestStatsCountsArrivalsExcludesControl proves the counter counts benchmark
+// traffic — the payload and default paths — and not the control endpoints
+// /health and /stats themselves (S5.T5.5.2).
+func TestStatsCountsArrivalsExcludesControl(t *testing.T) {
+	h := newHandler("backend1", 0, 0, true, discardLogger())
+
+	for _, path := range []string{"/200b", "/"} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+	}
+
+	// Control endpoints must not move the counter.
+	for _, path := range []string{"/health", "/stats"} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+	}
+
+	assert.EqualValues(t, 2, getStats(t, h).Requests)
+}
+
+// TestStatsCountsOnArrival proves the increment happens on arrival, before any
+// injected latency: a request still sleeping is already reflected by /stats
+// while its own response has not returned (S5.T5.5.2).
+func TestStatsCountsOnArrival(t *testing.T) {
+	h := newHandler("backend1", 300, 0, true, discardLogger())
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/10kb", nil))
+	}()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for getStats(t, h).Requests == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("arrival was never counted while the request was in flight")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	select {
+	case <-done:
+		t.Fatal("request completed before its arrival was observed")
+	default:
+	}
+}
+
+// TestStatsBypassesChaos proves /stats is a control endpoint like /health: an
+// injected failure rate and delay cannot make the count endpoint fail or stall
+// (S5.T5.5.2).
+func TestStatsBypassesChaos(t *testing.T) {
+	h := newHandler("backend1", 5000, 1.0, true, discardLogger())
+
+	rec := httptest.NewRecorder()
+	start := time.Now()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/stats", nil))
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Less(t, time.Since(start), time.Second, "stats must not sleep")
+}
+
+// TestStatsConcurrentArrivals proves concurrent requests are counted exactly,
+// which the -race gate checks for correctness at the same time.
+func TestStatsConcurrentArrivals(t *testing.T) {
+	const n = 100
+	h := newHandler("backend1", 0, 0, true, discardLogger())
+
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/200b", nil))
+		}()
+	}
+	wg.Wait()
+
+	assert.EqualValues(t, n, getStats(t, h).Requests)
 }
 
 // TestTLSFilesFromEnv locks the env-var contract: both set enables TLS, neither
