@@ -240,9 +240,10 @@ Scoped in `.scratch/s5-t5-t12-bench-execution/` as one bundle spec plus 20 ticke
   - Claimed 2026-09-30T01:07:00+05:30 by OpenCode (deepseek-v4.1-flash); completed 2026-09-30T01:13:00+05:30.
   - Completed: the three Nginx configs moved with `git mv` to `<proto>/<algo>` positions — `bench/nginx/http11/roundrobin.conf`, `bench/nginx/h2/roundrobin.conf`, `bench/nginx/h2/leastconn.conf` — contents byte-identical (rename diff is 0 insertions/0 deletions). The compose default `${NGINX_CONF:-http11/roundrobin.conf}` and `bench/run.sh`'s exported default plus `up_h2`/`up_http11`/`nginx_conf_for` mapping are updated to the new paths in the same commit, and the docker-compose header and `bench/README.md` path references follow. No new configs, no directive changes, no solo-path removal (all deferred to S5.T5.2). Verified: `docker compose config` clean; `nginx -t` passes on all three configs inside the pinned `nginx:1.27-alpine` image (throwaway `--no-deps` containers on the bench network); `shellcheck -S style` and `bash -n` clean on the harness; a reduced-constant local `core` run (throwaway copy with lowered constants, no committed results) brought Nginx up on both h2 configs and completed both matched algorithms with labelled Nginx results.
 
-- [TODO] S5.T5.2 — Nearest-equivalent competitors
+- [IN_PROGRESS] S5.T5.2 — Nearest-equivalent competitors (OpenCode (deepseek-v4.1-flash), started 2026-09-30T04:06:55Z)
   - Spec: `.scratch/s5-t5-t12-bench-execution/issues/03-t5-2-nearest-equivalent-competitors.md`
   - Depends: S5.T5.1
+  - Adding h2 nearest-equivalent Nginx competitors (consistent `hash $remote_addr`, `random two least_conn`), `worker_processes 2` in all five configs, path-join competitor mapping, `comparison=` result labels, and the core 48 / all 62 run counts; solo path removed.
 
 - [TODO] S5.T5.3 — Smoke slice
   - Spec: `.scratch/s5-t5-t12-bench-execution/issues/04-t5-3-smoke-slice.md`
