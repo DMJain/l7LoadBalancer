@@ -64,14 +64,17 @@ preflight() {
   fi
 
   local running
-  running=$(docker ps -q)
+  running=$(docker ps --format '  {{.ID}}  {{.Image}}')
   if [[ -n "$running" ]]; then
     printf 'bench-repro: refusing to run while any container is running (this never stops them):\n' >&2
-    docker ps --format '  {{.ID}}  {{.Image}}' >&2
+    printf '%s\n' "$running" >&2
     fail "stop them yourself before a published run" \
          "docker stop \$(docker ps -q)"
   fi
 
+  # Literal clean-tree check: a modified tracked file or an untracked file means
+  # the results would not trace to a commit, so refuse. Gitignored artifacts
+  # (certs/, bench/results/.tmp/) are not untracked and do not count.
   local dirty
   dirty=$(git -C "$ROOT" status --porcelain)
   if [[ -n "$dirty" ]]; then
@@ -101,4 +104,4 @@ main() {
   printf '\nbench-repro: done. results under bench/results/\n'
 }
 
-main "$@"
+main
