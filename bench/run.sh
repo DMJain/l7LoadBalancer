@@ -221,10 +221,17 @@ ensure_certs() {
   fi
 }
 
-# vegeta_run <command> runs a shell command inside a one-off vegeta container
-# with the results directory mounted at /results. The exported compose
+# compose_sh <script> runs a script in a one-off vegeta container on the compose
+# network with `sh` as the entrypoint. The vegeta image is alpine, so busybox
+# wget is available for the arrival-counter reads. The exported compose
 # variables keep the running lb/nginx/backends on the config this slice
 # selected, so `compose run` never recreates them.
+compose_sh() {
+  "${COMPOSE[@]}" run --rm -T --entrypoint sh vegeta -c "$1"
+}
+
+# vegeta_run <command> runs a shell command inside a one-off vegeta container
+# with the results directory mounted at /results.
 vegeta_run() {
   "${COMPOSE[@]}" run --rm -T -v "$RESULTS:/results" --entrypoint sh vegeta -c "$1"
 }
@@ -361,9 +368,9 @@ backend_scheme() {
 }
 
 # read_arrivals <scheme> <outfile> reads every backend's /stats in a single
-# one-off vegeta container (alpine busybox wget) and writes "<name>\t<count>"
-# lines. It fails loudly rather than write a partial snapshot: a run whose
-# distribution cannot be read is a broken run.
+# one-off vegeta container and writes "<name>\t<count>" lines. A read that comes
+# back empty is an error, and because the caller runs under `set -e` the run
+# aborts rather than feed a partial snapshot to the diff.
 read_arrivals() {
   local scheme="$1" out="$2" b cmd='set -e; '
   for b in "${BACKENDS[@]}"; do
@@ -371,12 +378,13 @@ read_arrivals() {
     cmd+="[ -n \"\$v\" ] || { echo 'arrival read failed: ${b}' >&2; exit 1; }; "
     cmd+="printf '${b}\t%s\n' \"\$v\"; "
   done
-  "${COMPOSE[@]}" run --rm -T --entrypoint sh vegeta -c "$cmd" > "$out"
+  compose_sh "$cmd" > "$out"
 }
 
 # arrival_deltas <before> <after> prints "<name>\t<delta>\t<share_pct>" per
-# backend: arrivals during the run and each backend's share of the total. Shared
-# by the hot-key (S5.T8.1), degraded (S5.T8.2) and drain-reload (S5.T9.2) reads.
+# backend: arrivals during the run and each backend's share of the total. This
+# is the reusable differ: the degraded slice (S5.T8.2) and the drain reload
+# (S5.T9.2) feed it their own snapshots.
 arrival_deltas() {
   awk -F'\t' '
     FNR == NR { before[$1] = $2 + 0; next }
@@ -394,36 +402,37 @@ arrival_deltas() {
   ' "$1" "$2"
 }
 
-# distribution_block <before> <after> prints the per-backend distribution as
+# distribution_block <deltas> prints the per-backend distribution as
 # result-header comment lines: "# arrivals backend=<name> count=<n>
-# share_pct=<p>", one per backend.
+# share_pct=<p>", one per backend. It reads arrival_deltas output.
 distribution_block() {
   local name count share
-  arrival_deltas "$1" "$2" | while IFS=$'\t' read -r name count share; do
+  while IFS=$'\t' read -r name count share; do
     printf '# arrivals backend=%s count=%s share_pct=%s\n' "$name" "$count" "$share"
-  done
+  done < "$1"
 }
 
-# hotkey_block <before> <after> prints one "# hotkey owner=<name> spill=<yes|no>"
-# line: the plurality backend is the owner, and spill means a non-owner backend
+# hotkey_block <deltas> prints one "# hotkey owner=<name> spill=<yes|no>" line:
+# the plurality backend is the owner, and spill means a non-owner backend
 # received at least SPILL_MIN_SHARE_PCT of the traffic (bounded loads working).
 # The raw counts stay in the result too, so the exact distribution is never
-# hidden behind the flag.
+# hidden behind the flag. It reads arrival_deltas output.
 hotkey_block() {
-  arrival_deltas "$1" "$2" | awk -F'\t' -v floor="$SPILL_MIN_SHARE_PCT" '
+  awk -F'\t' -v floor="$SPILL_MIN_SHARE_PCT" '
     { name[NR] = $1; share[NR] = $3 + 0
       if ($2 + 0 > max) { max = $2 + 0; owner = $1 } }
     END {
       spill = "no"
       for (i = 1; i <= NR; i++) if (name[i] != owner && share[i] >= floor) spill = "yes"
       printf "# hotkey owner=%s spill=%s\n", (owner == "" ? "none" : owner), spill
-    }'
+    }' "$1"
 }
 
 # measured_attack <scheme> <url> <rate> <secs> runs one measured attack,
 # bracketed by arrival-counter snapshots when the scheme is non-empty (a
 # consistent-hash hot-key run). The distribution lands in $TMP/distribution.txt,
-# empty for every other algorithm so their results are unchanged.
+# empty for every other algorithm so their results are unchanged. The deltas are
+# computed once, in the same file-based style attack_filtered uses.
 measured_attack() {
   local scheme="$1" url="$2" rate="$3" secs="$4"
   : > "$TMP/distribution.txt"
@@ -431,8 +440,9 @@ measured_attack() {
   attack_filtered "$url" "$rate" "$secs"
   if [[ -n "$scheme" ]]; then
     read_arrivals "$scheme" "$TMP/arrivals-after.tsv"
-    distribution_block "$TMP/arrivals-before.tsv" "$TMP/arrivals-after.tsv" > "$TMP/distribution.txt"
-    hotkey_block "$TMP/arrivals-before.tsv" "$TMP/arrivals-after.tsv" >> "$TMP/distribution.txt"
+    arrival_deltas "$TMP/arrivals-before.tsv" "$TMP/arrivals-after.tsv" > "$TMP/arrivals-delta.tsv"
+    distribution_block "$TMP/arrivals-delta.tsv" > "$TMP/distribution.txt"
+    hotkey_block "$TMP/arrivals-delta.tsv" >> "$TMP/distribution.txt"
   fi
 }
 
