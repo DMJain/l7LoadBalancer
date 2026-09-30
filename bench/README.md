@@ -14,7 +14,8 @@ support ([ADR-0020](../docs/adr/0020-benchmark-tool-vegeta-over-wrk.md)).
 - `run.sh` — the execution harness and the single source of truth for the
   matrix parameters (rates, durations, warmup, thresholds). Slices: `core`
   (48 runs, HTTP/2), `protocol` (12 runs, HTTP/1.1), `failure` (2 runs), `all`
-  (62 runs).
+  (62 runs), and `smoke` (10 short attacks, a preflight that is deliberately
+  **not** part of `all`).
 - `docker-compose.yml` — the topology: `lb`, `nginx`, `backend1`–`backend4`, `vegeta`.
 - `nginx/http11/roundrobin.conf`, `nginx/h2/{roundrobin,leastconn,consistent-hash,p2c-ewma}.conf`
   — Nginx plain HTTP/1.1 and TLS+HTTP/2 (`http2 on;`), four backends, keepalive
@@ -38,6 +39,14 @@ The whole matrix from the repo root:
 ```sh
 ./bench/run.sh all      # ~2h; use core|protocol|failure to run one slice
 ```
+
+Before a full run, `./bench/run.sh smoke` is the preflight gate: it brings up
+every (protocol, algorithm, competitor) combination the matrix uses — h2 × all
+four algorithms and HTTP/1.1 × round-robin, each against both competitors (10
+attacks) — and runs a 2 s, 50 req/s attack on the 10 KiB endpoint. Any
+combination below 100% success fails the slice with a nonzero exit naming it.
+`smoke` is not part of `all`; its rate, duration and size are constants at the
+top of `run.sh`.
 
 Each slice prints a summary table (algorithm, size, competitor, p50, p99,
 throughput) and writes per-run files named by their parameters, e.g.

@@ -8,12 +8,15 @@
 # same thresholds, and flags would invite "but I ran it with different
 # thresholds" comparisons (spec §28, §32).
 #
-# Usage:  ./bench/run.sh [core|protocol|failure|all]     (default: all)
+# Usage:  ./bench/run.sh [core|protocol|failure|smoke|all]   (default: all)
 #
 #   core      HTTP/2 (TLS+ALPN) matrix — 48 runs
 #   protocol  HTTP/1.1 round-robin comparison — 12 runs
 #   failure   backend-kill and SIGHUP-under-load — 2 runs
-#   all       the full 62-run matrix
+#   smoke     a ~1-minute preflight over every (protocol, algorithm,
+#             competitor) combination the matrix uses — 10 attacks, not part
+#             of `all` (S5.T5.3)
+#   all       the full 62-run matrix (smoke excluded)
 #
 # Every algorithm runs head-to-head with an Nginx competitor. Each result
 # header records `comparison=matched` (roundrobin, leastconn) or
@@ -39,6 +42,13 @@
 # `docker compose kill -s HUP lb` is the host-side form of the in-container
 # `kill -HUP 1` the ticket names: the distroless image has no shell or kill
 # binary, and the LB is PID 1 in its container (ADR-0019).
+#
+# The smoke slice (S5.T5.3) is the preflight gate: for every (protocol,
+# algorithm, competitor) combination the matrix uses, it runs a short low-rate
+# attack on the 10 KiB endpoint and requires 100% success, failing with a
+# nonzero exit naming the combination otherwise. It catches broken configs in
+# about a minute (the class of routing bug that once had TLS upstreams return
+# 400) instead of hours into a run. It is deliberately not part of `all`.
 
 set -euo pipefail
 
@@ -58,6 +68,14 @@ FAILURE_RATE_PCT=50       # failure-mode steady state as a percent of peak
 FAILURE_SECS=60           # failure-mode total duration (spec §29)
 FAILURE_EVENT_AT=30       # seconds into the failure run when the event fires
 SETTLE_SECS=10            # settle time after restarting backend3 (two probe intervals)
+
+# Smoke slice (S5.T5.3) — a preflight, not part of `all`. Every (protocol,
+# algorithm, competitor) combination the matrix uses must serve 100% in a
+# short, low-rate attack on one size.
+SMOKE_RATE=50             # req/s per smoke attack (S5.T5.3)
+SMOKE_SECS=2              # seconds per smoke attack (S5.T5.3)
+SMOKE_SIZE=10kb           # endpoint size for smoke attacks (S5.T5.3)
+SMOKE_READY_TRIES=5       # readiness polls before a smoke attack is judged
 
 # Detection time is dominated by the active health checker's cadence. None of
 # the bench configs set health.probe_interval, so every run uses the config
@@ -90,12 +108,14 @@ usage() {
   cat <<'EOF'
 bench/run.sh — the benchmark execution harness (S5.T4-harness).
 
-Usage: bench/run.sh [core|protocol|failure|all]     (default: all)
+Usage: bench/run.sh [core|protocol|failure|smoke|all]   (default: all)
 
   core      HTTP/2 (TLS+ALPN) matrix — 48 runs
   protocol  HTTP/1.1 round-robin comparison — 12 runs
   failure   backend-kill and SIGHUP-under-load — 2 runs
-  all       the full 62-run matrix
+  smoke     preflight: every (protocol, algorithm, competitor) combination
+            the matrix uses, 10 short attacks, 100% required, not part of all
+  all       the full 62-run matrix (smoke excluded)
 
 Results land as .txt summaries + .hdr HDR histograms under
 bench/results/{core,protocol,failure}/ with parameter-encoded filenames, and
@@ -488,6 +508,104 @@ run_failure() {
   failure_event sighup "$url" "$rate"
 }
 
+# ---------------------------------------------------------------------------
+# Smoke slice (S5.T5.3).
+# ---------------------------------------------------------------------------
+
+# smoke_fail <combination> <reason> records a failed combination, naming it.
+smoke_fail() { # <combination> <reason>
+  warn "smoke FAILED: $1 — $2"
+  SMOKE_FAILURES=$(( SMOKE_FAILURES + 1 ))
+}
+
+# wait_target <url> polls a single request until it succeeds, up to
+# SMOKE_READY_TRIES. It separates "a container is still starting" from "the
+# routing is broken", so a slow start is not misread as a failure.
+wait_target() { # <url>
+  local url="$1" i
+  for (( i = 0; i < SMOKE_READY_TRIES; i++ )); do
+    vegeta_run "printf 'GET %s\n' '$url' | vegeta attack -rate=1/s -duration=1s -insecure | vegeta report -type=json" \
+      > "$TMP/ready.json" 2>/dev/null || true
+    if awk -v s="$(json_field "$TMP/ready.json" success)" 'BEGIN { exit !(s > 0) }'; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+# smoke_ok_200 <json> reports whether every request in the report came back 200.
+# vegeta's own `success` counts 3xx as a success, but the smoke gate exists to
+# prove the target "serves 200s", so a redirect is treated as a failure.
+smoke_ok_200() { # <json>
+  local requests ok
+  requests=$(json_field "$1" requests)
+  ok=$(grep -o '"200":[0-9]*' "$1" 2>/dev/null | head -n1 | cut -d: -f2)
+  [[ -n "$requests" && "$requests" != 0 && "$ok" == "$requests" ]]
+}
+
+# smoke_attack <combination> <url> runs the constant-rate smoke attack and
+# requires every request to be a 200, failing (and naming the combination)
+# otherwise. The attack is the judge, not a compose exit code.
+smoke_attack() { # <combination> <url>
+  local combo="$1" url="$2" success pct
+  if ! wait_target "$url"; then
+    smoke_fail "$combo" "target never served a successful response"
+    return
+  fi
+  vegeta_run "printf 'GET %s\n' '$url' | vegeta attack -rate=${SMOKE_RATE}/s -duration=${SMOKE_SECS}s -insecure | vegeta report -type=json" \
+    > "$TMP/smoke.json" 2>/dev/null || true
+  if smoke_ok_200 "$TMP/smoke.json"; then
+    log "  smoke $combo OK (100%)"
+    return
+  fi
+  success=$(json_field "$TMP/smoke.json" success)
+  pct=$(awk -v s="${success:-0}" 'BEGIN { printf "%.2f", 100 * s }')
+  smoke_fail "$combo" "success=${pct}% (need 100%)"
+}
+
+# smoke_proto <proto> <algorithm...> brings the protocol's backends and nginx
+# up and checks both competitors for each algorithm. set_lb is allowed to fail
+# so the combination is still probed and named by smoke_attack.
+smoke_proto() { # <proto> <algorithm...>
+  local proto="$1"
+  shift
+  local algo comp url conf combo
+  case "$proto" in
+    h2) up_h2 ;;
+    http11) up_http11 ;;
+    *) warn "unknown smoke protocol $proto"; return 1 ;;
+  esac
+  for algo in "$@"; do
+    set_lb "./configs/$proto/$algo.yaml" || true
+    conf=$(nginx_conf_for "$proto" "$algo")
+    if ! set_nginx_conf "$conf"; then
+      smoke_fail "$proto/$algo/nginx" "nginx would not start on $conf"
+      continue
+    fi
+    for comp in lb nginx; do
+      combo="$proto/$algo/$comp"
+      url=$(target_url "$proto" "$comp" "$SMOKE_SIZE")
+      smoke_attack "$combo" "$url"
+    done
+  done
+}
+
+# run_smoke checks every (protocol, algorithm, competitor) combination the
+# matrix uses and exits nonzero, naming each failed combination, if any does
+# not serve 100% 200s. It is not part of `all`: it is the preflight gate for a
+# published run.
+run_smoke() {
+  log "=== smoke slice: 10 attacks, ${SMOKE_SECS}s @ ${SMOKE_RATE}/s on /${SMOKE_SIZE} ==="
+  SMOKE_FAILURES=0
+  smoke_proto h2 "${ALGOS[@]}"
+  smoke_proto http11 roundrobin
+  if (( SMOKE_FAILURES > 0 )); then
+    warn "smoke FAILED: ${SMOKE_FAILURES} combination(s) did not reach 100% success"
+    exit 1
+  fi
+  log "smoke PASSED: all 10 combinations served 100%."
+}
+
 print_summary() {
   [[ -s "$TMP/summary.tsv" ]] || return 0
   printf '\n%-14s %-6s %-6s %-12s %9s %9s %12s\n' \
@@ -510,6 +628,7 @@ case "$SLICE" in
   core) run_core; print_summary ;;
   protocol) run_protocol; print_summary ;;
   failure) run_failure; print_summary ;;
+  smoke) run_smoke; exit 0 ;;
   all) run_core; print_summary; run_protocol; print_summary; run_failure; print_summary ;;
   -h|--help|help) usage; exit 0 ;;
   *) warn "unknown slice '$SLICE'"; usage; exit 2 ;;
