@@ -104,8 +104,10 @@ summary table showing p50, p99 and all four shares. Its files live under
 - the LB's **consistent-hash** spills if `backend3` owns the hot key (bounded
   loads cap its share), while Nginx's `hash $remote_addr consistent` does not.
 
-Health probes and `/stats` reads bypass the injected delay, so `backend3` stays
-healthy and is never ejected for the whole run.
+`/stats` reads bypass the injected delay (it is a control endpoint). The active
+health checker probes `backend3`'s own URL, so its probe also waits 50 ms, but
+that is far below the checker's 2 s probe timeout — `backend3` stays healthy and
+is not ejected for the whole run.
 
 ## Reproducing the published numbers
 

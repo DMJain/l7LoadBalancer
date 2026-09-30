@@ -25,7 +25,7 @@
 # nearest-equivalent competitor's header states its gap (S5.T5.2).
 #
 # Results land as .txt summaries + .hdr HDR histograms under
-# bench/results/{core,protocol,failure}/ with parameter-encoded filenames, and
+# bench/results/{core,protocol,failure,degraded}/ with parameter-encoded filenames, and
 # each slice prints a summary table to stdout (spec §27, §30, §32). Every
 # invocation also writes bench/results/provenance.json — the commit, dirty
 # state, host, tool versions, cpusets and start/finish times a reader needs to
@@ -71,8 +71,9 @@
 # a slow backend and which do not. All eight run at one absolute rate, half the
 # h2/round-robin/10 KiB LB peak: reused from the core slice when the same
 # invocation ran it, discovered here (with the backends still fast) otherwise.
-# The delay is on the payload path only, so health probes never see it and
-# backend3 is never ejected.
+# The active health checker probes each backend's own URL, so backend3's probe
+# also waits 50 ms, but that is far below the checker's 2 s probe timeout — the
+# delay alone never ejects it.
 
 set -euo pipefail
 
@@ -171,7 +172,7 @@ export SLEEP_MS=0
 # slice can reuse the same invocation's measurement (S5.T8.2). Empty when the
 # core slice did not run, which makes the degraded slice discover its own.
 CORE_RR_10KB_LB_PEAK=""
-DEGRADED_BACKEND3_SLOW=0
+DEGRADED_BACKEND_SLOW=0
 
 usage() {
   cat <<'EOF'
@@ -987,16 +988,35 @@ run_failure() {
 
 # restore_degraded recreates backend3 with no delay. The flag gates it, so the
 # EXIT trap can call it whether or not the slice ever injected the delay, and a
-# second call is a no-op.
+# second call is a no-op. A failed restore is warned about (it runs in an EXIT
+# trap, so it must not itself abort) because it would silently leave a later
+# slice running against a slow backend.
 restore_degraded() {
-  [[ "${DEGRADED_BACKEND3_SLOW:-0}" == 1 ]] || return 0
+  [[ "${DEGRADED_BACKEND_SLOW:-0}" == 1 ]] || return 0
   SLEEP_MS=0
-  "${COMPOSE[@]}" up -d --force-recreate "$DEGRADED_BACKEND" >/dev/null 2>&1 || true
-  DEGRADED_BACKEND3_SLOW=0
+  if ! "${COMPOSE[@]}" up -d --force-recreate "$DEGRADED_BACKEND" >/dev/null 2>&1; then
+    warn "restore_degraded: could not recreate $DEGRADED_BACKEND at 0ms; it may still be slow"
+  fi
+  DEGRADED_BACKEND_SLOW=0
+}
+
+# verify_backend_sleep <ms> reads the target backend's startup line and aborts
+# unless it reports the wanted delay, so the injection is proven to have taken
+# effect rather than assumed from the constant — the same run-time-proof shape
+# as the CPU-pinning checks. The last sleep_ms wins, since a recreated backend
+# logs a fresh startup line.
+verify_backend_sleep() { # <ms>
+  local want="$1" seen
+  seen=$("${COMPOSE[@]}" logs --no-color "$DEGRADED_BACKEND" 2>/dev/null \
+    | grep -o '"sleep_ms":[0-9]*' | tail -n1 | cut -d: -f2 || true)
+  if [[ "$seen" != "$want" ]]; then
+    warn "degraded check FAILED: $DEGRADED_BACKEND sleep_ms=${seen:-unknown} (need $want)"
+    exit 1
+  fi
 }
 
 run_degraded() {
-  log "=== degraded slice: ${DEGRADED_BACKEND} +${DEGRADED_SLEEP_MS}ms, 8 runs ==="
+  log "=== degraded slice: ${DEGRADED_BACKEND} +${DEGRADED_SLEEP_MS}ms, ${DEGRADED_RUNS} runs ==="
   : > "$TMP/degraded_summary.tsv"
   local peak rate
   SLEEP_MS=0
@@ -1018,12 +1038,14 @@ run_degraded() {
   (( rate > 0 )) || rate=1
   log "  absolute rate=${rate}/s (${DEGRADED_RATE_PCT}% of ${peak}/s for all 8 runs)"
 
-  # Inject the delay, then arm an EXIT trap that restores backend3 before the
-  # provenance record is finalized, so an abort cannot leave it degraded.
+  # Inject the delay. Arm the trap and set the flag *before* recreating, so a
+  # failed or interrupted recreate is still restored by the EXIT trap, then
+  # prove the new container actually came up with the delay.
   SLEEP_MS=$DEGRADED_SLEEP_MS
-  "${COMPOSE[@]}" up -d --force-recreate "$DEGRADED_BACKEND"
-  DEGRADED_BACKEND3_SLOW=1
+  DEGRADED_BACKEND_SLOW=1
   trap 'restore_degraded; provenance_finish' EXIT
+  "${COMPOSE[@]}" up -d --force-recreate "$DEGRADED_BACKEND"
+  verify_backend_sleep "$DEGRADED_SLEEP_MS"
 
   local scheme algo comp url hotkey base meta p50 p99 shares
   scheme=$(backend_scheme h2)
