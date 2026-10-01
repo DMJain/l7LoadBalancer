@@ -7,7 +7,7 @@ consistent across hosts. vegeta is the only load generator — wrk has no HTTP/2
 support ([ADR-0020](../docs/adr/0020-benchmark-tool-vegeta-over-wrk.md)).
 
 `./bench/run.sh all` runs the full 71-run matrix and writes reproducible
-`.txt` summaries and `.hdr` histograms under `bench/results/`.
+`.txt` summaries, `.json` reports and `.hdr` histograms under `bench/results/`.
 
 ## Layout
 
@@ -30,8 +30,11 @@ support ([ADR-0020](../docs/adr/0020-benchmark-tool-vegeta-over-wrk.md)).
 - `vegeta/Dockerfile` — pinned vegeta built for the host architecture (the
   popular prebuilt image is amd64-only and would run under emulation on arm64).
 - `results/{core,protocol,failure,degraded}/` — the harness's output; `.txt` +
-  `.hdr` are committed, raw `.gob`/`.csv` scratch lands in the gitignored
-  `results/.tmp/`.
+  `.json` + `.hdr` are committed, raw `.gob`/`.csv` scratch lands in the
+  gitignored `results/.tmp/`. The `.json` is the machine-readable vegeta report
+  the results generator reads its percentiles from (S5.T10.1); the `.txt` carries
+  the same report human-readable plus the metadata header, and the `.hdr` the
+  p99.9 the JSON report lacks.
 - `results/provenance.json` — the machine-readable record of the invocation that
   produced the results beside it (see *Provenance record*).
 
@@ -53,9 +56,9 @@ top of `run.sh`.
 
 Each slice prints a summary table (algorithm, size, competitor, p50, p99,
 throughput) and writes per-run files named by their parameters, e.g.
-`results/core/roundrobin-10kb-nginx-throughput.txt` and
-`results/failure/roundrobin-10kb-sighup-noop.txt`. Protocol-slice filenames
-carry an `http11` token (spec §30), e.g.
+`results/core/roundrobin-10kb-nginx-throughput.txt` (with `.json` and `.hdr`
+siblings) and `results/failure/roundrobin-10kb-sighup-noop.txt`. Protocol-slice
+filenames carry an `http11` token (spec §30), e.g.
 `results/protocol/roundrobin-10kb-http11-lb-throughput.txt`; the latency `.txt`
 holds one report per rate, with a `-latency-<pct>.hdr` histogram beside it.
 

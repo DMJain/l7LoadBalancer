@@ -24,7 +24,7 @@
 # `comparison=nearest-equivalent` (consistent-hash, p2c-ewma), and every
 # nearest-equivalent competitor's header states its gap (S5.T5.2).
 #
-# Results land as .txt summaries + .hdr HDR histograms under
+# Results land as .txt summaries + .hdr HDR histograms + .json reports under
 # bench/results/{core,protocol,failure,degraded}/ with parameter-encoded filenames, and
 # each slice prints a summary table to stdout (spec §27, §30, §32). Every
 # invocation also writes bench/results/provenance.json — the commit, dirty
@@ -215,7 +215,7 @@ Usage: bench/run.sh [core|protocol|failure|degraded|smoke|all]   (default: all)
             the matrix uses, 10 short attacks, 100% required, not part of all
   all       the full 71-run matrix (smoke excluded)
 
-Results land as .txt summaries + .hdr HDR histograms under
+Results land as .txt summaries + .hdr HDR histograms + .json reports under
 bench/results/{core,protocol,failure,degraded}/ with parameter-encoded filenames, and
 each slice prints a summary table to stdout. All parameters are constants at
 the top of this script; see the header comment for the methodology.
@@ -785,6 +785,10 @@ save_result() { # <outdir> <basename> <metadata-line>
   mkdir -p "$dir"
   { printf '# %s\n' "$meta"; cat "$TMP/report.txt"; } > "$dir/$base.txt"
   cp "$TMP/report.hdr" "$dir/$base.hdr"
+  # The JSON report is the machine-readable source for the percentiles in the
+  # published tables (S5.T10.1); the text report above is its human-readable
+  # sibling and the `.hdr` carries the p99.9 the JSON report does not.
+  cp "$TMP/metrics.json" "$dir/$base.json"
 }
 
 add_summary() { # <algorithm> <size> <competitor> <load> [throughput-override]

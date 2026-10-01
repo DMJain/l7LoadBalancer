@@ -1,0 +1,1 @@
+{"latencies":{"total":336000000000,"mean":1200000,"50th":1000000,"90th":2100000,"95th":3000000,"99th":7500000,"max":25000000,"min":210900},"bytes_in":{"total":293601280000,"mean":1048576},"bytes_out":{"total":0,"mean":0},"duration":9999000000,"wait":402310,"requests":280000,"rate":28000.07,"throughput":28000.01,"success":1,"status_codes":{"200":280000},"errors":[]}

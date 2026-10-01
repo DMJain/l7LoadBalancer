@@ -1,0 +1,19 @@
+{
+  "git_sha": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+  "git_dirty": false,
+  "slices": ["core", "protocol"],
+  "start_time": "2026-10-01T00:00:00Z",
+  "finish_time": "2026-10-01T02:13:40Z",
+  "host_os": "Darwin 24.6.0 arm64",
+  "host_cpu": "Apple M2 Pro",
+  "docker_version": "27.3.1",
+  "compose_version": "v2.29.7",
+  "docker_cpus": 10,
+  "docker_memory_bytes": 8589934592,
+  "cpusets": {"lb": "0-1", "nginx": "0-1", "backend1": "2", "backend2": "3", "backend3": "4", "backend4": "5", "vegeta": "6-7"},
+  "lb_go_version": "go1.25.1",
+  "lb_gomaxprocs": 2,
+  "nginx_version": "1.27.4",
+  "nginx_workers": 2,
+  "vegeta_version": "v12.8.3"
+}
