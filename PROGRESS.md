@@ -341,9 +341,10 @@ Scoped in `.scratch/s5-t5-t12-bench-execution/` as one bundle spec plus 20 ticke
   - Test approach: none — shell-only, TDD-exempt (AGENTS.md); the committed `bench/generate-results_test.sh` fixture test is the regression gate (extended Red-first: it failed on the 20 new section checks before the generator emitted them).
   - Verified: `bash -n` and `shellcheck -S style` clean on `generate-results.sh` and `generate-results_test.sh`; the fixture test passes with all 55 checks; `make test`, `make test-race`, `go vet ./...`, and `gofmt -l .` clean (no Go changed).
 
-- [TODO] S5.T10.3 — Narrative number check
+- [IN_PROGRESS] S5.T10.3 — Narrative number check
   - Spec: `.scratch/s5-t5-t12-bench-execution/issues/18-t10-3-narrative-number-check.md`
   - Depends: S5.T10.1
+  - Claimed 2026-10-01T11:05:00Z by OpenCode (deepseek-v4.1-flash). Scope in: every `[≈~]?[0-9][0-9,]*(\.[0-9]+)?\s?(ms|µs|req/s)` token outside the generated marker regions must match a generated cell once the prefix is stripped and commas/spacing normalised; unmatched tokens fail the generator nonzero and are named; percentages, core counts, sizes, ADR numbers and percentile names are exempt by construction; the fixture test gains all four cases. Out of scope: any other generator section, the harness, Go code, and the published narrative (S5.T10.4).
 
 - [TODO] S5.T6 — Published run (absorbs S5.T7)
   - Spec: `.scratch/s5-t5-t12-bench-execution/issues/19-t6-published-run.md`
