@@ -24,6 +24,7 @@ One-line decision summaries. Read the full ADR when your task touches that subsy
 | [0018](0018-no-retry-ever.md) | No retry, ever: a failed round trip is classified and surfaced, never repeated | Accepted | The LB never retries — a retry would double-count active connections and corrupt the outlier window for one client request — so retry is left to the client, which alone knows idempotency. |
 | [0019](0019-deployment-target.md) | Deployment target — the Docker container as the packaging artifact | Accepted | The digest-pinned distroless image is the deployment target; Kubernetes is rejected (no clustering, no external state, no scale-out), the bare binary is the supported primitive; SO_REUSEPORT handoff stays post-Sprint-5. |
 | [0020](0020-benchmark-tool-vegeta-over-wrk.md) | Benchmark tool — vegeta over wrk | Accepted | vegeta is the only load generator: wrk has no HTTP/2, and splitting tools breaks attribution; constant-rate attacks avoid coordinated omission and HDR histograms come natively. |
+| [0021](0021-bounded-memory-in-benchmark-harness.md) | Bounded memory in the benchmark harness | Accepted | The `vegeta` container bounds its Go heap (`GOMEMLIMIT`/`GOGC`) and aligns `GOMAXPROCS` to its cpuset, so the 1 MB runs complete on Docker Desktop defaults; raising the VM memory is rejected as unreproducible. |
 
 ## Decisions without a dedicated ADR
 
