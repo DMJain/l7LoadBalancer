@@ -121,6 +121,17 @@ services:
       context: ./vegeta
     depends_on: [lb]
     cpuset: "6-7"
+    environment:
+      # Bound the generator's Go heap (ADR-0021). Without this, vegeta's heap
+      # balloons to ~5 GB while copying 1 MB response bodies on a 2-core cpuset
+      # and the Docker VM OOM-kills it at the 1 MB peak-search, aborting the run
+      # (make exit 137). GOMAXPROCS matches the cpuset so the scheduler and GC
+      # see the two cores they were given, not the VM's eight; GOMEMLIMIT/GOGC
+      # keep RSS under ~4 GB so `make bench-repro` completes on Docker Desktop
+      # defaults with no host-memory tuning.
+      GOMAXPROCS: "2"
+      GOMEMLIMIT: "3GiB"
+      GOGC: "50"
     # Overridden so `docker compose up` leaves vegeta idling; `compose run`
     # passes `--entrypoint vegeta` (see the header) to execute a real run.
     entrypoint: ["/bin/sleep", "2147483647"]

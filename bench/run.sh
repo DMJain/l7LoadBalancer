@@ -45,6 +45,14 @@
 # a double loses ~256 ns, far below the 5 s window, so the boundary is exact
 # for any practical purpose. (vegeta has no built-in warmup skip.)
 #
+# Generator bounds (ADR-0022): every attack caps vegeta at VEGETA_MAX_WORKERS
+# workers and VEGETA_MAX_CONNECTIONS connections, so the LB is never flooded
+# with unbounded in-flight requests; a peak-search step only counts as sustained
+# if it delivered >= DELIVERY_MIN_RATIO_PCT of its target, so a capped generator
+# cannot under-send and report a false peak; and the search seeds from a per-size
+# rate (SEED_RATE_1MB / SEED_RATE_SMALL) because the generator's ceiling is
+# bytes-per-second-bounded, not requests-per-second-bounded.
+#
 # Failure-mode steady state is TLS+HTTP/2 at 50% of discovered peak (spec §29).
 # `docker compose kill -s HUP lb` is the host-side form of the in-container
 # `kill -HUP 1` the ticket names: the distroless image has no shell or kill
@@ -100,11 +108,27 @@ set -euo pipefail
 # Parameters — constants, deliberately not flags (spec §28).
 # ---------------------------------------------------------------------------
 
-SEED_RATE=1000            # req/s the throughput search seeds at (spec §28)
-RATE_GRANULARITY=500      # req/s bisection convergence granularity (spec §28)
-MAX_RATE=200000           # req/s safety cap so a never-failing search terminates
+# Per-size peak-search bounds (ADR-0022). The generator's ceiling is
+# bytes-per-second-bounded, not requests-per-second-bounded: on the 2-core
+# generator a 1 MB payload saturates the rig far below the small-payload seed,
+# so starting its search at 1000 req/s floods the LB before the search can back
+# off. 200 B and 10 KB keep the original 1000 seed / 200000 cap; 1 MB starts at
+# 100 and is capped at 500, with a granularity fine enough to resolve its lower
+# ceiling. The delivered-rate guard below is what keeps a capped generator from
+# under-sending and reporting a false peak at any size. These are constants and
+# case lookups, not associative arrays, so the harness still runs on macOS's
+# bash 3.2 (which Docker Desktop users have as /usr/bin/env bash).
+SEED_RATE_SMALL=1000         # 200 B / 10 KB starting rate, req/s
+MAX_RATE_SMALL=200000        # 200 B / 10 KB safety cap, req/s
+GRANULARITY_SMALL=500        # 200 B / 10 KB bisection granularity, req/s
+SEED_RATE_1MB=100            # 1 MB starting rate, req/s
+MAX_RATE_1MB=500             # 1 MB safety cap, req/s
+GRANULARITY_1MB=25           # 1 MB bisection granularity, req/s
 P99_CEILING_MS=100        # a rate fails when p99 exceeds this (spec §28)
 ERROR_CEILING_PCT=1       # a rate fails when error rate exceeds this percent
+DELIVERY_MIN_RATIO_PCT=95 # a step must deliver >= this % of the target rate (ADR-0022)
+VEGETA_MAX_WORKERS=1024   # cap generator workers → bounds in-flight requests (ADR-0022)
+VEGETA_MAX_CONNECTIONS=1024 # cap generator connections per target host (ADR-0022)
 WARMUP_SECS=5             # first seconds of every measured attack, discarded
 STEP_SECS=10              # measurement window per throughput-search step (10–15s)
 LATENCY_RATES_PCT=(30 50 70 90)  # latency-profile rates, as % of discovered peak (spec §21)
@@ -540,15 +564,55 @@ result_peak() {
   sed -n 's/.* peak_rps=\([0-9][0-9]*\).*/\1/p' "$1" 2>/dev/null | head -n1 || true
 }
 
-# passes reports whether the metrics from the last attack clear the thresholds.
-passes() {
-  local p99 success
+# seed_rate_for / max_rate_for / granularity_for look up the per-size peak-search
+# bounds (ADR-0022), defaulting to the small-payload values for an unknown size.
+seed_rate_for() {
+  case "$1" in 1mb) printf '%s' "$SEED_RATE_1MB" ;; *) printf '%s' "$SEED_RATE_SMALL" ;; esac
+}
+max_rate_for() {
+  case "$1" in 1mb) printf '%s' "$MAX_RATE_1MB" ;; *) printf '%s' "$MAX_RATE_SMALL" ;; esac
+}
+granularity_for() {
+  case "$1" in 1mb) printf '%s' "$GRANULARITY_1MB" ;; *) printf '%s' "$GRANULARITY_SMALL" ;; esac
+}
+
+# STEP_FAIL_REASON names the first criterion that failed the last passes() call,
+# and PEAK_SEED / PEAK_FAIL_REASON record where and why a discover_peak search
+# stopped, so an "under-delivered; harness-limited; not a peak" result can be
+# reported distinctly from a genuine p99/error ceiling failure (ADR-0022).
+STEP_FAIL_REASON=""
+PEAK_RATE=0
+PEAK_SEED=""
+PEAK_FAIL_REASON=""
+
+# passes <target_rate> reports whether the last attack (a) cleared the p99 and
+# error ceilings and (b) actually delivered >= DELIVERY_MIN_RATIO_PCT of the
+# target rate. The delivery check is what stops a worker-capped generator from
+# under-sending and reporting a false peak (ADR-0022): delivered is the measured
+# request count over the measured window, so a generator that cannot keep up
+# fails the step instead of passing it with artificially low latency.
+passes() { # <target_rate>
+  local target="$1" p99 success requests delivered min_requests
+  STEP_FAIL_REASON=""
   p99=$(json_field "$TMP/metrics.json" 99th)
   success=$(json_field "$TMP/metrics.json" success)
-  [[ -n "$p99" && -n "$success" ]] || return 1
-  (( p99 < P99_CEILING_MS * 1000000 )) || return 1
-  awk -v s="$success" -v e="$ERROR_CEILING_PCT" \
-    'BEGIN { exit !((100 * (1 - s)) < e) }'
+  requests=$(json_field "$TMP/metrics.json" requests)
+  if [[ -z "$p99" || -z "$success" || -z "$requests" ]]; then
+    STEP_FAIL_REASON="no-report"; return 1
+  fi
+  if ! (( p99 < P99_CEILING_MS * 1000000 )); then STEP_FAIL_REASON="p99"; return 1; fi
+  if ! awk -v s="$success" -v e="$ERROR_CEILING_PCT" \
+       'BEGIN { exit !((100 * (1 - s)) < e) }'; then
+    STEP_FAIL_REASON="errors"; return 1
+  fi
+  delivered=$(awk -v r="$requests" -v secs="$STEP_SECS" 'BEGIN { printf "%.0f", r / secs }')
+  min_requests=$(( target * DELIVERY_MIN_RATIO_PCT / 100 ))
+  if (( delivered < min_requests )); then
+    STEP_FAIL_REASON="under-delivered"
+    warn "step target=${target}/s delivered=${delivered}/s (< ${DELIVERY_MIN_RATIO_PCT}%: under-delivered; harness-limited; not a peak)"
+    return 1
+  fi
+  return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -736,7 +800,7 @@ attack_filtered() {
   local total=$(( WARMUP_SECS + secs ))
   vegeta_run "
 set -e
-printf 'GET %s\n' '$url' | vegeta attack -rate=${rate}/s -duration=${total}s -insecure > /results/.tmp/attack.gob
+printf 'GET %s\n' '$url' | vegeta attack -rate=${rate}/s -duration=${total}s -max-workers=${VEGETA_MAX_WORKERS} -max-connections=${VEGETA_MAX_CONNECTIONS} -insecure > /results/.tmp/attack.gob
 vegeta encode -to csv /results/.tmp/attack.gob > /results/.tmp/attack.csv
 c=\$(head -n1 /results/.tmp/attack.csv | cut -d, -f1)
 c=\$((c + ${WARMUP_SECS} * 1000000000))
@@ -748,36 +812,44 @@ vegeta report -type=json /results/.tmp/meas.gob > /results/.tmp/metrics.json
 "
 }
 
-# discover_peak <url> binary-searches the highest sustainable rate: seed at
-# SEED_RATE, double until a step fails (p99 > ceiling or errors > ceiling),
-# then bisect between the last good and first bad rate to RATE_GRANULARITY.
-# Echoes the peak rate (0 when even the seed fails).
-discover_peak() {
-  local url="$1" good=0 bad=0 rate="$SEED_RATE" mid
-  while (( rate <= MAX_RATE )); do
+# discover_peak <url> <size> binary-searches the highest sustainable rate using
+# the size's seed, ceiling and granularity (ADR-0022): seed, double until a step
+# fails, then bisect. A step passes only if passes() clears the p99/error
+# ceilings and delivered >= DELIVERY_MIN_RATIO_PCT of the target. It sets
+# PEAK_RATE (the result, 0 when even the seed fails) and, on a zero result,
+# PEAK_SEED and PEAK_FAIL_REASON, so the caller can report
+# "under-delivered; harness-limited; not a peak" rather than a bare skip. It sets
+# globals rather than echoing, because a `$(...)` call would run it in a subshell
+# and discard the reason.
+discover_peak() { # <url> <size>
+  local url="$1" size="$2" seed max gran good=0 bad=0 rate mid
+  seed=$(seed_rate_for "$size"); max=$(max_rate_for "$size"); gran=$(granularity_for "$size")
+  PEAK_RATE=0; PEAK_SEED="$seed"; PEAK_FAIL_REASON=""; rate="$seed"
+  while (( rate <= max )); do
     attack_filtered "$url" "$rate" "$STEP_SECS"
-    if passes; then
+    if passes "$rate"; then
       good=$rate
       rate=$(( rate * 2 ))
     else
-      bad=$rate
+      bad=$rate; PEAK_FAIL_REASON="$STEP_FAIL_REASON"
       break
     fi
   done
   if (( bad == 0 )); then
-    bad=$MAX_RATE
+    bad=$max
+    [[ -n "$PEAK_FAIL_REASON" ]] || PEAK_FAIL_REASON="ceiling"
   fi
   if (( good == 0 )); then
-    printf '0'
+    PEAK_RATE=0
     return
   fi
-  while (( bad - good > RATE_GRANULARITY )); do
-    mid=$(( (good + bad) / 2 / RATE_GRANULARITY * RATE_GRANULARITY ))
+  while (( bad - good > gran )); do
+    mid=$(( (good + bad) / 2 / gran * gran ))
     (( mid > good )) || break
     attack_filtered "$url" "$mid" "$STEP_SECS"
-    if passes; then good=$mid; else bad=$mid; fi
+    if passes "$mid"; then good=$mid; else bad=$mid; PEAK_FAIL_REASON="$STEP_FAIL_REASON"; fi
   done
-  printf '%d' "$good"
+  PEAK_RATE=$good
 }
 
 save_result() { # <outdir> <basename> <metadata-line>
@@ -816,19 +888,24 @@ run_scenario() { # <outdir> <proto> <algorithm> <size> <competitor> <url>
     dist_scheme=$(backend_scheme "$proto_label")
   fi
   progress "$proto_label" "$algo" "$size" "$comp" peak-search
-  peak=$(discover_peak "$url")
+  discover_peak "$url" "$size"
+  peak="$PEAK_RATE"
   if (( peak == 0 )); then
-    warn "$algo/$size/$comp reached no sustainable rate at seed ${SEED_RATE}/s; skipped"
+    if [[ "$PEAK_FAIL_REASON" == "under-delivered" ]]; then
+      warn "$algo/$size/$comp no sustainable rate: under-delivered at seed ${PEAK_SEED}/s (harness-limited; not a peak); skipped"
+    else
+      warn "$algo/$size/$comp no sustainable rate at seed ${PEAK_SEED}/s (${PEAK_FAIL_REASON:-p99/errors}); skipped"
+    fi
     return
   fi
-  log "  $algo $size $comp: peak=${peak}/s"
+  log "  $algo $size $comp: peak=${peak}/s (sustained)"
 
   base="${algo}-${size}"
   [[ -n "$proto" ]] && base="${base}-${proto}"
   base="${base}-${comp}"
 
   measured_attack "$dist_scheme" "$url" "$peak" "$STEP_SECS"
-  meta="algorithm=$algo size=$size competitor=$comp load=throughput comparison=$cmp peak_rps=$peak"
+  meta="algorithm=$algo size=$size competitor=$comp load=throughput comparison=$cmp peak_rps=$peak peak_status=sustained delivery_min_pct=$DELIVERY_MIN_RATIO_PCT"
   [[ -s "$TMP/distribution.txt" ]] && meta="$meta
 $(cat "$TMP/distribution.txt")"
   save_result "$outdir" "${base}-throughput" "$meta"
@@ -896,7 +973,7 @@ failure_attack() { # <url> <rate> <secs>
   local url="$1" rate="$2" secs="$3"
   vegeta_run "
 set -e
-printf 'GET %s\n' '$url' | vegeta attack -rate=${rate}/s -duration=${secs}s -insecure \
+printf 'GET %s\n' '$url' | vegeta attack -rate=${rate}/s -duration=${secs}s -max-workers=${VEGETA_MAX_WORKERS} -max-connections=${VEGETA_MAX_CONNECTIONS} -insecure \
   | tee /results/.tmp/failure.gob \
   | vegeta report -type=json --every=1s 2>&1 \
   | sed 's/\x1b\[[0-9;]*[A-Za-z]//g' > /results/.tmp/timeseries.jsonl
@@ -1154,9 +1231,10 @@ run_failure() {
 
   set_lb "./configs/h2/roundrobin.yaml"
   local url="https://lb:8080/10kb" peak rate
-  peak=$(discover_peak "$url")
+  discover_peak "$url" 10kb
+  peak="$PEAK_RATE"
   if (( peak == 0 )); then
-    warn "failure slice reached no sustainable rate at seed ${SEED_RATE}/s; skipped"
+    warn "failure slice reached no sustainable rate at seed ${PEAK_SEED}/s (${PEAK_FAIL_REASON:-p99/errors}); skipped"
     return
   fi
   rate=$(( peak * FAILURE_RATE_PCT / 100 ))
@@ -1228,11 +1306,12 @@ run_degraded() {
   else
     log "  no core result in this invocation; discovering the h2/roundrobin/10kb/lb peak ..."
     set_lb "./configs/h2/roundrobin.yaml"
-    peak=$(discover_peak "$(target_url h2 lb "$DEGRADED_SIZE")")
+    discover_peak "$(target_url h2 lb "$DEGRADED_SIZE")" "$DEGRADED_SIZE"
+    peak="$PEAK_RATE"
     log "  discovered peak=${peak}/s"
   fi
   if (( peak == 0 )); then
-    warn "degraded slice reached no sustainable rate at seed ${SEED_RATE}/s; skipped"
+    warn "degraded slice reached no sustainable rate at seed ${PEAK_SEED}/s (${PEAK_FAIL_REASON:-p99/errors}); skipped"
     return
   fi
   rate=$(( peak * DEGRADED_RATE_PCT / 100 ))
@@ -1303,7 +1382,7 @@ smoke_fail() { # <combination> <reason>
 wait_target() { # <url>
   local url="$1" i
   for (( i = 0; i < SMOKE_READY_TRIES; i++ )); do
-    vegeta_run "printf 'GET %s\n' '$url' | vegeta attack -rate=1/s -duration=1s -insecure | vegeta report -type=json" \
+    vegeta_run "printf 'GET %s\n' '$url' | vegeta attack -rate=1/s -duration=1s -max-workers=${VEGETA_MAX_WORKERS} -max-connections=${VEGETA_MAX_CONNECTIONS} -insecure | vegeta report -type=json" \
       > "$TMP/ready.json" 2>/dev/null || true
     if awk -v s="$(json_field "$TMP/ready.json" success)" 'BEGIN { exit !(s > 0) }'; then
       return 0
@@ -1331,7 +1410,7 @@ smoke_attack() { # <combination> <url>
     smoke_fail "$combo" "target never served a successful response"
     return
   fi
-  vegeta_run "printf 'GET %s\n' '$url' | vegeta attack -rate=${SMOKE_RATE}/s -duration=${SMOKE_SECS}s -insecure | vegeta report -type=json" \
+  vegeta_run "printf 'GET %s\n' '$url' | vegeta attack -rate=${SMOKE_RATE}/s -duration=${SMOKE_SECS}s -max-workers=${VEGETA_MAX_WORKERS} -max-connections=${VEGETA_MAX_CONNECTIONS} -insecure | vegeta report -type=json" \
     > "$TMP/smoke.json" 2>/dev/null || true
   if smoke_ok_200 "$TMP/smoke.json"; then
     log "  smoke $combo OK (100%)"

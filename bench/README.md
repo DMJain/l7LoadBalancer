@@ -65,11 +65,14 @@ filenames carry an `http11` token (spec §30), e.g.
 `results/protocol/roundrobin-10kb-http11-lb-throughput.txt`; the latency `.txt`
 holds one report per rate, with a `-latency-<pct>.hdr` histogram beside it.
 
-Peak throughput is discovered automatically: seed at 1000 req/s, double until
-p99 exceeds 100 ms or the error rate exceeds 1%, then bisect to within 500 req/s.
+Peak throughput is discovered automatically: seed at the size's starting rate,
+double until a step fails (p99 > 100 ms, error rate > 1%, or the generator
+delivered < 95% of the target rate), then bisect to the size's granularity.
 Latency is then profiled at 30/50/70/90% of that peak. The first 5 s of every
 measured step is discarded as warmup. These are constants at the top of
-`run.sh`, not flags.
+`run.sh`, not flags. Starting rates differ by payload size — 200 B and 10 KB
+seed at 1000 req/s, 1 MB at 100 req/s — because the generator's ceiling is
+**bytes-per-second**-bounded, not requests-per-second-bounded (ADR-0022).
 
 Failure mode runs round-robin at 10 KB over TLS+HTTP/2 at 50% of discovered
 peak for 60 s. `backend-kill` stops `backend3` at T+30 s. The two **reload**
@@ -189,6 +192,39 @@ Tear the stack down when finished:
 ```sh
 docker compose -f bench/docker-compose.yml down
 ```
+
+## Generator bounds and honest peak discovery
+
+The load generator is the one component that can fail without the load balancer
+being at fault, so the harness bounds it and refuses to publish a number it could
+not produce (ADR-0021, ADR-0022):
+
+- **Worker bound.** Every `vegeta attack` runs with `-max-workers` and
+  `-max-connections` — both **1024** (`VEGETA_MAX_WORKERS` /
+  `VEGETA_MAX_CONNECTIONS` in `run.sh`). Without it, vegeta's `-max-workers`
+  default is unbounded: at 1000 req/s against the slow 1 MB path it spawns
+  thousands of concurrent in-flight requests, the LB's per-stream buffers grow,
+  and vegeta + LB together OOM the Docker VM (both were OOM-killed at ~3 GB each
+  on the 8 GB VM). The cap keeps both under a few hundred MiB.
+- **Delivery guard.** A peak-search step counts as sustained only if it cleared
+  the p99/error ceilings **and** delivered at least `DELIVERY_MIN_RATIO_PCT`
+  (95%) of its target rate. A worker-capped generator that cannot keep up
+  under-sends and reports artificially low latency; the guard turns that into a
+  failed step, so the search backs off instead of recording a false peak. An
+  under-delivered scenario is reported as `under-delivered; harness-limited; not
+  a peak`, and a real one carries `peak_status=sustained`.
+- **Per-size seed rates.** The search starts from a per-size seed because the
+  generator's ceiling is bytes-per-second-bounded: 200 B and 10 KB seed at 1000
+  req/s (cap 200000), while 1 MB seeds at 100 req/s (cap 500) — the 1 MB rig
+  ceiling is ~200 req/s, so seeding it at 1000 floods the VM before the search
+  can back off.
+- **Heap cap (defensive).** The `vegeta` container also sets `GOMAXPROCS=2`
+  (matching its cores 6–7 cpuset), `GOMEMLIMIT=3GiB`, and `GOGC=50` (ADR-0021),
+  so a mis-seeded future size still cannot balloon the heap.
+
+The point is that "no sustainable rate on this rig" is a valid, publishable
+result: the harness measures the load balancer, and says so when the measurement
+rig — not the load balancer — is the limit.
 
 ## Provenance record
 

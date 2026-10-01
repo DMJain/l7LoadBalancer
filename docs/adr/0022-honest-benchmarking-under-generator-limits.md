@@ -36,7 +36,7 @@ size from a seed calibrated to the rig's bytes-per-second ceiling.**
 Three coupled mechanisms in `bench/run.sh` and `bench/docker-compose.yml`:
 
 - **Worker/connection bound.** Every `vegeta attack` runs with `-max-workers`
-  and `-max-connections` (both 256, `VEGETA_MAX_WORKERS` /
+  and `-max-connections` (both 1024, `VEGETA_MAX_WORKERS` /
   `VEGETA_MAX_CONNECTIONS`), so the LB is never flooded with unbounded in-flight
   requests. The `vegeta` container additionally keeps the defensive Go heap cap
   from ADR-0021 (`GOMAXPROCS=2`, `GOMEMLIMIT=3GiB`, `GOGC=50`).
