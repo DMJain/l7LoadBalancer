@@ -256,28 +256,36 @@ EOF
 
 # --- Failure verdicts (S5.T10.2) -------------------------------------------
 
-FAILURE_HEADER='| Run | Event at (s) | p50 (ms) | p99 (ms) | p99 recovery (s) | Errors | Verdict |'
-FAILURE_RULE='| --- | --- | --- | --- | --- | --- | --- |'
+KILL_HEADER='| Run | Event at (s) | Total errors | First error (s) | Last error (s) | Time to detection (s) | p50 (ms) | p99 (ms) | p99 recovery (s) |'
+KILL_RULE='| --- | --- | --- | --- | --- | --- | --- | --- | --- |'
 
-# failure_row <label> <txt> prints one failure run. The reload runs report their
-# errors as the two judged status classes (non-2xx responses plus transport
-# errors) and carry a verdict; backend-kill reports its total error count and no
-# verdict.
-failure_row() { # <label> <txt>
-  local label="$1" txt="$2" event p50 p99 rec errors verdict
-  event=$(meta_value "$txt" event_at_s)
-  p50=$(meta_value "$txt" p50_ms)
-  p99=$(meta_value "$txt" p99_ms)
-  rec=$(meta_value "$txt" p99_recovery_s)
-  if [[ "$label" == backend-kill ]]; then
-    errors=$(meta_value "$txt" total_errors)
-    verdict='—'
-  else
-    errors="$(meta_value "$txt" non_2xx) non-2xx, $(meta_value "$txt" transport_errors) transport"
-    verdict=$(verdict_line "$txt")
-  fi
-  printf '| %s | %s | %s | %s | %s | %s | %s |\n' \
-    "$label" "$event" "$p50" "$p99" "$rec" "$errors" "$verdict"
+# kill_row <txt> prints the backend-kill run's measurements: when the backend
+# died, the error window, how long detection took, and the latency/recovery
+# figures.
+kill_row() { # <txt>
+  local txt="$1"
+  printf '| backend-kill | %s | %s | %s | %s | %s | %s | %s | %s |\n' \
+    "$(meta_value "$txt" event_at_s)" "$(meta_value "$txt" total_errors)" \
+    "$(meta_value "$txt" error_first_s)" "$(meta_value "$txt" error_last_s)" \
+    "$(meta_value "$txt" time_to_detection_s)" "$(meta_value "$txt" p50_ms)" \
+    "$(meta_value "$txt" p99_ms)" "$(meta_value "$txt" p99_recovery_s)"
+}
+
+RELOAD_HEADER='| Run | Event at (s) | Errors | pre-p99 (ms) | post-p99 (ms) | p99 factor | p50 (ms) | p99 (ms) | p99 recovery (s) | Verdict |'
+RELOAD_RULE='| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |'
+
+# reload_row <label> <txt> prints one reload run: the errors split into the two
+# judged status classes, both p99 windows the verdict compares, and the verdict
+# itself (PASS, or FAIL naming each unmet criterion).
+reload_row() { # <label> <txt>
+  local label="$1" txt="$2"
+  printf '| %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |\n' \
+    "$label" "$(meta_value "$txt" event_at_s)" \
+    "$(meta_value "$txt" non_2xx) non-2xx, $(meta_value "$txt" transport_errors) transport" \
+    "$(meta_value "$txt" pre_p99_ms)" "$(meta_value "$txt" post_p99_ms)" \
+    "$(meta_value "$txt" p99_factor)" "$(meta_value "$txt" p50_ms)" \
+    "$(meta_value "$txt" p99_ms)" "$(meta_value "$txt" p99_recovery_s)" \
+    "$(verdict_line "$txt")"
 }
 
 # snapshot_table <txt> prints the drain reload's three raw arrival-counter
@@ -296,24 +304,33 @@ snapshot_table() { # <txt>
 }
 
 emit_failure() {
-  printf '%s\n%s\n' "$FAILURE_HEADER" "$FAILURE_RULE"
-  local file label base txt
+  local txt
+  txt="$RESULTS/failure/roundrobin-10kb-backend-kill.txt"
+  printf '%s\n%s\n' "$KILL_HEADER" "$KILL_RULE"
+  if [[ -f "$txt" ]]; then
+    kill_row "$txt"
+  else
+    printf 'generate-results: skipping failure/roundrobin-10kb-backend-kill (missing .txt)\n' >&2
+  fi
+
+  printf '\n%s\n%s\n' "$RELOAD_HEADER" "$RELOAD_RULE"
+  local file label base
   # file label -> the run's published name (the reload runs' filenames are the
   # `sighup-*` harness tokens; the document uses the reload names).
-  for file in backend-kill sighup-noop sighup-drain; do
+  for file in sighup-noop sighup-drain; do
     case "$file" in
       sighup-noop) label='no-op reload' ;;
       sighup-drain) label='drain reload' ;;
-      *) label="$file" ;;
     esac
     base="roundrobin-10kb-$file"
     txt="$RESULTS/failure/$base.txt"
     if [[ -f "$txt" ]]; then
-      failure_row "$label" "$txt"
+      reload_row "$label" "$txt"
     else
       printf 'generate-results: skipping failure/%s (missing .txt)\n' "$base" >&2
     fi
   done
+
   txt="$RESULTS/failure/roundrobin-10kb-sighup-drain.txt"
   if [[ -f "$txt" ]]; then
     printf '\n'
@@ -355,32 +372,69 @@ emit_degraded() {
 
 # --- Hot-key distributions (S5.T10.2) ---------------------------------------
 
-HOTKEY_HEADER='| Source | Size | Competitor | Owner | backend1 % | backend2 % | backend3 % | backend4 % | Spill |'
-HOTKEY_RULE='| --- | --- | --- | --- | --- | --- | --- | --- | --- |'
+HOTKEY_HEADER='| Source | Size | Competitor | Load | Owner | backend1 % | backend2 % | backend3 % | backend4 % | Spill |'
+HOTKEY_RULE='| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |'
 
-# hotkey_row <source> <size> <comp> <txt> prints one consistent-hash run's
-# distribution: the plurality owner and spill flag from the `# hotkey` line and
-# the per-backend shares from the `# arrivals` lines.
-hotkey_row() { # <source> <size> <comp> <txt>
-  local source="$1" size="$2" comp="$3" txt="$4"
-  printf '| %s | %s | %s | %s | %s | %s | %s | %s | %s |\n' \
-    "$source" "$size" "$comp" "$(meta_value "$txt" owner)" \
+# hotkey_row <source> <size> <comp> <load> <txt> prints one consistent-hash
+# run's distribution: the plurality owner and spill flag from the `# hotkey`
+# line and the per-backend shares from the `# arrivals` lines.
+hotkey_row() { # <source> <size> <comp> <load> <txt>
+  local source="$1" size="$2" comp="$3" load="$4" txt="$5"
+  printf '| %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |\n' \
+    "$source" "$size" "$comp" "$load" "$(meta_value "$txt" owner)" \
     "$(arrival_share "$txt" backend1)" "$(arrival_share "$txt" backend2)" \
     "$(arrival_share "$txt" backend3)" "$(arrival_share "$txt" backend4)" \
     "$(meta_value "$txt" spill)"
 }
 
+# hotkey_latency_rows <source> <size> <comp> <txt> prints one row per latency
+# rate block of a consistent-hash latency result. Its file holds one
+# `# rate_rps=<n> (<pct>% of peak <peak>)` block per rate, each followed by its
+# own `# arrivals` and `# hotkey` lines, so the shares are block-scoped and the
+# pct comes from the rate line. The sweep shows the hot key's spill change with
+# load.
+hotkey_latency_rows() { # <source> <size> <comp> <txt>
+  awk -v source="$1" -v size="$2" -v comp="$3" '
+    function flush() {
+      if (pct != "") {
+        printf "| %s | %s | %s | latency@%s%% | %s | %s | %s | %s | %s | %s |\n", \
+          source, size, comp, pct, owner, s1, s2, s3, s4, spill
+      }
+      pct = ""; owner = ""; spill = ""; s1 = s2 = s3 = s4 = ""
+    }
+    /^# rate_rps=/ { flush(); pct = $0; sub(/.*\(/, "", pct); sub(/%.*/, "", pct); next }
+    /^# arrivals backend=/ {
+      b = $3; sub(/^backend=/, "", b)
+      sh = $5; sub(/^share_pct=/, "", sh)
+      if (b == "backend1") s1 = sh
+      else if (b == "backend2") s2 = sh
+      else if (b == "backend3") s3 = sh
+      else if (b == "backend4") s4 = sh
+      next
+    }
+    /^# hotkey / { owner = $3; sub(/^owner=/, "", owner); spill = $4; sub(/^spill=/, "", spill); next }
+    END { flush() }
+  ' "$4"
+}
+
 emit_hotkey() {
   printf '%s\n%s\n' "$HOTKEY_HEADER" "$HOTKEY_RULE"
   local size comp base txt
-  # Core: the consistent-hash throughput result per size and competitor is the
-  # single-address hot-key scenario.
+  # Core: the throughput result per size and competitor is the single-address hot
+  # key at peak; the latency result carries one distribution per rate (S5.T8.1).
   for size in 200b 10kb 1mb; do
     for comp in lb nginx; do
       base="consistent-hash-$size-$comp-throughput"
       txt="$RESULTS/core/$base.txt"
       if [[ -f "$txt" ]]; then
-        hotkey_row core "$size" "$comp" "$txt"
+        hotkey_row core "$size" "$comp" throughput "$txt"
+      else
+        printf 'generate-results: skipping core/%s (missing .txt)\n' "$base" >&2
+      fi
+      base="consistent-hash-$size-$comp-latency"
+      txt="$RESULTS/core/$base.txt"
+      if [[ -f "$txt" ]]; then
+        hotkey_latency_rows core "$size" "$comp" "$txt"
       else
         printf 'generate-results: skipping core/%s (missing .txt)\n' "$base" >&2
       fi
@@ -391,7 +445,7 @@ emit_hotkey() {
     base="consistent-hash-10kb-$comp-degraded"
     txt="$RESULTS/degraded/$base.txt"
     if [[ -f "$txt" ]]; then
-      hotkey_row degraded 10kb "$comp" "$txt"
+      hotkey_row degraded 10kb "$comp" degraded "$txt"
     else
       printf 'generate-results: skipping degraded/%s (missing .txt)\n' "$base" >&2
     fi

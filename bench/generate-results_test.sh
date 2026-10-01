@@ -105,14 +105,16 @@ assert_contains "$DOC" "| roundrobin | 1mb | nginx | matched | 1.000 | 2.100 | 3
 # including the FAIL verdict with the criterion it failed on, plus the drain
 # reload's three arrival-counter snapshots.
 # ---------------------------------------------------------------------------
-assert_contains "$DOC" "| Run | Event at (s) | p50 (ms) | p99 (ms) | p99 recovery (s) | Errors | Verdict |" \
-  "failure table header"
-assert_contains "$DOC" "| backend-kill | 30 | 0.412 | 3.100 | 3.200 | 12 | — |" \
-  "failure backend-kill row"
-assert_contains "$DOC" "| no-op reload | 30 | 0.510 | 6.016 | 1.500 | 0 non-2xx, 0 transport | PASS |" \
-  "failure no-op reload row"
-assert_contains "$DOC" "| drain reload | 30 | 0.520 | 7.200 | 2.100 | 0 non-2xx, 0 transport | FAIL failed=drain_isolation |" \
-  "failure drain reload FAIL row names its criterion"
+assert_contains "$DOC" "| Run | Event at (s) | Total errors | First error (s) | Last error (s) | Time to detection (s) | p50 (ms) | p99 (ms) | p99 recovery (s) |" \
+  "backend-kill table header"
+assert_contains "$DOC" "| backend-kill | 30 | 12 | 30.012 | 31.243 | 1.231 | 0.412 | 3.100 | 3.200 |" \
+  "backend-kill measurements row"
+assert_contains "$DOC" "| Run | Event at (s) | Errors | pre-p99 (ms) | post-p99 (ms) | p99 factor | p50 (ms) | p99 (ms) | p99 recovery (s) | Verdict |" \
+  "reload table header"
+assert_contains "$DOC" "| no-op reload | 30 | 0 non-2xx, 0 transport | 3.800 | 6.016 | 2 | 0.510 | 6.016 | 1.500 | PASS |" \
+  "no-op reload measurements row"
+assert_contains "$DOC" "| drain reload | 30 | 0 non-2xx, 0 transport | 3.900 | 7.200 | 2 | 0.520 | 7.200 | 2.100 | FAIL failed=drain_isolation |" \
+  "drain reload FAIL row names its criterion"
 assert_contains "$DOC" "| Snapshot | backend1 | backend2 | backend3 | backend4 |" \
   "failure snapshot table header"
 assert_contains "$DOC" "| before | 100 | 100 | 100 | 6 |" "failure snapshot before row"
@@ -134,11 +136,15 @@ assert_contains "$DOC" "| consistent-hash | lb | 0.700 | 5.200 | 5.00 | 3.00 | 9
 # Hot-key distributions: every consistent-hash result, core and degraded, with
 # its owner, per-backend shares and spill flag.
 # ---------------------------------------------------------------------------
-assert_contains "$DOC" "| Source | Size | Competitor | Owner | backend1 % | backend2 % | backend3 % | backend4 % | Spill |" \
+assert_contains "$DOC" "| Source | Size | Competitor | Load | Owner | backend1 % | backend2 % | backend3 % | backend4 % | Spill |" \
   "hot-key table header"
-assert_contains "$DOC" "| core | 10kb | lb | backend3 | 2.25 | 1.90 | 92.50 | 0.85 | yes |" \
-  "hot-key core row"
-assert_contains "$DOC" "| degraded | 10kb | lb | backend3 | 5.00 | 3.00 | 90.00 | 2.00 | yes |" \
+assert_contains "$DOC" "| core | 10kb | lb | throughput | backend3 | 2.25 | 1.90 | 92.50 | 0.85 | yes |" \
+  "hot-key core throughput row"
+assert_contains "$DOC" "| core | 10kb | lb | latency@30% | backend3 | 0.30 | 0.15 | 99.24 | 0.30 | no |" \
+  "hot-key core latency@30% row (no spill below the bound)"
+assert_contains "$DOC" "| core | 10kb | lb | latency@90% | backend3 | 2.02 | 1.52 | 95.45 | 1.01 | yes |" \
+  "hot-key core latency@90% row (spill above the bound)"
+assert_contains "$DOC" "| degraded | 10kb | lb | degraded | backend3 | 5.00 | 3.00 | 90.00 | 2.00 | yes |" \
   "hot-key degraded row"
 
 # ---------------------------------------------------------------------------
