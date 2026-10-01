@@ -56,7 +56,7 @@ DOC="$WORK/RESULTS.md"
 # ---------------------------------------------------------------------------
 # Creates the document with its marker skeleton when it does not exist.
 # ---------------------------------------------------------------------------
-"$GEN" "$RESULTS" "$DOC" >/dev/null
+"$GEN" "$RESULTS" "$DOC" >/dev/null 2>&1
 
 if [[ -f "$DOC" ]]; then
   pass "creates the document when absent"
@@ -99,11 +99,11 @@ assert_contains "$DOC" "| roundrobin | 1mb | nginx | matched | 1.000 | 2.100 | 3
 sed 's/"50th":277000/"50th":123000/' "$RESULTS/core/roundrobin-200b-lb-throughput.json" \
   > "$WORK/perturbed.json"
 mv "$WORK/perturbed.json" "$RESULTS/core/roundrobin-200b-lb-throughput.json"
-"$GEN" "$RESULTS" "$DOC" >/dev/null
+"$GEN" "$RESULTS" "$DOC" >/dev/null 2>&1
 assert_contains "$DOC" "| roundrobin | 200b | lb | matched | 0.123 | 0.452 | 0.610 | 1.240 | 2.500 | 9.810 | 48000 |" \
   "percentiles come from the JSON report"
 cp "$FIXTURE/core/roundrobin-200b-lb-throughput.json" "$RESULTS/core/roundrobin-200b-lb-throughput.json"
-"$GEN" "$RESULTS" "$DOC" >/dev/null
+"$GEN" "$RESULTS" "$DOC" >/dev/null 2>&1
 
 # ---------------------------------------------------------------------------
 # Methodology, generated from the provenance record.
@@ -124,7 +124,7 @@ assert_contains "$DOC" "2h 13m 40s" "methodology measured wall-clock"
 # Determinism: a second run produces no diff.
 # ---------------------------------------------------------------------------
 cp "$DOC" "$WORK/first.md"
-"$GEN" "$RESULTS" "$DOC" >/dev/null
+"$GEN" "$RESULTS" "$DOC" >/dev/null 2>&1
 if diff -q "$WORK/first.md" "$DOC" >/dev/null; then
   pass "second run produces no diff"
 else
@@ -156,7 +156,7 @@ STALE-PROTOCOL
 
 NARRATIVE-THREE
 EOF
-"$GEN" "$RESULTS" "$DOC" >/dev/null
+"$GEN" "$RESULTS" "$DOC" >/dev/null 2>&1
 assert_contains "$DOC" "# Title before" "narrative title survives"
 assert_contains "$DOC" "NARRATIVE-ONE" "narrative before the first marker survives"
 assert_contains "$DOC" "NARRATIVE-TWO" "narrative between markers survives"

@@ -170,22 +170,24 @@ table_row() { # <algo> <size> <comp> <txt> <json> <hdr>
 emit_table() { # <outdir> <proto-token> <algorithm...>
   local outdir="$1" proto="$2"
   shift 2
-  local algo size comp txt json hdr
+  local algo size comp base txt json hdr
   printf '%s\n%s\n' "$TABLE_HEADER" "$TABLE_RULE"
   for algo in "$@"; do
     for size in 200b 10kb 1mb; do
       for comp in lb nginx; do
-        if [[ -n "$proto" ]]; then
-          txt="$RESULTS/$outdir/$algo-$size-$proto-$comp-throughput.txt"
-          json="$RESULTS/$outdir/$algo-$size-$proto-$comp-throughput.json"
-          hdr="$RESULTS/$outdir/$algo-$size-$proto-$comp-throughput.hdr"
-        else
-          txt="$RESULTS/$outdir/$algo-$size-$comp-throughput.txt"
-          json="$RESULTS/$outdir/$algo-$size-$comp-throughput.json"
-          hdr="$RESULTS/$outdir/$algo-$size-$comp-throughput.hdr"
-        fi
+        base="$algo-$size"
+        [[ -n "$proto" ]] && base="$base-$proto"
+        base="$base-$comp-throughput"
+        txt="$RESULTS/$outdir/$base.txt"
+        json="$RESULTS/$outdir/$base.json"
+        hdr="$RESULTS/$outdir/$base.hdr"
+        # The committed fixture is deliberately partial, so a missing result is
+        # skipped rather than fatal — but never silently: a real run that lost a
+        # result set would otherwise publish a quietly incomplete table.
         if [[ -f "$txt" && -f "$json" && -f "$hdr" ]]; then
           table_row "$algo" "$size" "$comp" "$txt" "$json" "$hdr"
+        else
+          printf 'generate-results: skipping %s/%s (missing .txt/.json/.hdr)\n' "$outdir" "$base" >&2
         fi
       done
     done

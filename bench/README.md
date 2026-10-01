@@ -30,11 +30,14 @@ support ([ADR-0020](../docs/adr/0020-benchmark-tool-vegeta-over-wrk.md)).
 - `vegeta/Dockerfile` — pinned vegeta built for the host architecture (the
   popular prebuilt image is amd64-only and would run under emulation on arm64).
 - `results/{core,protocol,failure,degraded}/` — the harness's output; `.txt` +
-  `.json` + `.hdr` are committed, raw `.gob`/`.csv` scratch lands in the
-  gitignored `results/.tmp/`. The `.json` is the machine-readable vegeta report
-  the results generator reads its percentiles from (S5.T10.1); the `.txt` carries
-  the same report human-readable plus the metadata header, and the `.hdr` the
-  p99.9 the JSON report lacks.
+  `.hdr` are committed for every result, plus a `.json` vegeta report beside each
+  `save_result` set (the core/protocol throughput results and every degraded
+  result). Raw `.gob`/`.csv` scratch lands in the gitignored `results/.tmp/`. The
+  `.json` is the machine-readable source the results generator reads its
+  percentiles from (S5.T10.1); the `.txt` carries the same report human-readable
+  plus the metadata header, and the `.hdr` the p99.9 the JSON report lacks. The
+  latency sweep and the failure summary files are read for their `.txt` metadata
+  only, so they carry no `.json`.
 - `results/provenance.json` — the machine-readable record of the invocation that
   produced the results beside it (see *Provenance record*).
 
