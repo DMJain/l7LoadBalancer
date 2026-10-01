@@ -1,0 +1,12 @@
+# algorithm=roundrobin size=10kb competitor=lb load=sighup-noop comparison=matched rate_rps=22000
+Requests      [total, rate, throughput]         1320000, 22000.20, 21999.50
+Duration      [total, attack, wait]             59.999s, 59.99s, 260.000µs
+Latencies     [min, mean, 50, 90, 95, 99, max]  125.0µs, 0.65ms, 0.510ms, 1.20ms, 1.90ms, 6.02ms, 35.00ms
+Bytes In      [total, mean]                     13516800000, 10240.00
+Bytes Out     [total, mean]                     0, 0.00
+Success       [ratio]                           100.00%
+Status Codes  [code:count]                      200:1320000  
+Error Set:
+
+measurements: mode=sighup-noop event=docker-compose-kill-s-HUP-lb event_at_s=30 non_2xx=0 transport_errors=0 drops=0 pre_p99_ms=3.800 post_p99_ms=6.016 p99_factor=2 p50_ms=0.510 p99_ms=6.016 p99_peak_ms=12.500 p99_recovery_s=1.500
+verdict=PASS

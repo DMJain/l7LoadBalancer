@@ -219,6 +219,19 @@ and populated when the run finishes. `git_dirty` ignores `bench/results/` — th
 harness's own output — so a repeated invocation is not reported dirty by a
 previous run's record.
 
+## Results generator
+
+`bench/generate-results.sh` turns the raw `results/` output into the published
+tables, so no published number is typed by hand. It takes an optional results
+directory and document path (defaults `bench/results` and `RESULTS.md`), writes
+only between `<!-- BEGIN GENERATED: <section> -->` / `<!-- END GENERATED -->`
+markers, preserves everything outside them byte-for-byte, and refuses a
+provenance record with `git_dirty: true`. A second run against the same results
+produces no diff. Sections: `methodology`, `core`, `protocol` (S5.T10.1) and
+`failure`, `degraded`, `hot-key` (S5.T10.2). `bench/generate-results_test.sh`
+runs it against the committed fixture under `bench/testdata/results-generator/`
+and is the regression gate (the generator is shell-only, TDD-exempt).
+
 ## Manual smoke checks
 
 Plain HTTP/1.1 (the default topology):

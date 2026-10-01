@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 #
-# generate-results.sh — the results generator (S5.T10.1, issue 16).
+# generate-results.sh — the results generator (S5.T10.1–T10.2, issues 16–17).
 #
-# Turns the raw harness output into the published core and protocol tables and
-# the methodology section, so no published number is typed by hand (spec §64,
-# §271). It writes only inside marker regions of one results document:
+# Turns the raw harness output into the published results tables, so no
+# published number is typed by hand (spec §64, §271). It writes only inside
+# marker regions of one results document:
 #
 #   <!-- BEGIN GENERATED: <section> -->
 #   ...
@@ -14,12 +14,16 @@
 # byte-for-byte. If the document does not exist it is created with its marker
 # skeleton. A second run against the same results produces no diff.
 #
+# Sections generated: methodology, core, protocol (S5.T10.1); failure,
+# degraded, hot-key (S5.T10.2).
+#
 # Percentiles p50/p90/p95/p99/max come from each result's vegeta JSON report
 # (committed as the `.json` sibling of the `.txt` summary); p99.9 comes from the
 # `.hdr` HDR histogram, because vegeta's JSON report does not print it. The
 # comparison label and peak throughput come from the result's metadata header
-# (the first line of the `.txt` summary), and the methodology facts come from
-# `provenance.json`.
+# (the first line of the `.txt` summary), the failure verdicts and the
+# distribution/hot-key blocks from the `.txt` headers, and the methodology facts
+# from `provenance.json`.
 #
 # p99.9 is the first HDR row whose cumulative percentile is >= 0.999 — a
 # conservative upper bound on the 99.9th percentile, read straight from the
@@ -54,8 +58,8 @@ Usage: bench/generate-results.sh [<results-dir>] [<document>]
 
 Only the regions between `<!-- BEGIN GENERATED: <section> -->` and
 `<!-- END GENERATED -->` markers are written; everything else is preserved.
-Sections generated here: methodology, core, protocol. A provenance record with
-`git_dirty` true is refused.
+Sections generated here: methodology, core, protocol, failure, degraded,
+hot-key. A provenance record with `git_dirty` true is refused.
 EOF
 }
 
@@ -140,6 +144,27 @@ latency_cells() { # <json>
 # the first row whose cumulative percentile is >= 0.999.
 p999() { # <hdr>
   awk '$2 + 0 >= 0.999 { printf "%.3f", $1; exit }' "$1"
+}
+
+# verdict_line <txt> prints the reload run's verdict exactly as written — `PASS`
+# or `FAIL failed=<criteria>` — from its own `verdict=` line (the failure slice
+# writes it as the last line of the measurement block). Empty for backend-kill,
+# which carries no verdict.
+verdict_line() { # <txt>
+  sed -n 's/^verdict=//p' "$1" | head -n1
+}
+
+# arrival_share <txt> <backend> prints one backend's `share_pct` from the result
+# header's `# arrivals backend=<name> count=<n> share_pct=<p>` lines (S5.T8.1).
+arrival_share() { # <txt> <backend>
+  sed -n "s/^# arrivals backend=$2 count=[0-9]* share_pct=\([0-9.]*\)\$/\1/p" "$1" | head -n1
+}
+
+# snapshot_count <txt> <label> <backend> prints the raw /stats count for one
+# backend at one drain-reload event point, from the result header's
+# `# snapshot=<label> backend=<name> count=<n>` lines (S5.T9.2).
+snapshot_count() { # <txt> <label> <backend>
+  sed -n "s/^# snapshot=$2 backend=$3 count=\([0-9]*\)\$/\1/p" "$1" | head -n1
 }
 
 # ---------------------------------------------------------------------------
@@ -229,6 +254,150 @@ emit_methodology() {
 EOF
 }
 
+# --- Failure verdicts (S5.T10.2) -------------------------------------------
+
+FAILURE_HEADER='| Run | Event at (s) | p50 (ms) | p99 (ms) | p99 recovery (s) | Errors | Verdict |'
+FAILURE_RULE='| --- | --- | --- | --- | --- | --- | --- |'
+
+# failure_row <label> <txt> prints one failure run. The reload runs report their
+# errors as the two judged status classes (non-2xx responses plus transport
+# errors) and carry a verdict; backend-kill reports its total error count and no
+# verdict.
+failure_row() { # <label> <txt>
+  local label="$1" txt="$2" event p50 p99 rec errors verdict
+  event=$(meta_value "$txt" event_at_s)
+  p50=$(meta_value "$txt" p50_ms)
+  p99=$(meta_value "$txt" p99_ms)
+  rec=$(meta_value "$txt" p99_recovery_s)
+  if [[ "$label" == backend-kill ]]; then
+    errors=$(meta_value "$txt" total_errors)
+    verdict='—'
+  else
+    errors="$(meta_value "$txt" non_2xx) non-2xx, $(meta_value "$txt" transport_errors) transport"
+    verdict=$(verdict_line "$txt")
+  fi
+  printf '| %s | %s | %s | %s | %s | %s | %s |\n' \
+    "$label" "$event" "$p50" "$p99" "$rec" "$errors" "$verdict"
+}
+
+# snapshot_table <txt> prints the drain reload's three raw arrival-counter
+# snapshots as a table, one row per event point and one column per backend.
+snapshot_table() { # <txt>
+  printf '| Snapshot | backend1 | backend2 | backend3 | backend4 |\n'
+  printf '| --- | --- | --- | --- | --- |\n'
+  local label row b
+  for label in before applied end; do
+    row="| $label"
+    for b in backend1 backend2 backend3 backend4; do
+      row="$row | $(snapshot_count "$1" "$label" "$b")"
+    done
+    printf '%s |\n' "$row"
+  done
+}
+
+emit_failure() {
+  printf '%s\n%s\n' "$FAILURE_HEADER" "$FAILURE_RULE"
+  local file label base txt
+  # file label -> the run's published name (the reload runs' filenames are the
+  # `sighup-*` harness tokens; the document uses the reload names).
+  for file in backend-kill sighup-noop sighup-drain; do
+    case "$file" in
+      sighup-noop) label='no-op reload' ;;
+      sighup-drain) label='drain reload' ;;
+      *) label="$file" ;;
+    esac
+    base="roundrobin-10kb-$file"
+    txt="$RESULTS/failure/$base.txt"
+    if [[ -f "$txt" ]]; then
+      failure_row "$label" "$txt"
+    else
+      printf 'generate-results: skipping failure/%s (missing .txt)\n' "$base" >&2
+    fi
+  done
+  txt="$RESULTS/failure/roundrobin-10kb-sighup-drain.txt"
+  if [[ -f "$txt" ]]; then
+    printf '\n'
+    snapshot_table "$txt"
+  fi
+}
+
+# --- Degraded distributions (S5.T10.2) --------------------------------------
+
+DEGRADED_HEADER='| Algorithm | Competitor | p50 (ms) | p99 (ms) | backend1 % | backend2 % | backend3 % | backend4 % |'
+DEGRADED_RULE='| --- | --- | --- | --- | --- | --- | --- | --- |'
+
+# degraded_row <algo> <comp> <txt> <json> prints one degraded run: p50/p99 from
+# the JSON report, the per-backend shares from the result header.
+degraded_row() { # <algo> <comp> <txt> <json>
+  local algo="$1" comp="$2" txt="$3" json="$4"
+  printf '| %s | %s | %s | %s | %s | %s | %s | %s |\n' \
+    "$algo" "$comp" "$(json_latency_ms "$json" 50th)" "$(json_latency_ms "$json" 99th)" \
+    "$(arrival_share "$txt" backend1)" "$(arrival_share "$txt" backend2)" \
+    "$(arrival_share "$txt" backend3)" "$(arrival_share "$txt" backend4)"
+}
+
+emit_degraded() {
+  printf '%s\n%s\n' "$DEGRADED_HEADER" "$DEGRADED_RULE"
+  local algo comp base txt json
+  for algo in roundrobin leastconn consistent-hash p2c-ewma; do
+    for comp in lb nginx; do
+      base="$algo-10kb-$comp-degraded"
+      txt="$RESULTS/degraded/$base.txt"
+      json="$RESULTS/degraded/$base.json"
+      if [[ -f "$txt" && -f "$json" ]]; then
+        degraded_row "$algo" "$comp" "$txt" "$json"
+      else
+        printf 'generate-results: skipping degraded/%s (missing .txt/.json)\n' "$base" >&2
+      fi
+    done
+  done
+}
+
+# --- Hot-key distributions (S5.T10.2) ---------------------------------------
+
+HOTKEY_HEADER='| Source | Size | Competitor | Owner | backend1 % | backend2 % | backend3 % | backend4 % | Spill |'
+HOTKEY_RULE='| --- | --- | --- | --- | --- | --- | --- | --- | --- |'
+
+# hotkey_row <source> <size> <comp> <txt> prints one consistent-hash run's
+# distribution: the plurality owner and spill flag from the `# hotkey` line and
+# the per-backend shares from the `# arrivals` lines.
+hotkey_row() { # <source> <size> <comp> <txt>
+  local source="$1" size="$2" comp="$3" txt="$4"
+  printf '| %s | %s | %s | %s | %s | %s | %s | %s | %s |\n' \
+    "$source" "$size" "$comp" "$(meta_value "$txt" owner)" \
+    "$(arrival_share "$txt" backend1)" "$(arrival_share "$txt" backend2)" \
+    "$(arrival_share "$txt" backend3)" "$(arrival_share "$txt" backend4)" \
+    "$(meta_value "$txt" spill)"
+}
+
+emit_hotkey() {
+  printf '%s\n%s\n' "$HOTKEY_HEADER" "$HOTKEY_RULE"
+  local size comp base txt
+  # Core: the consistent-hash throughput result per size and competitor is the
+  # single-address hot-key scenario.
+  for size in 200b 10kb 1mb; do
+    for comp in lb nginx; do
+      base="consistent-hash-$size-$comp-throughput"
+      txt="$RESULTS/core/$base.txt"
+      if [[ -f "$txt" ]]; then
+        hotkey_row core "$size" "$comp" "$txt"
+      else
+        printf 'generate-results: skipping core/%s (missing .txt)\n' "$base" >&2
+      fi
+    done
+  done
+  # Degraded: the consistent-hash runs carry the same distribution.
+  for comp in lb nginx; do
+    base="consistent-hash-10kb-$comp-degraded"
+    txt="$RESULTS/degraded/$base.txt"
+    if [[ -f "$txt" ]]; then
+      hotkey_row degraded 10kb "$comp" "$txt"
+    else
+      printf 'generate-results: skipping degraded/%s (missing .txt)\n' "$base" >&2
+    fi
+  done
+}
+
 # ---------------------------------------------------------------------------
 # Write.
 # ---------------------------------------------------------------------------
@@ -236,6 +405,9 @@ EOF
 emit_methodology > "$GEN_DIR/methodology.md"
 emit_table core "" roundrobin leastconn consistent-hash p2c-ewma > "$GEN_DIR/core.md"
 emit_table protocol http11 roundrobin > "$GEN_DIR/protocol.md"
+emit_failure > "$GEN_DIR/failure.md"
+emit_degraded > "$GEN_DIR/degraded.md"
+emit_hotkey > "$GEN_DIR/hot-key.md"
 
 if [[ ! -f "$DOC" ]]; then
   mkdir -p "$(dirname "$DOC")"
@@ -250,14 +422,23 @@ if [[ ! -f "$DOC" ]]; then
 
 <!-- BEGIN GENERATED: protocol -->
 <!-- END GENERATED -->
+
+<!-- BEGIN GENERATED: failure -->
+<!-- END GENERATED -->
+
+<!-- BEGIN GENERATED: degraded -->
+<!-- END GENERATED -->
+
+<!-- BEGIN GENERATED: hot-key -->
+<!-- END GENERATED -->
 EOF
 fi
 
 # Replace each known generated region in place, preserving everything else
 # byte-for-byte. An unknown `BEGIN GENERATED` section is left untouched so a
-# later ticket's regions (failure, degraded, hot-key) survive this one.
+# later section added by another ticket survives until it is generated here.
 tmp="$DOC.tmp.$$"
-awk -v dir="$GEN_DIR" -v secs="methodology core protocol" '
+awk -v dir="$GEN_DIR" -v secs="methodology core protocol failure degraded hot-key" '
   BEGIN { n = split(secs, s, " "); for (i = 1; i <= n; i++) known[s[i]] = 1 }
   /^<!-- BEGIN GENERATED: / {
     sec = $0
@@ -280,4 +461,4 @@ awk -v dir="$GEN_DIR" -v secs="methodology core protocol" '
 ' "$DOC" > "$tmp"
 mv "$tmp" "$DOC"
 
-printf 'generate-results: wrote methodology, core and protocol into %s\n' "$DOC"
+printf 'generate-results: wrote methodology, core, protocol, failure, degraded and hot-key into %s\n' "$DOC"

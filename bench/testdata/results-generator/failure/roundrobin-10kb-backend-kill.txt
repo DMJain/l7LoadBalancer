@@ -1,0 +1,11 @@
+# algorithm=roundrobin size=10kb competitor=lb load=backend-kill comparison=matched rate_rps=22000
+Requests      [total, rate, throughput]         1320000, 22000.10, 21999.00
+Duration      [total, attack, wait]             59.999s, 59.99s, 250.000µs
+Latencies     [min, mean, 50, 90, 95, 99, max]  130.0µs, 0.60ms, 0.412ms, 1.10ms, 1.70ms, 3.10ms, 40.00ms
+Bytes In      [total, mean]                     13516800000, 10240.00
+Bytes Out     [total, mean]                     0, 0.00
+Success       [ratio]                           99.99%
+Status Codes  [code:count]                      200:1319988  502:12  
+Error Set:
+
+measurements: mode=backend-kill event=docker-compose-stop-backend3 event_at_s=30 total_errors=12 detection_window_errors=12 error_first_s=30.012 error_last_s=31.243 time_to_detection_s=1.231 p50_ms=0.412 p99_ms=3.100 p99_recovery_s=3.200

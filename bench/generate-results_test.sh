@@ -3,13 +3,20 @@
 # generate-results_test.sh — fixture test for the results generator (S5.T10.1).
 #
 # Runs bench/generate-results.sh against a small committed fixture result set
-# (core + protocol .txt/.json/.hdr files and a clean provenance record) and
-# asserts:
+# (core + protocol .txt/.json/.hdr files, failure + degraded + hot-key .txt/.json
+# files and a clean provenance record) and asserts:
 #   - the document is created with its marker skeleton when absent;
 #   - the core and protocol tables carry the expected p50/p90/p95/p99/p99.9/max
 #     and peak-throughput cells, with p99.9 taken from the .hdr histograms and
 #     the other percentiles from the .json reports (proved by perturbing a JSON
 #     percentile and watching the cell follow);
+#   - the failure section carries the three runs' measurements and verdicts,
+#     including a FAIL verdict with its failed criterion, plus the drain reload's
+#     three arrival-counter snapshots;
+#   - the degraded section carries a row per algorithm × competitor with p50,
+#     p99 and the per-backend shares;
+#   - the hot-key section carries every consistent-hash result, core and
+#     degraded, with its owner, shares and spill flag;
 #   - the methodology section is generated from the provenance record;
 #   - a second run produces no diff;
 #   - narrative outside the markers survives, stale generated content is
@@ -17,7 +24,7 @@
 #   - a provenance record with git_dirty true is refused.
 #
 # The generator is shell-only, so it is TDD-exempt (AGENTS.md); this committed
-# script is the test the ticket requires. Run it directly:
+# script is the test the tickets require. Run it directly:
 #   ./bench/generate-results_test.sh
 
 set -euo pipefail
@@ -66,6 +73,9 @@ fi
 assert_contains "$DOC" "<!-- BEGIN GENERATED: methodology -->" "methodology marker created"
 assert_contains "$DOC" "<!-- BEGIN GENERATED: core -->" "core marker created"
 assert_contains "$DOC" "<!-- BEGIN GENERATED: protocol -->" "protocol marker created"
+assert_contains "$DOC" "<!-- BEGIN GENERATED: failure -->" "failure marker created"
+assert_contains "$DOC" "<!-- BEGIN GENERATED: degraded -->" "degraded marker created"
+assert_contains "$DOC" "<!-- BEGIN GENERATED: hot-key -->" "hot-key marker created"
 assert_contains "$DOC" "<!-- END GENERATED -->" "end marker created"
 
 # ---------------------------------------------------------------------------
@@ -89,6 +99,47 @@ assert_contains "$DOC" "| roundrobin | 10kb | lb | matched | 0.700 | 1.600 | 2.4
   "protocol roundrobin/10kb/lb row"
 assert_contains "$DOC" "| roundrobin | 1mb | nginx | matched | 1.000 | 2.100 | 3.000 | 7.500 | 10.000 | 25.000 | 28000 |" \
   "protocol roundrobin/1mb/nginx row"
+
+# ---------------------------------------------------------------------------
+# Failure verdicts: the three runs' measurements and each reload's verdict,
+# including the FAIL verdict with the criterion it failed on, plus the drain
+# reload's three arrival-counter snapshots.
+# ---------------------------------------------------------------------------
+assert_contains "$DOC" "| Run | Event at (s) | p50 (ms) | p99 (ms) | p99 recovery (s) | Errors | Verdict |" \
+  "failure table header"
+assert_contains "$DOC" "| backend-kill | 30 | 0.412 | 3.100 | 3.200 | 12 | — |" \
+  "failure backend-kill row"
+assert_contains "$DOC" "| no-op reload | 30 | 0.510 | 6.016 | 1.500 | 0 non-2xx, 0 transport | PASS |" \
+  "failure no-op reload row"
+assert_contains "$DOC" "| drain reload | 30 | 0.520 | 7.200 | 2.100 | 0 non-2xx, 0 transport | FAIL failed=drain_isolation |" \
+  "failure drain reload FAIL row names its criterion"
+assert_contains "$DOC" "| Snapshot | backend1 | backend2 | backend3 | backend4 |" \
+  "failure snapshot table header"
+assert_contains "$DOC" "| before | 100 | 100 | 100 | 6 |" "failure snapshot before row"
+assert_contains "$DOC" "| applied | 120 | 110 | 90 | 6 |" "failure snapshot applied row"
+assert_contains "$DOC" "| end | 400 | 390 | 380 | 7 |" "failure snapshot end row"
+
+# ---------------------------------------------------------------------------
+# Degraded distributions: one row per algorithm × competitor with p50, p99 and
+# the per-backend share.
+# ---------------------------------------------------------------------------
+assert_contains "$DOC" "| Algorithm | Competitor | p50 (ms) | p99 (ms) | backend1 % | backend2 % | backend3 % | backend4 % |" \
+  "degraded table header"
+assert_contains "$DOC" "| roundrobin | lb | 0.600 | 4.500 | 25.00 | 25.00 | 24.99 | 25.01 |" \
+  "degraded roundrobin/lb row"
+assert_contains "$DOC" "| consistent-hash | lb | 0.700 | 5.200 | 5.00 | 3.00 | 90.00 | 2.00 |" \
+  "degraded consistent-hash/lb row"
+
+# ---------------------------------------------------------------------------
+# Hot-key distributions: every consistent-hash result, core and degraded, with
+# its owner, per-backend shares and spill flag.
+# ---------------------------------------------------------------------------
+assert_contains "$DOC" "| Source | Size | Competitor | Owner | backend1 % | backend2 % | backend3 % | backend4 % | Spill |" \
+  "hot-key table header"
+assert_contains "$DOC" "| core | 10kb | lb | backend3 | 2.25 | 1.90 | 92.50 | 0.85 | yes |" \
+  "hot-key core row"
+assert_contains "$DOC" "| degraded | 10kb | lb | backend3 | 5.00 | 3.00 | 90.00 | 2.00 | yes |" \
+  "hot-key degraded row"
 
 # ---------------------------------------------------------------------------
 # The non-p99.9 percentile cells come from the JSON report, not the .txt text
@@ -154,6 +205,18 @@ STALE-CORE
 STALE-PROTOCOL
 <!-- END GENERATED -->
 
+<!-- BEGIN GENERATED: failure -->
+STALE-FAILURE
+<!-- END GENERATED -->
+
+<!-- BEGIN GENERATED: degraded -->
+STALE-DEGRADED
+<!-- END GENERATED -->
+
+<!-- BEGIN GENERATED: hot-key -->
+STALE-HOTKEY
+<!-- END GENERATED -->
+
 NARRATIVE-THREE
 EOF
 "$GEN" "$RESULTS" "$DOC" >/dev/null 2>&1
@@ -164,6 +227,9 @@ assert_contains "$DOC" "NARRATIVE-THREE" "narrative after the last marker surviv
 assert_not_contains "$DOC" "STALE-METHODOLOGY" "stale methodology content replaced"
 assert_not_contains "$DOC" "STALE-CORE" "stale core content replaced"
 assert_not_contains "$DOC" "STALE-PROTOCOL" "stale protocol content replaced"
+assert_not_contains "$DOC" "STALE-FAILURE" "stale failure content replaced"
+assert_not_contains "$DOC" "STALE-DEGRADED" "stale degraded content replaced"
+assert_not_contains "$DOC" "STALE-HOTKEY" "stale hot-key content replaced"
 
 # ---------------------------------------------------------------------------
 # A provenance record with git_dirty true is refused.
