@@ -17,6 +17,13 @@
 # Sections generated: methodology, core, protocol (S5.T10.1); failure,
 # degraded, hot-key (S5.T10.2).
 #
+# Narrative number check (S5.T10.3): after generating, every latency or
+# throughput figure quoted outside the marker regions (`ms`, `µs`, `req/s`,
+# optionally prefixed `≈` or `~`) must match a generated cell. Percentages,
+# core counts, sizes, ADR numbers and percentile names carry no such unit and
+# are never matched. A mismatch exits nonzero naming every unmatched token, so
+# the hand-written narrative cannot drift from the data (spec §67, §285).
+#
 # Percentiles p50/p90/p95/p99/max come from each result's vegeta JSON report
 # (committed as the `.json` sibling of the `.txt` summary); p99.9 comes from the
 # `.hdr` HDR histogram, because vegeta's JSON report does not print it. The
@@ -60,6 +67,9 @@ Only the regions between `<!-- BEGIN GENERATED: <section> -->` and
 `<!-- END GENERATED -->` markers are written; everything else is preserved.
 Sections generated here: methodology, core, protocol, failure, degraded,
 hot-key. A provenance record with `git_dirty` true is refused.
+
+A narrative `ms`, `µs` or `req/s` figure outside the markers (an optional
+`≈`/`~` prefix is allowed) must match a generated cell or the run fails.
 EOF
 }
 
@@ -453,6 +463,107 @@ emit_hotkey() {
 }
 
 # ---------------------------------------------------------------------------
+# Narrative number check (S5.T10.3).
+# ---------------------------------------------------------------------------
+
+# allowed_cells <doc> prints `unit<TAB>value` for every numeric cell inside the
+# generated regions whose table column is headed with a latency/throughput unit.
+# Only cells under a `(ms)`, `(µs)` or `(req/s)` header are emitted, so a
+# percentage or a raw count can never match a narrative figure.
+allowed_cells() { # <doc>
+  awk '
+    function trim(s) { sub(/^[ \t]+/, "", s); sub(/[ \t]+$/, "", s); return s }
+    function unit_of(h) {
+      if (index(h, "(ms)") > 0) return "ms"
+      if (index(h, "(µs)") > 0) return "µs"
+      if (index(h, "(req/s)") > 0) return "req/s"
+      return ""
+    }
+    /^<!-- BEGIN GENERATED: / { ing = 1; next }
+    /^<!-- END GENERATED -->$/ { ing = 0; next }
+    !ing { next }
+    /^\|/ {
+      if ($0 ~ /^\|[ \t]*-/) {
+        for (k in unit) delete unit[k]
+        n = split(hdr, cells, "|")
+        for (i = 2; i < n; i++) unit[i] = unit_of(trim(cells[i]))
+        is_table = 1
+        next
+      }
+      if (is_table) {
+        n = split($0, cells, "|")
+        for (i = 2; i < n; i++) {
+          v = trim(cells[i])
+          if (unit[i] != "" && v ~ /^[0-9]/) print unit[i] "\t" v
+        }
+        next
+      }
+      hdr = $0
+      next
+    }
+    { is_table = 0; hdr = "" }
+  ' "$1"
+}
+
+# narrative_tokens <doc> prints `unit<TAB>number<TAB>token` for every benchmark
+# figure outside the generated regions. A figure must start on a non-word
+# boundary, so a percentile name (`p99.9`) or an identifier (`ADR-0020`) is
+# never matched. The approximate prefix and any commas or spaces are stripped
+# before the numeric comparison.
+narrative_tokens() { # <doc>
+  awk '
+    /^<!-- BEGIN GENERATED: / { skip = 1; next }
+    /^<!-- END GENERATED -->$/ { skip = 0; next }
+    skip { next }
+    {
+      rest = " " $0
+      while (match(rest, /[^A-Za-z0-9._][≈~]?[0-9][0-9,]*(\.[0-9]+)?[ \t]*(ms|µs|req\/s)/)) {
+        tok = substr(rest, RSTART + 1, RLENGTH - 1)
+        unit = ""
+        if (tok ~ /req\/s$/) unit = "req/s"
+        else if (tok ~ /ms$/) unit = "ms"
+        else if (tok ~ /µs$/) unit = "µs"
+        num = tok
+        sub(/(ms|µs|req\/s)$/, "", num)
+        gsub(/,/, "", num)
+        gsub(/[ \t≈~]/, "", num)
+        # The reported name must not carry a tab, or it would split the TSV
+        # record the comparison pass reads.
+        gsub(/\t/, " ", tok)
+        printf "%s\t%s\t%s\n", unit, num, tok
+        rest = substr(rest, RSTART + RLENGTH)
+      }
+    }
+  ' "$1"
+}
+
+# check_narrative <doc> fails when a narrative figure matches no generated cell
+# with the same unit, naming every unmatched token.
+check_narrative() { # <doc>
+  local doc="$1" unmatched
+  allowed_cells "$doc" > "$GEN_DIR/allowed.tsv"
+  narrative_tokens "$doc" > "$GEN_DIR/tokens.tsv"
+  unmatched=$(awk -F'\t' '
+    NR == FNR { gsub(/,/, "", $2); vals[$1] = vals[$1] " " $2; next }
+    {
+      found = 0
+      n = split(vals[$1], arr, " ")
+      for (i = 1; i <= n; i++) {
+        if (arr[i] != "" && arr[i] + 0 == $2 + 0) { found = 1; break }
+      }
+      if (!found) print $3
+    }
+  ' "$GEN_DIR/allowed.tsv" "$GEN_DIR/tokens.tsv")
+  if [[ -n "$unmatched" ]]; then
+    printf 'generate-results: narrative figures with no matching generated cell:\n' >&2
+    while IFS= read -r tok; do
+      printf '  %s\n' "$tok" >&2
+    done <<<"$unmatched"
+    return 1
+  fi
+}
+
+# ---------------------------------------------------------------------------
 # Write.
 # ---------------------------------------------------------------------------
 
@@ -513,6 +624,15 @@ awk -v dir="$GEN_DIR" -v secs="methodology core protocol failure degraded hot-ke
   skip { next }
   { print }
 ' "$DOC" > "$tmp"
+
+# Validate the candidate document before publishing it, so a narrative figure
+# with no matching cell leaves the existing document untouched.
+if ! check_narrative "$tmp"; then
+  rm -f "$tmp"
+  printf 'generate-results: fix the narrative figures above before publishing\n' >&2
+  exit 1
+fi
+
 mv "$tmp" "$DOC"
 
 printf 'generate-results: wrote methodology, core, protocol, failure, degraded and hot-key into %s\n' "$DOC"

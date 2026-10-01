@@ -21,6 +21,10 @@
 #   - a second run produces no diff;
 #   - narrative outside the markers survives, stale generated content is
 #     replaced;
+#   - a narrative `ms`/`µs`/`req/s` figure matches a generated cell, including
+#     with a `≈`/`~` prefix, while a figure with no matching cell fails and is
+#     named and exempt tokens (percentages, counts, sizes, ADR numbers,
+#     percentile names) are ignored;
 #   - a provenance record with git_dirty true is refused.
 #
 # The generator is shell-only, so it is TDD-exempt (AGENTS.md); this committed
@@ -236,6 +240,58 @@ assert_not_contains "$DOC" "STALE-PROTOCOL" "stale protocol content replaced"
 assert_not_contains "$DOC" "STALE-FAILURE" "stale failure content replaced"
 assert_not_contains "$DOC" "STALE-DEGRADED" "stale degraded content replaced"
 assert_not_contains "$DOC" "STALE-HOTKEY" "stale hot-key content replaced"
+
+# ---------------------------------------------------------------------------
+# Narrative number check (S5.T10.3): a latency/throughput figure quoted outside
+# the markers must match a generated cell. Matching figures, figures marked
+# approximate with ≈ or ~, and exempt tokens (percentages, core counts, sizes,
+# ADR numbers, percentile names) pass; a figure with no matching cell fails and
+# is named.
+# ---------------------------------------------------------------------------
+cat > "$DOC" <<'EOF'
+# Narrative check
+
+Matching: 0.277 ms and 48,000 req/s.
+
+Approximate: ≈2.5 ms and ~44000 req/s.
+
+Exempt: 25%, ADR-0020, p99.9 percentile, 1MB payload, 48 runs.
+
+<!-- BEGIN GENERATED: methodology -->
+<!-- END GENERATED -->
+
+<!-- BEGIN GENERATED: core -->
+<!-- END GENERATED -->
+
+<!-- BEGIN GENERATED: protocol -->
+<!-- END GENERATED -->
+
+<!-- BEGIN GENERATED: failure -->
+<!-- END GENERATED -->
+
+<!-- BEGIN GENERATED: degraded -->
+<!-- END GENERATED -->
+
+<!-- BEGIN GENERATED: hot-key -->
+<!-- END GENERATED -->
+EOF
+if "$GEN" "$RESULTS" "$DOC" >"$WORK/narrative.ok" 2>&1; then
+  pass "matching, ≈/~ and exempt narrative figures pass"
+else
+  fail "matching, ≈/~ and exempt narrative figures pass"
+  tail -n 3 "$WORK/narrative.ok" >&2 || true
+fi
+
+{ sed 's/Matching: 0.277 ms/Matching: 12345 req\/s/' "$DOC"; printf '\nApproximate but unmatched: ≈12345 ms.\n'; } \
+  > "$WORK/narrative-bad.md"
+cp "$WORK/narrative-bad.md" "$DOC"
+if "$GEN" "$RESULTS" "$DOC" >"$WORK/narrative.bad" 2>&1; then
+  fail "non-matching narrative figure fails"
+else
+  pass "non-matching narrative figure fails"
+fi
+assert_contains "$WORK/narrative.bad" "12345 req/s" "names the non-matching narrative figure"
+assert_contains "$WORK/narrative.bad" "≈12345 ms" "a ≈-prefixed figure is checked too"
 
 # ---------------------------------------------------------------------------
 # A provenance record with git_dirty true is refused.

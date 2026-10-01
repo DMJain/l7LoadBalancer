@@ -228,9 +228,14 @@ only between `<!-- BEGIN GENERATED: <section> -->` / `<!-- END GENERATED -->`
 markers, preserves everything outside them byte-for-byte, and refuses a
 provenance record with `git_dirty: true`. A second run against the same results
 produces no diff. Sections: `methodology`, `core`, `protocol` (S5.T10.1) and
-`failure`, `degraded`, `hot-key` (S5.T10.2). `bench/generate-results_test.sh`
-runs it against the committed fixture under `bench/testdata/results-generator/`
-and is the regression gate (the generator is shell-only, TDD-exempt).
+`failure`, `degraded`, `hot-key` (S5.T10.2). It also checks that every
+latency/throughput figure the hand-written narrative quotes outside the markers
+(`ms`, `µs` or `req/s`, optionally prefixed `≈` or `~`) matches a generated
+cell, failing and naming any figure that does not (S5.T10.3); percentages,
+counts, sizes, ADR numbers and percentile names are never matched.
+`bench/generate-results_test.sh` runs it against the committed fixture under
+`bench/testdata/results-generator/` and is the regression gate (the generator is
+shell-only, TDD-exempt).
 
 ## Manual smoke checks
 
