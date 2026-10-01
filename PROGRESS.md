@@ -332,9 +332,10 @@ Scoped in `.scratch/s5-t5-t12-bench-execution/` as one bundle spec plus 20 ticke
   - Test approach: none in Go — shell-only, TDD-exempt (AGENTS.md); the committed `bench/generate-results_test.sh` fixture test is the regression gate.
   - Verified: `bash -n` and `shellcheck -S style` clean on `generate-results.sh`, `generate-results_test.sh` and `run.sh`; the fixture test passes (all 31 checks, including the JSON-source proof); `make test`, `go vet ./...`, and `gofmt -l .` clean. Running the full smoke to exercise the new `.json` emission was not possible — Docker Desktop was down — but the change is a `cp` of a temp file already written by `attack_filtered` before `save_result` runs in every caller (core, protocol, degraded).
 
-- [TODO] S5.T10.2 — Results generator — failure, degraded, hot-key sections
+- [IN_PROGRESS] S5.T10.2 — Results generator — failure, degraded, hot-key sections
   - Spec: `.scratch/s5-t5-t12-bench-execution/issues/17-t10-2-generator-failure-degraded-hotkey.md`
   - Depends: S5.T9.2, S5.T10.1
+  - Claimed 2026-10-01T15:45:09Z by OpenCode (deepseek-v4.1-flash): extend the results generator to generate the failure, degraded and hot-key sections from the raw harness output, with the committed fixture and test extended.
 
 - [TODO] S5.T10.3 — Narrative number check
   - Spec: `.scratch/s5-t5-t12-bench-execution/issues/18-t10-3-narrative-number-check.md`
