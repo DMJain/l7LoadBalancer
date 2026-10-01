@@ -1,8 +1,9 @@
 # ADR-0021: Bounded memory in the benchmark harness
 
-- **Status**: Accepted
+- **Status**: Amended by ADR-0022
 - **Date**: 2026-10-01
 - **Deciders**: Darshan Jain (project owner) + opencode agent (S5.T6.1, owner-approved during the S5.T6 published run)
+- **Note**: ADR-0022 keeps this heap cap as a defensive measure but makes the generator worker bound, the delivered-rate guard and the per-size seed rates the primary mechanism — bounding the heap alone moved the OOM victim from vegeta to the load balancer without preventing it.
 
 ## Context
 
