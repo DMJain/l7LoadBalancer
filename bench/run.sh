@@ -586,13 +586,13 @@ PEAK_SEED=""
 PEAK_FAIL_REASON=""
 
 # passes <target_rate> reports whether the last attack (a) cleared the p99 and
-# error ceilings and (b) actually delivered >= DELIVERY_MIN_RATIO_PCT of the
-# target rate. The delivery check is what stops a worker-capped generator from
-# under-sending and reporting a false peak (ADR-0022): delivered is the measured
-# request count over the measured window, so a generator that cannot keep up
-# fails the step instead of passing it with artificially low latency.
+# error ceilings and (b) delivered >= DELIVERY_MIN_RATIO_PCT of the target rate.
+# The delivery check is what stops a worker-capped generator from under-sending
+# and reporting a false peak (ADR-0022): `delivered` is the measured request rate
+# (requests over the measured window), so a generator that cannot keep up fails
+# the step instead of passing it with artificially low latency.
 passes() { # <target_rate>
-  local target="$1" p99 success requests delivered min_requests
+  local target="$1" p99 success requests delivered min_delivered
   STEP_FAIL_REASON=""
   p99=$(json_field "$TMP/metrics.json" 99th)
   success=$(json_field "$TMP/metrics.json" success)
@@ -606,8 +606,8 @@ passes() { # <target_rate>
     STEP_FAIL_REASON="errors"; return 1
   fi
   delivered=$(awk -v r="$requests" -v secs="$STEP_SECS" 'BEGIN { printf "%.0f", r / secs }')
-  min_requests=$(( target * DELIVERY_MIN_RATIO_PCT / 100 ))
-  if (( delivered < min_requests )); then
+  min_delivered=$(( target * DELIVERY_MIN_RATIO_PCT / 100 ))
+  if (( delivered < min_delivered )); then
     STEP_FAIL_REASON="under-delivered"
     warn "step target=${target}/s delivered=${delivered}/s (< ${DELIVERY_MIN_RATIO_PCT}%: under-delivered; harness-limited; not a peak)"
     return 1
@@ -892,7 +892,7 @@ run_scenario() { # <outdir> <proto> <algorithm> <size> <competitor> <url>
   peak="$PEAK_RATE"
   if (( peak == 0 )); then
     if [[ "$PEAK_FAIL_REASON" == "under-delivered" ]]; then
-      warn "$algo/$size/$comp no sustainable rate: under-delivered at seed ${PEAK_SEED}/s (harness-limited; not a peak); skipped"
+      warn "$algo/$size/$comp no sustainable rate: under-delivered; harness-limited; not a peak (seed ${PEAK_SEED}/s); skipped"
     else
       warn "$algo/$size/$comp no sustainable rate at seed ${PEAK_SEED}/s (${PEAK_FAIL_REASON:-p99/errors}); skipped"
     fi
