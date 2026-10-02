@@ -496,7 +496,7 @@ Scoped in `.scratch/s5-t13-t19-portfolio-docs/` as one bundle spec plus ten tick
   - Acceptance: as in the issue file.
   - Completed: `docs/architecture.md` gains an "At a glance" section with the request-path and package-dependency Mermaid diagrams, an 11-step caption list and the "backend does not import balancer" rule. The package graph is derived from `go list` and equals the agent guidance's edges; the Go-version and dependency-wording differences are reported in `docs/sessions/2026-10-03-claude.md`. Both diagrams parse. Docs-only (TDD-exempt).
 
-- [TODO] S5.T13.2 — README rewrite
+- [IN_PROGRESS] S5.T13.2 — README rewrite (Claude Code, started 2026-10-03T02:00+05:30)
   - Spec: `.scratch/s5-t13-t19-portfolio-docs/issues/07-t13-2-readme.md`
   - Depends: S5.T15, S5.T13.1
   - Acceptance: as in the issue file.
