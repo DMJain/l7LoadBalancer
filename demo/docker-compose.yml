@@ -20,15 +20,16 @@
 #   * a demo Grafana provisioning the same single dashboard JSON the root stack
 #     ships, with embedding and anonymous Viewer access enabled;
 #   * a control service serving the page from which the owner switches LB, sets
-#     the rate and sets backend profiles, reaching generators and admin
-#     listeners over the internal network only (S5.T16.4.1, ADR-0025).
+#     the rate, sets backend profiles, and kills/revives backends, reaching
+#     generators and admin listeners over the internal network only, and the
+#     Docker Engine over the mounted socket (S5.T16.4.1–T16.4.2, ADR-0025).
 #
 # Ports: only Grafana, the control page and the four LB client ports are
 # published, every one on 127.0.0.1. Generator control ports, backend admin
 # listeners, and LB metrics and health ports stay on the internal demo network
 # (ADR-0023 decision 2). The stack is never configured or documented for any
-# other bind address. The control service mounts no Docker socket (that is
-# S5.T16.4.2).
+# other bind address. Only the control service mounts the Docker socket, and only
+# this compose file does (ADR-0023 decision 8; ADR-0025 amendment decision 11).
 
 name: l7loadbalancer-demo
 
@@ -38,7 +39,10 @@ name: l7loadbalancer-demo
 # stack leave ADMIN_ENABLED unset. LOG_REQUESTS is off so per-request backend
 # logging cannot become the demo's resource ceiling. No restart policy: a killed
 # backend must stay down until the control service revives it (S5.T16.4.2) —
-# `restart: unless-stopped` would undo the kill.
+# `restart: unless-stopped` would undo the kill. Each service pins container_name
+# to `l7loadbalancer-demo-<name>`; that is the control service's
+# CONTAINER_PREFIX+name allowlist (ADR-0025 amendment decision 8), so the Engine
+# targets are stated strings, never computed from the project name.
 x-backend: &backend
   build:
     context: ../deployments/docker/dummy-backend
@@ -94,18 +98,22 @@ x-generator-env: &generator-env
 services:
   backend1:
     <<: *backend
+    container_name: l7loadbalancer-demo-backend1
     command: ["-name", "backend1"]
 
   backend2:
     <<: *backend
+    container_name: l7loadbalancer-demo-backend2
     command: ["-name", "backend2"]
 
   backend3:
     <<: *backend
+    container_name: l7loadbalancer-demo-backend3
     command: ["-name", "backend3"]
 
   backend4:
     <<: *backend
+    container_name: l7loadbalancer-demo-backend4
     command: ["-name", "backend4"]
 
   lb-roundrobin:
@@ -198,14 +206,23 @@ services:
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
 
-  # Control page and JSON API (S5.T16.4.1, ADR-0025). It reads the generators and
-  # admin listeners live and fans out to them over the internal network; only its
-  # own page port is published, on 127.0.0.1. GRAFANA_URL is the browser-
-  # reachable Grafana (host loopback) because the page's iframes load in the
-  # owner's browser, not in this container. No Docker socket here (S5.T16.4.2).
+  # Control page and JSON API (S5.T16.4.1–T16.4.2, ADR-0025 and its amendment).
+  # It reads the generators and admin listeners live and fans out to them over
+  # the internal network; only its own page port is published, on 127.0.0.1.
+  # GRAFANA_URL is the browser-reachable Grafana (host loopback) because the
+  # page's iframes load in the owner's browser, not in this container.
+  #
+  # It mounts the Docker socket to kill/revive the four backends (ADR-0023
+  # decision 8). The socket is root-equivalent on the host; that is acceptable
+  # only because every port here is bound to 127.0.0.1 (ADR-0023 decision 2), and
+  # the service acts only on the allowlisted demo backends. The container runs as
+  # root solely to open the socket (ADR-0025 amendment decision 11); DOCKER_HOST
+  # and CONTAINER_PREFIX match the code defaults and the backend container_names
+  # above. No other compose file in the repository mounts this socket.
   control:
     build:
       context: ./control-service
+    user: "0:0"
     ports:
       - "127.0.0.1:8095:8090"
     environment:
@@ -213,6 +230,10 @@ services:
       BACKENDS: "http://backend1:9091,http://backend2:9091,http://backend3:9091,http://backend4:9091"
       LBS: "http://lb-roundrobin:8080,http://lb-leastconn:8080,http://lb-consistent-hash:8080,http://lb-p2c-ewma:8080"
       GRAFANA_URL: "http://127.0.0.1:3000"
+      DOCKER_HOST: "unix:///var/run/docker.sock"
+      CONTAINER_PREFIX: "l7loadbalancer-demo-"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
 
   grafana:
     image: grafana/grafana:11.1.0

@@ -68,8 +68,24 @@ Charts are iframes of the existing dashboard's panels at
 `var-window=15s&refresh=5s`, following the active LB. The control service holds
 no desired state: it validates every input, then fans the change out to all
 eight generators (or forwards a profile to one admin listener) over the internal
-network. Kill and revive over the Docker socket arrive with S5.T16.4.2; until
-then the control service mounts no socket.
+network. Each backend row also has **Kill** and **Revive** buttons and shows its
+container state (`running` / `exited`).
+
+## Docker socket
+
+To kill and revive backends, the `control` service mounts
+`/var/run/docker.sock` and calls the Docker Engine API over it with the standard
+library's HTTP client — no Docker SDK (S5.T16.4.2). The socket is
+**root-equivalent on the host**, and the container runs as root solely to open
+it. That is acceptable only because every port in this stack is bound to
+`127.0.0.1` (ADR-0023 decision 2): the stack is never configured or documented
+for any other bind address. The service acts only on an allowlist of this demo's
+own four backend containers — a request naming any other backend is rejected
+before any Engine call is made (ADR-0023 decision 8; ADR-0025 amendment
+decisions 8 and 11). No other compose file in the repository mounts the socket.
+Kill is the Engine's abrupt kill (matching the Sprint 3/4 chaos tests); revive
+starts the same container again. A killed backend stays down because the demo
+backends have no restart policy.
 
 ## Acceptance check
 

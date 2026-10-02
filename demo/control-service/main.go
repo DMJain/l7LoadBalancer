@@ -1,20 +1,23 @@
 // Command control-service is the local live demo's control page and JSON API
-// (S5.T16.4.1, ADR-0023 decisions 8 and 9, ADR-0025). It serves one embedded
-// static page from which the owner switches the active LB, sets the total load
-// rate, and sets each backend's latency/jitter/failure — no terminal needed —
-// and reads the current state back from the peers that hold it.
+// (S5.T16.4.1–T16.4.2, ADR-0023 decisions 8 and 9, ADR-0025 and its amendment).
+// It serves one embedded static page from which the owner switches the active
+// LB, sets the total load rate, sets each backend's latency/jitter/failure, and
+// kills or revives a backend — no terminal needed — and reads the current state
+// back from the peers that hold it.
 //
 // It is stdlib-only and, like the dummy backend and the traffic generator,
 // builds as its own small image. It holds no desired configuration: the eight
-// generators and four admin listeners are the source of truth, and this service
-// reads them live. The active LB and the total rate are derived and reported
-// only when every generator agrees, so a partial fan-out shows as mixed rather
-// than as the last value asked for (ADR-0025 decisions 1 and 4).
+// generators, four admin listeners, and the Docker Engine are the source of
+// truth, and this service reads them live. The active LB and the total rate are
+// derived and reported only when every generator agrees, so a partial fan-out
+// shows as mixed rather than as the last value asked for (ADR-0025 decisions 1
+// and 4).
 //
 // Concurrency: every request is served on its own goroutine by net/http. A
 // fan-out launches one goroutine per peer and each writes only its own slot of
 // the results slice, so no shared mutable state is touched concurrently and no
-// mutex is needed. The service itself keeps no mutable state.
+// mutex is needed. The service itself keeps no mutable state; the Engine client
+// wraps an *http.Client, which is safe for concurrent use.
 package main
 
 import (
@@ -27,6 +30,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -40,6 +44,15 @@ import (
 // defaultAddr is the control service's listen address inside its container. The
 // demo compose publishes it on 127.0.0.1 only (ADR-0023 decision 2).
 const defaultAddr = ":8090"
+
+// defaultDockerHost is Docker's own convention for the Engine endpoint. The demo
+// mounts the socket and uses this default; tests set an http URL (S5.T16.4.2).
+const defaultDockerHost = "unix:///var/run/docker.sock"
+
+// defaultContainerPrefix maps a backend name to its Docker container name. The
+// demo compose pins each backend's container_name to prefix+name so the
+// allowlist is a stated string, not a computed one (ADR-0025 amendment d8).
+const defaultContainerPrefix = "l7loadbalancer-demo-"
 
 // requestTimeout bounds every outbound peer call. The state endpoint reads
 // twelve peers per poll; without a bound a hung peer would stall the page.
@@ -73,10 +86,13 @@ const defaultGrafanaURL = "http://127.0.0.1:3000"
 
 // peer is one named peer: a generator's control endpoint, a backend's admin
 // listener, or an LB's client URL. The name is what the page and the fan-out
-// response report.
+// response report. container is the backend's Docker container name, derived
+// from the name and CONTAINER_PREFIX and empty for generators and LBs
+// (S5.T16.4.2).
 type peer struct {
-	name string
-	url  string
+	name      string
+	url       string
+	container string
 }
 
 // config is the control service's startup configuration.
@@ -86,6 +102,9 @@ type config struct {
 	lbs        []peer
 	grafanaURL string
 	addr       string
+	// dockerHost is the Docker Engine endpoint: a unix socket in the demo, an
+	// http URL in tests (S5.T16.4.2).
+	dockerHost string
 }
 
 // server serves the page and the JSON API. It is immutable after construction.
@@ -93,6 +112,7 @@ type server struct {
 	cfg    config
 	logger *slog.Logger
 	client *http.Client
+	engine *engineClient
 }
 
 // fanOutResponse is the LB/rate actions' response: whether every peer accepted
@@ -125,6 +145,106 @@ type backendResponse struct {
 	Profile backendProfile `json:"profile"`
 }
 
+// containerResponse is the kill/revive action's response: whether the Engine
+// accepted the call, and on failure its error, so the page shows a failed
+// action rather than swallowing it (S5.T16.4.2, ADR-0025 amendment decision 9).
+type containerResponse struct {
+	OK        bool   `json:"ok"`
+	Error     string `json:"error,omitempty"`
+	Container string `json:"container"`
+}
+
+// engineClient talks to the Docker Engine API with the standard library's HTTP
+// client — no Docker SDK (S5.T16.4.2, ADR-0025 amendment decision 7). In the
+// demo it dials the unix socket; tests point it at an httptest stand-in. It is
+// safe for concurrent use: http.Client is.
+type engineClient struct {
+	baseURL string
+	client  *http.Client
+}
+
+// newEngine builds the Engine client from a DOCKER_HOST value. A unix:// host
+// dials the socket with a custom DialContext; an http/https host is used
+// directly (the test seam).
+func newEngine(dockerHost string) (*engineClient, error) {
+	u, err := url.Parse(dockerHost)
+	if err != nil {
+		return nil, fmt.Errorf("invalid docker host %q: %w", dockerHost, err)
+	}
+	switch u.Scheme {
+	case "unix":
+		sock := u.Path
+		tr := &http.Transport{
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				return (&net.Dialer{}).DialContext(ctx, "unix", sock)
+			},
+		}
+		return &engineClient{baseURL: "http://docker", client: &http.Client{Transport: tr, Timeout: requestTimeout}}, nil
+	case "http", "https":
+		return &engineClient{baseURL: strings.TrimRight(dockerHost, "/"), client: &http.Client{Timeout: requestTimeout}}, nil
+	default:
+		return nil, fmt.Errorf("docker host %q: unsupported scheme (want unix, http or https)", dockerHost)
+	}
+}
+
+// kill stops a container abruptly — the Engine's kill, not stop (S5.T16.4.2).
+func (e *engineClient) kill(ctx context.Context, container string) error {
+	return e.post(ctx, "/containers/"+url.PathEscape(container)+"/kill")
+}
+
+// start starts an existing container again (revive).
+func (e *engineClient) start(ctx context.Context, container string) error {
+	return e.post(ctx, "/containers/"+url.PathEscape(container)+"/start")
+}
+
+// state returns the container's Engine status ("running", "exited", ...).
+func (e *engineClient) state(ctx context.Context, container string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, e.baseURL+"/containers/"+url.PathEscape(container)+"/json", nil)
+	if err != nil {
+		return "", fmt.Errorf("build request: %w", err)
+	}
+	resp, err := e.client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("call engine: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return "", errors.New(resp.Status)
+	}
+	var body struct {
+		State struct {
+			Status string `json:"Status"`
+		} `json:"State"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return "", fmt.Errorf("decode engine response: %w", err)
+	}
+	return body.State.Status, nil
+}
+
+// post issues a bodyless Engine POST. A 2xx is success; 304 (already started) is
+// also success; anything else is an error carrying the status text.
+func (e *engineClient) post(ctx context.Context, path string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, e.baseURL+path, nil)
+	if err != nil {
+		return fmt.Errorf("build request: %w", err)
+	}
+	resp, err := e.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("call engine: %w", err)
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
+	if resp.StatusCode == http.StatusNotModified {
+		return nil
+	}
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return errors.New(resp.Status)
+	}
+	return nil
+}
+
 // stateResponse is GET /api/state: the live snapshot the page renders. ActiveLB
 // is empty and TotalRate is null when the generators disagree (ADR-0025
 // decision 1).
@@ -144,11 +264,16 @@ type peerJSON struct {
 
 // backendState and generatorState embed the peer's own contract type, so a
 // change to the admin or generator status shape cannot drift from what the page
-// renders.
+// renders. Container is the Engine container name; ContainerState is its
+// running/exited status, with ContainerError when the Engine call failed
+// (S5.T16.4.2).
 type backendState struct {
 	Name string `json:"name"`
 	backendProfile
-	Error string `json:"error,omitempty"`
+	Container      string `json:"container"`
+	ContainerState string `json:"container_state,omitempty"`
+	ContainerError string `json:"container_error,omitempty"`
+	Error          string `json:"error,omitempty"`
 }
 
 type generatorState struct {
@@ -233,10 +358,18 @@ func newServer(cfg config, logger *slog.Logger) (*server, error) {
 	if cfg.grafanaURL == "" {
 		return nil, errors.New("grafana URL is required")
 	}
+	if cfg.dockerHost == "" {
+		cfg.dockerHost = defaultDockerHost
+	}
+	engine, err := newEngine(cfg.dockerHost)
+	if err != nil {
+		return nil, err
+	}
 	return &server{
 		cfg:    cfg,
 		logger: logger,
 		client: &http.Client{Timeout: requestTimeout},
+		engine: engine,
 	}, nil
 }
 
@@ -248,6 +381,8 @@ func (s *server) handler() http.Handler {
 	mux.HandleFunc("POST /api/lb", s.handleLB)
 	mux.HandleFunc("POST /api/rate", s.handleRate)
 	mux.HandleFunc("POST /api/backend", s.handleBackend)
+	mux.HandleFunc("POST /api/backend/kill", s.handleKill)
+	mux.HandleFunc("POST /api/backend/revive", s.handleRevive)
 	return mux
 }
 
@@ -355,6 +490,46 @@ func (s *server) handleBackend(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, backendResponse{OK: true, Profile: prof})
 }
 
+// handleKill stops a backend's container abruptly (S5.T16.4.2).
+func (s *server) handleKill(w http.ResponseWriter, r *http.Request) {
+	s.handlePower(w, r, "kill")
+}
+
+// handleRevive starts a backend's container again (S5.T16.4.2).
+func (s *server) handleRevive(w http.ResponseWriter, r *http.Request) {
+	s.handlePower(w, r, "revive")
+}
+
+// handlePower validates the backend against the allowlist before any Engine call
+// and then kills or starts its container. The container name is derived from the
+// validated backend, never taken from the request. A failed Engine call is
+// reported as a failed action, never swallowed (S5.T16.4.2, ADR-0025 amendment
+// decisions 8 and 9).
+func (s *server) handlePower(w http.ResponseWriter, r *http.Request, action string) {
+	var in struct {
+		Backend string `json:"backend"`
+	}
+	if !decodeStrict(w, r, &in) {
+		return
+	}
+	backend, ok := s.backendByName(in.Backend)
+	if !ok {
+		http.Error(w, "unknown backend", http.StatusBadRequest)
+		return
+	}
+	var err error
+	if action == "kill" {
+		err = s.engine.kill(r.Context(), backend.container)
+	} else {
+		err = s.engine.start(r.Context(), backend.container)
+	}
+	if err != nil {
+		writeJSON(w, containerResponse{OK: false, Error: err.Error(), Container: backend.container})
+		return
+	}
+	writeJSON(w, containerResponse{OK: true, Container: backend.container})
+}
+
 // handleState reads every peer live and derives the active LB and total rate
 // only when the generators agree (ADR-0025 decision 1).
 func (s *server) handleState(w http.ResponseWriter, r *http.Request) {
@@ -406,15 +581,22 @@ func (s *server) gatherGenerators(ctx context.Context) []generatorState {
 	return states
 }
 
-// gatherBackends reads all four profiles concurrently. The admin listener takes
-// POST only, so a read is a POST with an empty object — every field omitted,
-// every field kept (S5.T16.1).
+// gatherBackends reads all four profiles and their Engine container states
+// concurrently. The admin listener takes POST only, so a read is a POST with an
+// empty object — every field omitted, every field kept (S5.T16.1). The Engine
+// state is read beside each profile; a failed read is reported, not fatal
+// (S5.T16.4.2).
 func (s *server) gatherBackends(ctx context.Context) []backendState {
 	states := make([]backendState, len(s.cfg.backends))
 	forEachPeer(s.cfg.backends, func(i int, p peer) {
-		st := backendState{Name: p.name}
+		st := backendState{Name: p.name, Container: p.container}
 		if err := s.doJSON(ctx, http.MethodPost, p.url, map[string]any{}, &st.backendProfile); err != nil {
 			st.Error = err.Error()
+		}
+		if state, err := s.engine.state(ctx, p.container); err != nil {
+			st.ContainerError = err.Error()
+		} else {
+			st.ContainerState = state
 		}
 		states[i] = st
 	})
@@ -568,6 +750,10 @@ func configFromEnv() (config, error) {
 	if err != nil {
 		return config{}, err
 	}
+	prefix := envString("CONTAINER_PREFIX", defaultContainerPrefix)
+	for i := range backends {
+		backends[i].container = prefix + backends[i].name
+	}
 	lbs, err := envPeers("LBS", defaultLBs)
 	if err != nil {
 		return config{}, err
@@ -577,6 +763,7 @@ func configFromEnv() (config, error) {
 		backends:   backends,
 		lbs:        lbs,
 		grafanaURL: envString("GRAFANA_URL", defaultGrafanaURL),
+		dockerHost: envString("DOCKER_HOST", defaultDockerHost),
 	}, nil
 }
 

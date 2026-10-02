@@ -47,7 +47,7 @@
 </section>
 
 <section>
-  <h2>Backend profiles</h2>
+  <h2>Backends — profile, kill/revive</h2>
   <div id="backends"></div>
 </section>
 
@@ -156,6 +156,17 @@ function backendRow(name) {
   btn.textContent = "Apply";
   btn.onclick = function () { applyBackend(name); };
   row.appendChild(btn);
+  const kill = document.createElement("button");
+  kill.textContent = "Kill";
+  kill.onclick = function () { post("/api/backend/kill", { backend: name }); };
+  row.appendChild(kill);
+  const revive = document.createElement("button");
+  revive.textContent = "Revive";
+  revive.onclick = function () { post("/api/backend/revive", { backend: name }); };
+  row.appendChild(revive);
+  const cstate = document.createElement("span");
+  cstate.className = "container-state muted";
+  row.appendChild(cstate);
   const status = document.createElement("span");
   status.className = "status bad";
   row.appendChild(status);
@@ -182,6 +193,10 @@ function renderBackends(backends) {
     setInput(row.querySelector("#sleep-" + b.name), b.sleep_ms);
     setInput(row.querySelector("#jitter-" + b.name), b.jitter_ms);
     setInput(row.querySelector("#fail-" + b.name), b.fail_rate);
+    const cstate = row.querySelector(".container-state");
+    cstate.textContent = b.container_error
+      ? ("container: " + b.container_error)
+      : ("container: " + (b.container_state || "?"));
     row.querySelector(".status").textContent = b.error || "";
   });
 }

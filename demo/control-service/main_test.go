@@ -545,4 +545,3 @@ func TestStateIncludesContainerState(t *testing.T) {
 		assert.Empty(t, b.ContainerError)
 	}
 }
-
