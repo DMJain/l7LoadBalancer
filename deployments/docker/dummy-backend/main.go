@@ -363,7 +363,9 @@ func (b *backend) adminHandler() http.Handler {
 		var in adminRequest
 		dec := json.NewDecoder(r.Body)
 		dec.DisallowUnknownFields()
-		if err := dec.Decode(&in); err != nil {
+		// An empty body is the degenerate "all fields omitted" case, so it keeps
+		// the whole profile; any other decode failure is a 400.
+		if err := dec.Decode(&in); err != nil && !errors.Is(err, io.EOF) {
 			http.Error(w, "invalid request body", http.StatusBadRequest)
 			return
 		}

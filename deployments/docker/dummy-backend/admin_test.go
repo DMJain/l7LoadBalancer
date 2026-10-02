@@ -198,24 +198,47 @@ func TestAdminSetChangesRequestBehaviour(t *testing.T) {
 	assert.GreaterOrEqual(t, time.Since(start), 100*time.Millisecond)
 }
 
-// TestJitterBounds proves the effective sleep stays within the injected band and
-// is never negative (S5.T16.1).
+// TestJitterBounds proves the effective sleep is spread both below and above the
+// base within the injected band, and never far beyond it (S5.T16.1).
 func TestJitterBounds(t *testing.T) {
 	_, req, admin := newTestBackend(profile{})
 	require.Equal(t, http.StatusOK, driveAdmin(admin, http.MethodPost, `{"sleep_ms":20,"jitter_ms":20}`).Code)
 
+	minD := time.Hour
 	var maxD time.Duration
 	for i := 0; i < 30; i++ {
 		rec := httptest.NewRecorder()
 		start := time.Now()
 		req.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/200b", nil))
-		if d := time.Since(start); d > maxD {
+		d := time.Since(start)
+		if d < minD {
+			minD = d
+		}
+		if d > maxD {
 			maxD = d
 		}
 	}
 
-	assert.GreaterOrEqual(t, maxD, 10*time.Millisecond, "jitter should push some requests above the base")
-	assert.LessOrEqual(t, maxD, 200*time.Millisecond, "jitter must not exceed sleep_ms + jitter_ms by much")
+	// Uniform in [-20, +20] around a 20 ms base: 30 samples must land on both
+	// sides of the base, and never far outside the band.
+	assert.Less(t, minD, 20*time.Millisecond, "jitter should push some requests below the base")
+	assert.Greater(t, maxD, 20*time.Millisecond, "jitter should push some requests above the base")
+	assert.Less(t, maxD, 80*time.Millisecond, "jitter must not exceed sleep_ms + jitter_ms by much")
+}
+
+// TestAdminEmptyBodyIsNoOp proves a body with no fields keeps the whole profile —
+// the degenerate case of omitted-field-keeps (S5.T16.1).
+func TestAdminEmptyBodyIsNoOp(t *testing.T) {
+	_, _, admin := newTestBackend(profile{sleepMS: 4, jitterMS: 2, failRate: 0.3})
+
+	rec := driveAdmin(admin, http.MethodPost, "")
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var got adminBody
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
+	assert.Equal(t, 4, got.SleepMS)
+	assert.Equal(t, 2, got.JitterMS)
+	assert.InDelta(t, 0.3, got.FailRate, 1e-9)
 }
 
 // TestJitterClampedAtZero proves a jitter larger than the base sleep never
