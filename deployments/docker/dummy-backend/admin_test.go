@@ -32,7 +32,7 @@ func newTestBackend(initial profile) (*backend, http.Handler, http.Handler) {
 
 // adminRequest drives a request through the admin handler without a *testing.T,
 // so it is safe to call from a goroutine in the concurrency test.
-func adminRequest(admin http.Handler, method, body string) *httptest.ResponseRecorder {
+func driveAdmin(admin http.Handler, method, body string) *httptest.ResponseRecorder {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(method, "/", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -88,7 +88,7 @@ func TestAdminRejectsNonPost(t *testing.T) {
 
 	for _, method := range []string{http.MethodGet, http.MethodPut, http.MethodDelete, http.MethodPatch} {
 		t.Run(method, func(t *testing.T) {
-			rec := adminRequest(admin, method, "")
+			rec := driveAdmin(admin, method, "")
 			assert.Equal(t, http.StatusMethodNotAllowed, rec.Code)
 			assert.Equal(t, http.MethodPost, rec.Header().Get("Allow"))
 		})
@@ -100,7 +100,7 @@ func TestAdminRejectsNonPost(t *testing.T) {
 func TestAdminRejectsUnknownField(t *testing.T) {
 	_, _, admin := newTestBackend(profile{})
 
-	rec := adminRequest(admin, http.MethodPost, `{"sleep_ms":1,"unknown":2}`)
+	rec := driveAdmin(admin, http.MethodPost, `{"sleep_ms":1,"unknown":2}`)
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 }
 
@@ -108,7 +108,7 @@ func TestAdminRejectsUnknownField(t *testing.T) {
 func TestAdminRejectsMalformedJSON(t *testing.T) {
 	_, _, admin := newTestBackend(profile{})
 
-	rec := adminRequest(admin, http.MethodPost, `{`)
+	rec := driveAdmin(admin, http.MethodPost, `{`)
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 }
 
@@ -130,7 +130,7 @@ func TestAdminRejectsOutOfRange(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			_, _, admin := newTestBackend(profile{})
 
-			rec := adminRequest(admin, http.MethodPost, tc.body)
+			rec := driveAdmin(admin, http.MethodPost, tc.body)
 			assert.Equal(t, http.StatusBadRequest, rec.Code)
 			assert.Contains(t, rec.Body.String(), tc.field)
 		})
@@ -142,7 +142,7 @@ func TestAdminRejectsOutOfRange(t *testing.T) {
 func TestAdminOmittedFieldKeepsValue(t *testing.T) {
 	_, _, admin := newTestBackend(profile{sleepMS: 7, jitterMS: 3, failRate: 0.2})
 
-	rec := adminRequest(admin, http.MethodPost, `{"fail_rate":0.9}`)
+	rec := driveAdmin(admin, http.MethodPost, `{"fail_rate":0.9}`)
 	require.Equal(t, http.StatusOK, rec.Code)
 
 	var got adminBody
@@ -152,7 +152,7 @@ func TestAdminOmittedFieldKeepsValue(t *testing.T) {
 	assert.InDelta(t, 0.9, got.FailRate, 1e-9)
 
 	// An empty body changes nothing and echoes the same profile.
-	rec = adminRequest(admin, http.MethodPost, `{}`)
+	rec = driveAdmin(admin, http.MethodPost, `{}`)
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
 	assert.Equal(t, 7, got.SleepMS)
@@ -165,7 +165,7 @@ func TestAdminOmittedFieldKeepsValue(t *testing.T) {
 func TestAdminResponseIsFullProfile(t *testing.T) {
 	_, _, admin := newTestBackend(profile{})
 
-	rec := adminRequest(admin, http.MethodPost, `{"sleep_ms":5,"jitter_ms":2,"fail_rate":0.5}`)
+	rec := driveAdmin(admin, http.MethodPost, `{"sleep_ms":5,"jitter_ms":2,"fail_rate":0.5}`)
 	require.Equal(t, http.StatusOK, rec.Code)
 	assert.Equal(t, "application/json", rec.Header().Get("Content-Type"))
 
@@ -181,17 +181,17 @@ func TestAdminResponseIsFullProfile(t *testing.T) {
 func TestAdminSetChangesRequestBehaviour(t *testing.T) {
 	_, req, admin := newTestBackend(profile{})
 
-	require.Equal(t, http.StatusOK, adminRequest(admin, http.MethodPost, `{"fail_rate":1}`).Code)
+	require.Equal(t, http.StatusOK, driveAdmin(admin, http.MethodPost, `{"fail_rate":1}`).Code)
 	rec := httptest.NewRecorder()
 	req.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/200b", nil))
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
 
-	require.Equal(t, http.StatusOK, adminRequest(admin, http.MethodPost, `{"fail_rate":0}`).Code)
+	require.Equal(t, http.StatusOK, driveAdmin(admin, http.MethodPost, `{"fail_rate":0}`).Code)
 	rec = httptest.NewRecorder()
 	req.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/200b", nil))
 	assert.Equal(t, http.StatusOK, rec.Code)
 
-	require.Equal(t, http.StatusOK, adminRequest(admin, http.MethodPost, `{"sleep_ms":120}`).Code)
+	require.Equal(t, http.StatusOK, driveAdmin(admin, http.MethodPost, `{"sleep_ms":120}`).Code)
 	rec = httptest.NewRecorder()
 	start := time.Now()
 	req.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/200b", nil))
@@ -202,7 +202,7 @@ func TestAdminSetChangesRequestBehaviour(t *testing.T) {
 // is never negative (S5.T16.1).
 func TestJitterBounds(t *testing.T) {
 	_, req, admin := newTestBackend(profile{})
-	require.Equal(t, http.StatusOK, adminRequest(admin, http.MethodPost, `{"sleep_ms":20,"jitter_ms":20}`).Code)
+	require.Equal(t, http.StatusOK, driveAdmin(admin, http.MethodPost, `{"sleep_ms":20,"jitter_ms":20}`).Code)
 
 	var maxD time.Duration
 	for i := 0; i < 30; i++ {
@@ -222,7 +222,7 @@ func TestJitterBounds(t *testing.T) {
 // yields a negative delay (S5.T16.1).
 func TestJitterClampedAtZero(t *testing.T) {
 	_, req, admin := newTestBackend(profile{})
-	require.Equal(t, http.StatusOK, adminRequest(admin, http.MethodPost, `{"sleep_ms":0,"jitter_ms":50}`).Code)
+	require.Equal(t, http.StatusOK, driveAdmin(admin, http.MethodPost, `{"sleep_ms":0,"jitter_ms":50}`).Code)
 
 	for i := 0; i < 20; i++ {
 		rec := httptest.NewRecorder()
@@ -239,7 +239,7 @@ func TestJitterClampedAtZero(t *testing.T) {
 // its own probe (S5.T16.1).
 func TestControlPathsBypassRuntimeChaos(t *testing.T) {
 	_, req, admin := newTestBackend(profile{})
-	require.Equal(t, http.StatusOK, adminRequest(admin, http.MethodPost, `{"sleep_ms":5000,"fail_rate":1}`).Code)
+	require.Equal(t, http.StatusOK, driveAdmin(admin, http.MethodPost, `{"sleep_ms":5000,"fail_rate":1}`).Code)
 
 	for _, path := range []string{"/health", "/stats"} {
 		t.Run(path, func(t *testing.T) {
@@ -295,7 +295,7 @@ func TestConcurrentSetWhileServing(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			adminRequest(admin, http.MethodPost, `{"sleep_ms":1,"jitter_ms":2,"fail_rate":0.5}`)
+			driveAdmin(admin, http.MethodPost, `{"sleep_ms":1,"jitter_ms":2,"fail_rate":0.5}`)
 		}()
 	}
 	wg.Wait()
