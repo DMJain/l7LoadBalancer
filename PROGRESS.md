@@ -24,12 +24,13 @@ Not approved, not claimed, not implemented. Surfaced by the S4 reload grilling (
 - ~~Fix the pre-existing misclassification where a client cancellation is reported to observers as a backend failure (same cancellation-cause mechanism; belongs to Sprint 4's connection-lifecycle deliverable). On removed backends T2's suppression already hides it; on live backends it is unchanged.~~ **Closed by S4.D1 (2026-09-26): absorbed into S4.T5**, its owner in the connection-lifecycle bundle.
 - ~~Hot-reload of the algorithm, health timing, circuit cooldown, listen addresses, or the drain window — changing them is rejected, not ignored.~~ **Closed by S4.T12 (2026-09-27): already implemented** — `NonBackendChanges` (`internal/config/diff.go`) names `reload`, `server`, `transport` and every original non-backend field (`listen`, `algorithm`, `health`, `circuit`, `metrics`, `health_endpoint`), so a reload that changes any of them is rejected whole with the fields named (ADR-0015 decision 4; ADR-0016 decision 1; S4.T7; S4.T8).
 - Pre-warming added backends (probing before the swap, so a blue/green reload has no empty-selectable window).
-- **S5.T13–T15 (proposed 2026-09-30, not approved)**: the README architecture diagram, `docs/design-decisions.md`, and `docs/what-id-do-differently.md`. Surfaced by the S5.T5–T12 grilling (`.scratch/s5-t5-t12-bench-execution/spec.md`, *Out of Scope*). The results document (S5.T10) is written so these can link to it rather than duplicate it. These keep their numbers; the local live demo is S5.T16–T17 (below).
+- ~~**S5.T13–T15 (proposed 2026-09-30, not approved)**: the README architecture diagram, `docs/design-decisions.md`, and `docs/what-id-do-differently.md`. Surfaced by the S5.T5–T12 grilling (`.scratch/s5-t5-t12-bench-execution/spec.md`, *Out of Scope*). The results document (S5.T10) is written so these can link to it rather than duplicate it. These keep their numbers; the local live demo is S5.T16–T17 (below).~~ **Promoted by S5.D2 (2026-10-02): approved by the owner** as S5.T13 (README and diagrams), S5.T14 (`docs/design-decisions.md`), S5.T15 (`docs/what-id-do-differently.md`), with S5.T19 added; see *Sprint 5 — Portfolio Documentation*.
 - **Health probes count as backend arrivals (proposed 2026-09-30 by S5.T8.1, not approved)**: spec instrumentation story 19 asks that "health probes and counter reads [be] excluded from the counter, so that it counts only benchmark traffic". `/stats` excludes itself and `/health`, but the bench LB's active health checker probes each backend's *own URL* (ADR-0011 decision 11), and every bench config points that at `/` (`internal/health/checker.go`; `deployments/docker/dummy-backend/main.go` counts `/`). So each `/stats` delta carries a few probe arrivals per window — negligible at benchmark rates, but enough that the literal hot-key spill rule ("more than one backend received traffic") always reads yes. S5.T8.1 therefore reports spill above a 1% share floor (`bench/run.sh` `SPILL_MIN_SHARE_PCT`), which is a read-side workaround, not a fix; the underlying cause is unfixed. A fix would point the checker at a configured health path or have the counter count only the payload paths.
 - **Cold-start guard for the first peak-search step (proposed 2026-10-02 by S5.T6, not approved)**: the published run skipped `roundrobin/200b/lb` and `roundrobin/10kb/lb` — the first two LB scenarios of the core slice — on a p99 failure at the seed rate, while the same algorithm passed well above that rate later in the slice, so it reads as a cold container/runtime rather than a real ceiling. A `discover_peak` retry-once (or a warmup attack right after `up_h2`/`set_lb`) before accepting a zero peak would remove this class of gap. It changes the harness, so it needs its own ADR and tests, and it gates any decision to re-run the published matrix.
 - **Narrative number check misses section-boundary tables (proposed 2026-10-02 by S5.T10.4, not approved)**: `allowed_cells` in `bench/generate-results.sh` (S5.T10.3) keeps `is_table` set across `<!-- END GENERATED -->` / `<!-- BEGIN GENERATED: <section> -->` boundaries, so the first header line of a section that follows a table is consumed as a data row and the following rule line recomputes the column units from the previous section's header. The degraded and hot-key `(ms)` cells are therefore never registered as valid narrative targets, and the check silently cannot validate figures quoted from them. S5.T10.4 worked around it by quoting only cells the check can see; the fix is to reset `is_table`/`hdr`/`unit` on each section boundary (and would need the fixture test to quote a degraded cell as the red gate).
 - **S5.T18 — `lb_p2c_ewma_seconds{backend}` gauge (proposed 2026-10-02 by the S5.T16–T17 grilling, not approved)**: expose each backend's P2C-EWMA latency estimate so the demo can show the selector's internal state, not only its effect (request share). Touches `internal/metrics`, the latency-recording path, and ADR-0013; decide after a first demo recording shows whether narration needs it (ADR-0023, alternatives).
 - **Degraded-slice injection leaked to every backend (proposed 2026-10-02 by the S5.T16–T17 grilling, not approved)**: hypothesis, unverified — `bench/run.sh` *exports* `SLEEP_MS=50` and force-recreates only backend3, but all four backends read `${SLEEP_MS:-0}` from the shared `x-backend` anchor in `bench/docker-compose.yml`, so any later `compose up` (`up_h2`/`set_lb`) while the export is still 50 sees config drift on all four and recreates them slow. That matches `RESULTS.md`'s degraded p50s sitting near the injected delay on every backend. Diagnose before any re-run of the published matrix; not part of S5.T16 (the demo injects latency at runtime through the admin listener instead).
+- **Relabel the "Time to detection" column (proposed 2026-10-02 by the S5.T13–T19 grilling, not approved)**: the failure scenario's `time_to_detection_s` is computed as the last failed-request offset minus the first, i.e. the width of the error window (9 ms in the published run), not the delay between the failure and its detection (about 0.7 s in the same run: stop at 29 s, first error at 29.734 s). The label misleads a reader. A fix touches the benchmark script and the results generator and regenerates `RESULTS.md`, so it needs its own ticket and a regeneration check. Until then the README says, where it links `RESULTS.md`, that the column measures the error-window width.
 
 ## Sprint 4 — Hard Subsystems
 
@@ -452,5 +453,60 @@ Scoped in `.scratch/s5-t16-t17-local-demo/` as one bundle spec plus nine tickets
 - [TODO] S5.T17.2 — Record the demo video (ready-for-human)
   - Spec: `.scratch/s5-t16-t17-local-demo/issues/09-t17-2-record-demo-video.md`
   - Depends: S5.T17.1
-  - Acceptance: recorded from a fresh `up` with the S5.T16.5 check passing first; follows the script; storage location decided by the owner; linked from the demo README.
+  - Acceptance: recorded from a fresh `up` with the S5.T16.5 check passing first; follows the script; storage location decided by the owner; linked from the demo README; fills the video slot in the README (S5.T13.2 leaves a marked slot).
   - Prepare (OpenCode (deepseek-v4.1-flash), 2026-10-02): owner deferred the video's storage location and the README link until after recording, so only a `demo/README.md` "Walkthrough video" **Video pending** placeholder was added — no link. Recording from a fresh `make demo-up` with `demo/acceptance.sh` passing first, and fixing where the video lives (spec open decision 8), remain the owner's; this ticket stays `[TODO]`.
+
+## Sprint 5 — Portfolio Documentation (S5.T13–T15, S5.T19)
+
+Scoped in `.scratch/s5-t13-t19-portfolio-docs/` as one bundle spec plus ten tickets. The bundle's `spec.md` is the authoritative scope boundary, including the approved headline-claims list (C1–C7) and the writing rules. Decided in the S5.T13–T19 grilling (2026-10-02). The owner's pre-grilling IDs (S5.T18–T21) were renumbered because S5.T13–T15 already existed as proposals and S5.T18 is the proposed P2C gauge. Order: S5.D2 → S5.T14.1 → S5.T14.2 → S5.T14.3 → S5.T15 → S5.T13.2 → S5.T19.1.1 → S5.T19.1.2 → S5.T19.2. S5.T13.1 (diagrams) is blocked only by S5.D2 and runs in parallel; S5.T13.2 waits for it. S5.T19.2 is also blocked by S5.T17.2 (owner-recorded).
+
+- [DONE] S5.D2 — Tracking amendment
+  - Spec: `.scratch/s5-t13-t19-portfolio-docs/issues/01-d2-tracking-amendment.md`
+  - Depends: none
+  - Acceptance: as in the issue file.
+  - Completed: 2026-10-02. MILESTONES.md Sprint 5 deliverables and exit criteria amended; S5.T13–T15 promoted in the proposals list; "Time to detection" relabel recorded as proposed; this section added with ten entries; S5.T17.2 acceptance and issue file mention the README video slot. Docs-only, no code (TDD-exempt per AGENTS.md).
+
+- [TODO] S5.T14.1 — Evidence dossier for the design document
+  - Spec: `.scratch/s5-t13-t19-portfolio-docs/issues/02-t14-1-evidence-dossier.md`
+  - Depends: S5.D2
+  - Acceptance: as in the issue file.
+
+- [TODO] S5.T14.2 — `docs/design-decisions.md`, topics 1–4
+  - Spec: `.scratch/s5-t13-t19-portfolio-docs/issues/03-t14-2-design-decisions-1-4.md`
+  - Depends: S5.T14.1
+  - Acceptance: as in the issue file.
+
+- [TODO] S5.T14.3 — `docs/design-decisions.md`, topics 5–7 and close-out
+  - Spec: `.scratch/s5-t13-t19-portfolio-docs/issues/04-t14-3-design-decisions-5-7.md`
+  - Depends: S5.T14.2
+  - Acceptance: as in the issue file.
+
+- [TODO] S5.T15 — `docs/what-id-do-differently.md`
+  - Spec: `.scratch/s5-t13-t19-portfolio-docs/issues/05-t15-what-id-do-differently.md`
+  - Depends: S5.T14.3
+  - Acceptance: as in the issue file.
+
+- [TODO] S5.T13.1 — Architecture diagrams
+  - Spec: `.scratch/s5-t13-t19-portfolio-docs/issues/06-t13-1-architecture-diagrams.md`
+  - Depends: S5.D2
+  - Acceptance: as in the issue file.
+
+- [TODO] S5.T13.2 — README rewrite
+  - Spec: `.scratch/s5-t13-t19-portfolio-docs/issues/07-t13-2-readme.md`
+  - Depends: S5.T15, S5.T13.1
+  - Acceptance: as in the issue file.
+
+- [TODO] S5.T19.1.1 — Safe fixes and report-first scans
+  - Spec: `.scratch/s5-t13-t19-portfolio-docs/issues/08-t19-1-1-fixes-and-scans.md`
+  - Depends: S5.T13.2
+  - Acceptance: as in the issue file.
+
+- [TODO] S5.T19.1.2 — Release verification
+  - Spec: `.scratch/s5-t13-t19-portfolio-docs/issues/09-t19-1-2-release-verification.md`
+  - Depends: S5.T19.1.1
+  - Acceptance: as in the issue file.
+
+- [TODO] S5.T19.2 — Tag `v0.1.0` (ready-for-human at the confirmation step)
+  - Spec: `.scratch/s5-t13-t19-portfolio-docs/issues/10-t19-2-tag-v0-1-0.md`
+  - Depends: S5.T19.1.2, S5.T17.2
+  - Acceptance: as in the issue file.

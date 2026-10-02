@@ -94,9 +94,11 @@ Strategic plan. Each sprint = one weekend of focused work. Tasks under each spri
 - Reload runs: a **no-op reload** and a **drain reload** (one backend removed under load), each judged PASS/FAIL against criteria fixed before the run — zero non-2xx/transport errors, post-reload p99 ≤ 2× pre-reload p99, and the removed backend receives zero arrivals after the reload is applied.
 - `make bench-repro` — the one-command reproducer (preflight, certs, images, smoke, full matrix) behind the exit criterion; S5.T11 (orchestration manifests) is dropped per ADR-0019.
 - Published numbers: p50 / p99 / p99.9 and throughput ceilings, with `.txt` summaries and `.hdr` histograms committed alongside the harness.
-- README with architecture diagram (Mermaid or Excalidraw export).
-- `docs/design-decisions.md` — rationale-heavy doc covering every non-trivial choice.
-- `docs/what-id-do-differently.md` — honest retrospective.
+- S5.T13 — `README.md` rewrite (three-sentence summary, Mermaid request-path diagram, quickstart, local live-demo section with a marked video slot and ADR-0023 for why there is no public URL, headline results limited to owner-approved claims) and `docs/architecture.md` diagrams (request path; package graph derived from `go list`).
+- S5.T14 — `docs/design-decisions.md`: seven topics (`net/http/httputil` over frameworks, bounded-loads consistent hashing, P2C-EWMA including its no-decay limit, reload architecture, failure-mode interaction, honest Nginx comparison, concurrency model), each problem → options → choice → cost, each linking its ADRs and evidence.
+- S5.T15 — `docs/what-id-do-differently.md`: honest retrospective, every item citing a source, with marked slots for owner-written items.
+- S5.T19 — final portfolio pass: S5.T19.1.1 safe fixes and report-first scans, S5.T19.1.2 release verification (including a fresh-clone quickstart run), and S5.T19.2 the annotated `v0.1.0` tag, gated on the recorded demo video. No history rewrite.
+- Reader-facing documents (S5.T13–T15) follow the writing rules in the bundle spec.
 - S5.T16 — local live-demo stack under `demo/` (ADR-0023; supersedes the original live public deployment): one LB per algorithm sharing four backends, an eight-client Zipf-ranked Poisson traffic generator with a runtime rate control, a dummy-backend admin listener for runtime latency/jitter/failure, and a control service plus a single page that embeds the existing Grafana dashboard. All ports bound to `127.0.0.1`. Gated by a two-phase latency-isolation acceptance check.
 - S5.T17 — demo script: scenario sequence, click path, and expected on-screen state for each step, used to record the demo video.
 
@@ -105,6 +107,7 @@ Strategic plan. Each sprint = one weekend of focused work. Tasks under each spri
 - README opens with architecture diagram and 3-sentence project summary.
 - Design decisions doc covers: why stdlib over frameworks, why bounded-loads CH, why P2C, reload architecture, failure-mode interaction, and honest benchmark comparison with Nginx.
 - One-command local demo (`demo/`) passes its latency-isolation acceptance check, and a recorded demo video following the S5.T17 script exists.
+- The repository is tagged `v0.1.0` (annotated) only after the hygiene and release-verification tickets pass and the README links a real recorded demo video.
 
 ## Post-Sprint 5 — Optional extensions
 

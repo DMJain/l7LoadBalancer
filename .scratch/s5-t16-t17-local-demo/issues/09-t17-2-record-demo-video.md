@@ -11,4 +11,4 @@ Spec: `../spec.md` — *Demo script (S5.T17)*; MILESTONES.md Sprint 5 exit crite
 - [ ] Where the video lives (in the repository, as a release asset, or as an external link) is decided by the owner at the start (open decision 8 in the spec).
 - [ ] Recorded from a fresh `up` of the demo stack, with the S5.T16.5 check passing immediately before.
 - [ ] Follows the script's scenario order; any deviation is noted in the PROGRESS entry.
-- [ ] Linked from the demo README (and from the README once S5.T13 lands).
+- [ ] Linked from the demo README, and placed in the README's marked video slot.
