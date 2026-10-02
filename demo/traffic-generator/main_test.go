@@ -9,6 +9,7 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -370,6 +371,73 @@ func TestRuntimeTargetChange(t *testing.T) {
 	}, 2*time.Second, 10*time.Millisecond, "no traffic reached the new target after the switch")
 }
 
+// TestInflightCompletesOnTargetChange proves a request already in flight to the
+// old target completes normally after the target switches (S5.T16.2; ADR-0024
+// decision 4).
+func TestInflightCompletesOnTargetChange(t *testing.T) {
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	closeRelease := func() { releaseOnce.Do(func() { close(release) }) }
+
+	var oldServed atomic.Int64
+	old := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-release
+		oldServed.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(func() { closeRelease(); old.Close() })
+
+	fresh := newCountServer(t)
+	cfg := baseConfig(old.URL, old.URL, fresh.URL)
+	cfg.totalRate = 50
+	cfg.maxInflight = 1
+	g, base := controlServer(t, cfg)
+	runGenerator(t, g)
+
+	require.Eventually(t, func() bool {
+		return getStatus(t, base).Sent > 0
+	}, 2*time.Second, 10*time.Millisecond, "no request was ever sent")
+
+	resp := postControl(t, base, `{"target":"`+fresh.URL+`"}`)
+	resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	closeRelease()
+	require.Eventually(t, func() bool {
+		return oldServed.Load() == 1
+	}, 2*time.Second, 10*time.Millisecond, "the in-flight request to the old target did not complete")
+	require.Eventually(t, func() bool {
+		_, _, times := fresh.snapshot()
+		return len(times) > 0
+	}, 2*time.Second, 10*time.Millisecond, "no traffic reached the new target after the switch")
+}
+
+// TestResponseBodiesAreDrained proves the client reads and discards the whole
+// response body rather than closing the connection early on it (S5.T16.2;
+// ADR-0024 decision 3).
+func TestResponseBodiesAreDrained(t *testing.T) {
+	payload := make([]byte, 8<<20)
+	var writeErrs atomic.Int64
+	big := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
+		if _, err := w.Write(payload); err != nil {
+			writeErrs.Add(1)
+		}
+	}))
+	t.Cleanup(big.Close)
+
+	cfg := baseConfig(big.URL)
+	cfg.totalRate = 20
+	cfg.maxInflight = 1
+	g, base := controlServer(t, cfg)
+	runGenerator(t, g)
+
+	require.Eventually(t, func() bool {
+		return getStatus(t, base).Completed >= 2
+	}, 5*time.Second, 20*time.Millisecond, "requests did not complete")
+	assert.Zero(t, writeErrs.Load(), "the stand-in could not finish writing a body the client should have drained")
+}
+
 // TestInflightBoundAndDropped proves the in-flight bound holds against a slow
 // stand-in and that arrivals it cannot start are counted as dropped
 // (S5.T16.2; ADR-0021/ADR-0022).
@@ -475,7 +543,11 @@ func TestConfigFromEnvStrict(t *testing.T) {
 				t.Setenv(k, v)
 			}
 
+			// Mirror main: parse, then let newGenerator apply domain validation.
 			got, err := configFromEnv()
+			if err == nil {
+				_, err = newGenerator(got, testLogger())
+			}
 			if tc.wantErr != "" {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), tc.wantErr)

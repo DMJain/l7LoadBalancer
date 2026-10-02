@@ -52,12 +52,15 @@ const (
 	defaultMaxInflight = 64
 
 	// pollInterval is how often a paused client (rate 0) re-checks for a rate
-	// change. maxSleep caps one scheduled wait so a rate change is picked up
-	// within a second even when the current rate is very low.
+	// change before resuming.
 	pollInterval    = 50 * time.Millisecond
-	maxSleep        = time.Second
 	requestTimeout  = 30 * time.Second
 	shutdownTimeout = 5 * time.Second
+
+	// maxWaitSeconds bounds a single scheduled wait to the largest duration
+	// expressible in time.Duration, so an absurdly low rate cannot overflow into
+	// a negative wait and busy-loop. It is an overflow guard, not a rate cap.
+	maxWaitSeconds = float64(math.MaxInt64) / float64(time.Second)
 )
 
 // Mix weights, named in one place (ADR-0024 decision 5). Response paths are the
@@ -280,11 +283,13 @@ func (g *generator) run(ctx context.Context) {
 			}
 			continue
 		}
-		// Clamp in seconds before converting: a very low rate would otherwise
-		// overflow the Duration and busy-loop on a negative wait.
+		// The full exponential wait is honoured: capping it and resampling would
+		// inflate the effective rate at low configured rates. A pending arrival
+		// scheduled at the old rate still fires; a rate change affects the ones
+		// scheduled after it.
 		seconds := rand.ExpFloat64() / rate
-		if seconds > maxSleep.Seconds() {
-			seconds = maxSleep.Seconds()
+		if seconds > maxWaitSeconds {
+			seconds = maxWaitSeconds // overflow guard only, not a distribution cap
 		}
 		if !sleepCtx(ctx, time.Duration(seconds*float64(time.Second))) {
 			return
@@ -458,9 +463,10 @@ func sleepCtx(ctx context.Context, d time.Duration) bool {
 	}
 }
 
-// configFromEnv reads the startup configuration with the dummy backend's
-// strictness: empty is treated as unset, and every error names the variable
-// (S5.T16.2).
+// configFromEnv parses the startup configuration with the dummy backend's
+// strictness: empty is treated as unset, and every parse error names the
+// variable. Domain validation (rank bounds, allowlist membership, the bounds
+// themselves) is newGenerator's single responsibility (S5.T16.2).
 func configFromEnv() (config, error) {
 	var cfg config
 
@@ -474,9 +480,6 @@ func configFromEnv() (config, error) {
 	if err != nil {
 		return cfg, err
 	}
-	if rank < 1 || rank > clients {
-		return cfg, fmt.Errorf("RANK: %d must be between 1 and CLIENTS (%d)", rank, clients)
-	}
 	cfg.rank = rank
 
 	zipfS, err := envFloat("ZIPF_S", defaultZipfS)
@@ -489,17 +492,11 @@ func configFromEnv() (config, error) {
 	if err != nil {
 		return cfg, err
 	}
-	if totalRate < 0 {
-		return cfg, fmt.Errorf("TOTAL_RATE: %g must be >= 0", totalRate)
-	}
 	cfg.totalRate = totalRate
 
 	maxInflight, err := envInt("MAX_INFLIGHT", defaultMaxInflight)
 	if err != nil {
 		return cfg, err
-	}
-	if maxInflight < 1 {
-		return cfg, fmt.Errorf("MAX_INFLIGHT: %d must be >= 1", maxInflight)
 	}
 	cfg.maxInflight = maxInflight
 
@@ -512,9 +509,6 @@ func configFromEnv() (config, error) {
 	target, err := envRequired("TARGET_LB")
 	if err != nil {
 		return cfg, err
-	}
-	if !contains(allowlist, target) {
-		return cfg, fmt.Errorf("TARGET_LB: %q is not in TARGET_ALLOWLIST", target)
 	}
 	cfg.target = target
 
