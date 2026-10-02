@@ -160,6 +160,7 @@ See `MILESTONES.md` for Sprint 4–5 goals and deliverables. See `docs/adr/INDEX
 - `internal/logger/` — `log/slog` setup.
 - `configs/` — example configuration files.
 - `deployments/docker/` — dockerfiles, docker-compose for dummy backends and Nginx comparison.
+- `demo/` — local-only live demo stack (S5.T16–T17): four LBs, eight traffic clients, demo Prometheus/Grafana, the control service; all ports on `127.0.0.1`.
 - `bench/` — wrk / vegeta benchmark scripts and results.
 - `docs/` — architecture, ADRs, design docs, session logs.
 - `docs/design/` — frozen contract documents per sprint.

@@ -182,10 +182,14 @@ services:
   prometheus:
     image: prom/prometheus:v2.53.0
     depends_on:
-      - lb-roundrobin
-      - lb-leastconn
-      - lb-consistent-hash
-      - lb-p2c-ewma
+      lb-roundrobin:
+        condition: service_healthy
+      lb-leastconn:
+        condition: service_healthy
+      lb-consistent-hash:
+        condition: service_healthy
+      lb-p2c-ewma:
+        condition: service_healthy
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
 
