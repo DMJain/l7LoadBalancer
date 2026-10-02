@@ -466,10 +466,11 @@ Scoped in `.scratch/s5-t13-t19-portfolio-docs/` as one bundle spec plus ten tick
   - Acceptance: as in the issue file.
   - Completed: 2026-10-02. MILESTONES.md Sprint 5 deliverables and exit criteria amended; S5.T13–T15 promoted in the proposals list; "Time to detection" relabel recorded as proposed; this section added with ten entries; S5.T17.2 acceptance and issue file mention the README video slot. Docs-only, no code (TDD-exempt per AGENTS.md).
 
-- [TODO] S5.T14.1 — Evidence dossier for the design document
+- [DONE] S5.T14.1 — Evidence dossier for the design document (completed 2026-10-02)
   - Spec: `.scratch/s5-t13-t19-portfolio-docs/issues/02-t14-1-evidence-dossier.md`
   - Depends: S5.D2
   - Acceptance: as in the issue file.
+  - Completed: `.scratch/s5-t13-t19-portfolio-docs/dossier.md`, approved item by item by the owner. Decisions that bind S5.T14.2–T14.3 and S5.T13: C3/C4 state a 1750 req/s target with the delivered average (about 1210 req/s); the 3500 req/s peak is dropped; the C4 ejection mechanism is cited to ADR-0018 and the figures, with the circuit breaker named only as consistent with them; the bounded ring is described as spilling a minority of the hot key, not rebalancing it; hot-key figures are 4,005 / 3,126 (seed 2253) beside the 60-seed range; the soak is cited as one unretained run. Docs-only (TDD-exempt).
 
 - [TODO] S5.T14.2 — `docs/design-decisions.md`, topics 1–4
   - Spec: `.scratch/s5-t13-t19-portfolio-docs/issues/03-t14-2-design-decisions-1-4.md`
