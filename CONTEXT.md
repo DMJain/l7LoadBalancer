@@ -217,3 +217,29 @@ load generator is the extreme case: every request has one hash key, so an
 unbounded ring sends all traffic to one backend, while bounded loads spills
 the excess to the backends that follow it on the ring.
 _Avoid_: hotspot, sticky client
+
+**Matched** (benchmark context):
+A comparison in which the load balancer and Nginx run the same algorithm, so
+a difference in the numbers points at the implementation and the setup, not at
+the choice of policy. Round-robin and least-connections are matched. Contrast
+**nearest-equivalent**, where Nginx has no identical algorithm.
+_Avoid_: like-for-like (unqualified), apples-to-apples
+
+**Peak** (benchmark context):
+The highest request rate, in requests per second, that a proxy sustained in
+one benchmark. A rate counts as sustained when three things hold: the 99th
+percentile latency stays under 100 ms (99 of every 100 requests finish within
+that time), fewer than 1% of requests fail, and the load generator, the
+program that sends the test requests, actually delivers at least 95% of the
+requested rate. The benchmark raises the rate until a test fails, then
+narrows in on the last rate that passed. The result is accurate only to the
+search's step size: 500 req/s for small responses, 25 req/s for 1 MiB ones.
+_Avoid_: max throughput, capacity (a different term, see **Capacity**)
+
+**Rig-limited** (benchmark context):
+A measured peak that reflects the limits of the load generator or the test
+machine, not of the proxy. The generator has two CPU cores, so for large
+responses it cannot send requests fast enough to reach the proxy's real
+ceiling. A rig-limited number is a lower bound on what the proxy can do and
+is never presented as its ceiling.
+_Avoid_: bottlenecked, saturated (unqualified)
