@@ -380,7 +380,7 @@ Scoped in `.scratch/s5-t5-t12-bench-execution/` as one bundle spec plus 20 ticke
 
 ## Sprint 5 — Local Live Demo (S5.T16–T17)
 
-Scoped in `.scratch/s5-t16-t17-local-demo/` as one bundle spec plus tickets. The bundle's `spec.md` is the authoritative scope boundary. Decided in the S5.T16–T17 grilling (2026-10-02) and recorded in ADR-0023: **there is no public deployment** — the originally framed live public deployment is superseded by a local-only demo stack under `demo/` (all ports on `127.0.0.1`), and ADR-0005 is unchanged. S5.D1 is [DONE]. Order: S5.D1 → {S5.T16.1, S5.T16.2} (parallel, disjoint modules) → S5.T16.3 → S5.T16.5 (the rig is validated before any UI is built on it) → S5.T16.4 → S5.T17.
+Scoped in `.scratch/s5-t16-t17-local-demo/` as one bundle spec plus nine tickets. The bundle's `spec.md` is the authoritative scope boundary. Decided in the S5.T16–T17 grilling (2026-10-02) and recorded in ADR-0023: **there is no public deployment** — the originally framed live public deployment is superseded by a local-only demo stack under `demo/` (all ports on `127.0.0.1`), and ADR-0005 is unchanged. S5.D1 is [DONE]. Order: S5.D1 → {S5.T16.1, S5.T16.2, S5.T16.3.1} (parallel, disjoint modules) → S5.T16.3.2 → S5.T16.5 (the rig is validated before any UI is built on it) → S5.T16.4.1 → S5.T16.4.2 → S5.T17.1 → S5.T17.2 (owner-recorded).
 
 - [DONE] S5.D1 — Tracking amendment + ADR-0023 (Claude Code (claude-opus-5-5), started 2026-10-02T06:40:34Z, completed 2026-10-02T06:45:00Z)
   - Spec: the S5.T16–T17 grilling session (2026-10-02), recorded in ADR-0023; the bundle spec and issue files under `.scratch/s5-t16-t17-local-demo/` follow
@@ -389,25 +389,46 @@ Scoped in `.scratch/s5-t16-t17-local-demo/` as one bundle spec plus tickets. The
   - Acceptance: MILESTONES.md Sprint 5 deliverables gain S5.T16 and S5.T17 and its exit criteria gain "one-command local demo passes its acceptance check + recorded demo video" (MILESTONES carried no "live demo link" criterion to replace — verified); this bundle section and its `[TODO]` entries with blocking edges; S5.T18 and the degraded-slice leak recorded as proposed; ADR-0023 written and indexed; docs-only (TDD-exempt per AGENTS.md).
 
 - [TODO] S5.T16.1 — Dummy-backend admin listener
+  - Spec: `.scratch/s5-t16-t17-local-demo/issues/01-t16-1-backend-admin-listener.md`
   - Depends: S5.D1
-  - Acceptance: a separate listener (`:9091`) started only when `ADMIN_ENABLED=true`; `POST` only; unknown JSON fields rejected; sets `sleep_ms`, `jitter_ms` (uniform ±, effective sleep clamped at ≥ 0) and `fail_rate` at runtime; never routed through the LB; the `SLEEP_MS`/`FAIL_RATE` env path and `/health`/`/stats` bypasses unchanged; with `ADMIN_ENABLED` unset, runtime behaviour unchanged (bench and root stack unaffected); table-driven and race-checked tests.
+  - Acceptance: profile prefactor first (no behaviour change); a `:9091` listener only when `ADMIN_ENABLED=true`; `POST` only, unknown fields and out-of-range values rejected, omitted fields keep their value; `sleep_ms`/`jitter_ms` (clamped ≥ 0)/`fail_rate` at runtime; payload paths accept a discarded `POST` body; `/health`/`/stats` still bypass; runtime behaviour unchanged when off; Red-first, race-checked.
 
 - [TODO] S5.T16.2 — Traffic generator
+  - Spec: `.scratch/s5-t16-t17-local-demo/issues/02-t16-2-traffic-generator.md`
   - Depends: S5.D1
-  - Acceptance: a Go client with Poisson arrivals, mixed response and request-body sizes, and a Zipf-ranked share of a total rate read from `RANK` (1..8); total rate adjustable at runtime via a control endpoint; bounded workers and memory per ADR-0021/ADR-0022; tests Red-first.
+  - Acceptance: Poisson arrivals at a Zipf-ranked (`RANK`, s = 1.0) share of a total rate; mixed response and request-body sizes; runtime rate and allowlisted target via a control endpoint reporting offered/sent/dropped/completed/errors; bounded in-flight with excess counted as dropped (ADR-0021/0022); Red-first against an `httptest` stand-in.
 
-- [TODO] S5.T16.3 — `demo/` compose, Prometheus, and dashboard variables
-  - Depends: S5.T16.1, S5.T16.2
-  - Acceptance: a `demo/` compose independent of `bench/` and the root stack, with four LBs (one config file per algorithm, distinct Prometheus `job`s), four backends with `ADMIN_ENABLED=true`, eight generator services from one YAML anchor with `RANK=1..8`, a 1 s-scrape Prometheus, and Grafana with `GF_SECURITY_ALLOW_EMBEDDING=true` plus anonymous Viewer access; every published port bound to `127.0.0.1`; the single dashboard JSON gains `$window` (default `5m`), an LB variable on `job`, and a per-backend request-share panel, with the root stack rendering as before.
+- [TODO] S5.T16.3.1 — Dashboard `$window`, LB variable, request-share panel
+  - Spec: `.scratch/s5-t16-t17-local-demo/issues/03-t16-3-1-dashboard-variables.md`
+  - Depends: S5.D1
+  - Acceptance: `$window` (default `5m`) replaces every `[5m]`; an LB variable on Prometheus `job` filters every panel; a per-backend request-share panel; still one dashboard JSON; the root stack renders as before (observability smoke passes).
+
+- [TODO] S5.T16.3.2 — `demo/` compose stack
+  - Spec: `.scratch/s5-t16-t17-local-demo/issues/04-t16-3-2-demo-compose-stack.md`
+  - Depends: S5.T16.1, S5.T16.2, S5.T16.3.1
+  - Acceptance: four LBs (one config per algorithm, distinct `job`s), four `ADMIN_ENABLED` backends, eight generators from one anchor with `RANK=1..8`, 1 s-scrape Prometheus, embeddable Grafana with anonymous Viewer; every published port on `127.0.0.1`; one-command up/down; traffic visible at `var-window=15s`.
 
 - [TODO] S5.T16.5 — Latency-isolation acceptance check
-  - Depends: S5.T16.3
-  - Acceptance: a scripted check (jitter 0). Phase 1, round-robin LB active: backend3 set to 200 ms; after 30 s backend3 p50 ≥ 150 ms and backends 1, 2, 4 p50 ≤ 20 ms. Phase 2, p2c-ewma LB active: after convergence, backend3 request share < 15%. Exits non-zero naming the failed assertion.
+  - Spec: `.scratch/s5-t16-t17-local-demo/issues/05-t16-5-latency-isolation-check.md`
+  - Depends: S5.T16.3.2
+  - Acceptance: phase 1 (round-robin, backend3 at 200 ms, jitter 0, after 30 s): backend3 p50 ≥ 150 ms, backends 1/2/4 ≤ 20 ms; phase 2 (p2c-ewma, after convergence): backend3 share < 15%; failures name assertion, LB and values; restore trap; one recorded negative run.
 
-- [TODO] S5.T16.4 — Control service and page
+- [TODO] S5.T16.4.1 — Control service and page: switch, rate, profiles, embedded panels
+  - Spec: `.scratch/s5-t16-t17-local-demo/issues/06-t16-4-1-control-service-page.md`
   - Depends: S5.T16.5
-  - Acceptance: one page that switches the active LB (re-points the generators; no algorithm reload), sets per-backend latency/jitter/failure through the admin listeners, kills and revives backend containers through the Docker socket (allowlisted to the demo's backends), and sets the total load rate, fanned out to all eight generators; charts are embedded panels of the existing dashboard with `var-window=15s&refresh=5s`; no new charting code; socket mount and `127.0.0.1` binding only in `demo/`.
+  - Acceptance: `net/http` service with an embedded plain-JS page; switch active LB and set total rate fanned out to all eight generators with partial failures reported; set backend profiles; current state shown; embedded panels at `var-window=15s&refresh=5s`; port on `127.0.0.1`; no Docker socket; Red-first against `httptest` stand-ins.
 
-- [TODO] S5.T17 — Demo script
-  - Depends: S5.T16.4
-  - Acceptance: scenario sequence, click path, and expected on-screen state for each step, including a convergence pause after every LB switch (ADR-0023 decision 5); used to record the demo video.
+- [TODO] S5.T16.4.2 — Kill and revive backends through the Docker socket
+  - Spec: `.scratch/s5-t16-t17-local-demo/issues/07-t16-4-2-kill-revive-docker-socket.md`
+  - Depends: S5.T16.4.1
+  - Acceptance: socket mounted into the control service in `demo/` only; Docker Engine API over the unix socket with the stdlib client (no SDK); `kill` semantics and revive; allowlist of the four demo backends enforced before any Engine call; container state on the page; Red-first against an Engine stand-in; verified live ejection and reinstatement.
+
+- [TODO] S5.T17.1 — Demo script
+  - Spec: `.scratch/s5-t16-t17-local-demo/issues/08-t17-1-demo-script.md`
+  - Depends: S5.T16.4.2
+  - Acceptance: ordered scenarios with click path, ADR-backed narration, expected on-screen state and waits; convergence pause after every LB switch; reset between scenarios; states the known selector behaviours (p2c-ewma rank split and starvation, least-connections tie-break, consistent-hash-bounded spill, flaky backend vs outlier/circuit); every expected state observed in one rehearsal.
+
+- [TODO] S5.T17.2 — Record the demo video (ready-for-human)
+  - Spec: `.scratch/s5-t16-t17-local-demo/issues/09-t17-2-record-demo-video.md`
+  - Depends: S5.T17.1
+  - Acceptance: recorded from a fresh `up` with the S5.T16.5 check passing first; follows the script; storage location decided by the owner; linked from the demo README.
