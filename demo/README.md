@@ -20,6 +20,10 @@ make demo-down    # docker compose -f demo/docker-compose.yml down
 backend, and the traffic generator, then starts eighteen containers. The first
 build takes a few minutes; later `up`s are fast.
 
+To rehearse or record a walkthrough, follow
+[`DEMO-SCRIPT.md`](DEMO-SCRIPT.md): the ordered scenarios, click paths, the ADR
+behind each claim, and the expected on-screen state (S5.T17.1).
+
 ## What is published
 
 | Host address | What |
