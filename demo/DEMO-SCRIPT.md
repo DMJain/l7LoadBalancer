@@ -28,13 +28,16 @@ deployment), ADR-0024 (generator), ADR-0025 (control service).
 
 2. Open two browser windows (or two tabs):
    - **Control page** — <http://127.0.0.1:8095/> — the one window you drive:
-     switch LB, set rate, set profiles, kill/revive, and three embedded charts.
-   - **Dashboard (optional)** — <http://127.0.0.1:3000/d/l7loadbalancer/?var-window=15s&var-lb=lb-roundrobin>
-     — the full six-panel view if you want to show one panel full-screen.
-
-   The control page's charts are the same dashboard panels at
-   `var-window=15s&refresh=5s` and follow whichever LB is active (ADR-0025
-   decision 5), so you never leave it to change the story.
+     switch LB, set rate, set profiles, kill/revive. Its three embedded charts
+     are the dashboard's **request rate**, **request latency p50/p99**, and
+     **request share** panels, at `var-window=15s&refresh=5s`, following the
+     active LB (ADR-0025 decision 5).
+   - **Dashboard** — <http://127.0.0.1:3000/d/l7loadbalancer/?var-window=15s&var-lb=lb-roundrobin>
+     — the full six-panel view. Open this for the panels the control page does
+     **not** embed: **circuit state**, **backend healthy**, and **active
+     connections by backend**. Scenarios 2a, 4 and 5 read those, so keep the
+     dashboard visible for them (set `var-lb` to the active LB, or the panel
+     shows mixed).
 
 3. Confirm the page shows `active: lb-roundrobin` and `now: 400 req/s`, and
    that every backend row reads `sleep_ms 0 jitter_ms 0 fail_rate 0` with
@@ -84,7 +87,7 @@ is closed and `lb_backend_healthy` is 1 for all four. The circuit cooldown is
 | **Click path** | Active LB = `lb-roundrobin` → *Switch active LB*. (This is the default; switch only if you are not already on it.) |
 | **Wait** | 20 s |
 | **Expected** | Generator totals ~`offered = sent`, `dropped 0`. Request rate ~370 req/s delivered of the 400 configured (the generator's counters are the honest check — ADR-0024). Request-share panel: **25 / 25 / 25 / 25 %**. p50 ~2.5 ms on all four. Every backend `healthy 1`, circuit `closed`. |
-| **Narrate** | "Round-robin ignores latency and load: four equal backends get an even quarter each. The generator is open-loop and Zipf-skewed across eight clients, so the *offered* rate is honest even when a backend slows (ADR-0024). The grey `lb_active_requests` stays near zero because each request lasts ~2.5 ms." |
+| **Narrate** | "Round-robin ignores latency and load: four equal backends get an even quarter each. The generator is open-loop and Zipf-skewed across eight clients, so the *offered* rate is honest even when a backend slows (ADR-0024). The dashboard's *Active connections by backend* panel stays near zero because each request lasts ~2.5 ms." |
 | **ADRs** | ADR-0013 (metrics); ADR-0024/ADR-0021/ADR-0022 (generator). |
 
 ## Scenario 2 — One far backend under each selector
@@ -101,7 +104,7 @@ Set it up: on the **backend3** row set `sleep_ms 200`, `jitter_ms 0`,
 | | |
 |---|---|
 | **Click path** | Active LB = `lb-roundrobin` → *Switch active LB*; wait 30 s |
-| **Expected** | Shares **still 25 / 25 / 25 / 25**. backend3 p50 ~175 ms (the p50 lands in the histogram bucket just under the 200 ms injection — see the note below), backends 1/2/4 ~2.5 ms. `lb_active_requests` ~17 on backend3. |
+| **Expected** | Shares **still 25 / 25 / 25 / 25**. backend3 p50 ~175 ms (the p50 lands in the histogram bucket just under the 200 ms injection — see the note below), backends 1/2/4 ~2.5 ms. The dashboard's *Active connections by backend* panel shows ~17 on backend3. |
 | **Narrate** | "Round-robin does not look at latency at all: backend3 still gets its quarter, and its in-flight count piles up while the others stay idle. This is exactly the leakage the `degraded` slice had to rule out — here it is *isolated*, which the acceptance check proved." |
 | **ADRs** | ADR-0023 decision 10; ADR-0013. |
 
@@ -155,7 +158,7 @@ set **backend4** back to `sleep_ms 0` → **Apply**. Wait 30 s.
 | **Click path** | With backend3 back at 200 ms (reset backend4 to 0; set backend3 to 200), Active LB = `lb-consistent-hash` → *Switch active LB*; wait 35 s. |
 | **Expected** | backend3 is **not** pinned at its fast share: it drops to ~3 %; backend1 rises to ~68 %, backend2 ~24 %, backend4 ~4.5 %. |
 | **Narrate** | "Consistent hashing normally pins each client to a backend forever — it is latency-blind by design. This is the *bounded-loads* variant (ADR-0009): a backend whose load exceeds capacity spills its keys to the next backend on the ring. A slow backend accumulates in-flight load, so it spills and stops receiving most of its keys. Note it is reacting to *load*, not to latency — the mechanism is different from p2c even though both move traffic." |
-| **ADRs** | ADR-0008 (ring pipeline); ADR-0009 (bounded loads, capacity, ε); ADR-0011 for the load signal. |
+| **ADRs** | ADR-0008 (ring pipeline); ADR-0009 (bounded loads; decision 2 defines the load signal as `ActiveConns`, decision 3 the capacity, ε = 0.25). |
 
 ## Scenario 3 — Zipf hot key under consistent-hash-bounded
 
@@ -165,10 +168,11 @@ Reset first (all backends `0/0/0`, rate 400, LB `lb-roundrobin`). Then:
 
 | | |
 |---|---|
-| **Click path** | Active LB = `lb-consistent-hash` → *Switch active LB*; wait 30 s |
+| **Click path** | Active LB = `lb-consistent-hash` → *Switch active LB* |
+| **Wait** | 30 s |
 | **Expected** | A clearly skewed but **stable** split — measured **52.8 / 5.6 / 41.9 / 0.1 %**. It does not drift while you watch: each of the eight clients is pinned to one backend for as long as the ring is unchanged. |
 | **Narrate** | "The hash key is the client's IP, and there are eight client containers with distinct IPs and Zipf-skewed rates. So the hot client's key owns one backend, the next few keys own another, and some backends own almost no keys. Because it is consistent hashing, those pins do not move — unlike p2c, which reshuffles as estimates change." |
-| **Bounded-spill note** | The split is not the raw key ownership you would get from a plain consistent hash: the *bounded* variant caps any backend at `(1 + ε) × average load` and spills the excess down the ring (ADR-0009), which is why the hot owner sits at ~53 % rather than everything the hot key would give it. Spill is relative to load, so changing the total rate does **not** change the split (measured near-identical at 400 and 2000 req/s). |
+| **Bounded-spill note** | The split is not the raw key ownership you would get from a plain consistent hash: the *bounded* variant admits a backend only while its in-flight load is within `max(1, ceil(avg × (1 + ε)))` and spills the excess down the ring (ADR-0009 decisions 2–3, ε = 0.25), which is why the hot owner sits at ~53 % rather than everything the hot key would give it. Spill is relative to load, so changing the total rate does **not** change the split (measured near-identical at 400 and 2000 req/s). |
 | **ADRs** | ADR-0008; ADR-0009; ADR-0023 decision 6; ADR-0024. |
 
 ## Scenario 4 — Flaky backend: outlier detection and the circuit breaker
@@ -179,26 +183,27 @@ Reset first (LB `lb-roundrobin`, rate 400). Then:
 
 | | |
 |---|---|
-| **Click path** | On the **backend2** row set `sleep_ms 0`, `jitter_ms 0`, `fail_rate 0.5` → **Apply**. Then watch the charts and the backend row. |
-| **Expected** | Within ~3 s backend2's request share collapses to ~0 and a small `5xx` rate appears (measured 0.07/s residual); `healthy` goes to **0** (passive outlier ejection — ADR-0011). The circuit gauge goes **open** ~6 s after injection and stays open. Meanwhile backend2's own `/health` still returns `200 ok` (it deliberately bypasses injected failure). The other three backends split evenly ~33 % each and the generators report no errors or drops. |
+| **Wait** | 15 s |
+| **Click path** | On the **backend2** row set `sleep_ms 0`, `jitter_ms 0`, `fail_rate 0.5` → **Apply**. Watch the control page's request-share chart and the dashboard's *Backend healthy* and *Circuit state* panels. |
+| **Expected** | Within ~3 s backend2's request share collapses to ~0 and a small `5xx` rate appears (measured 0.07/s residual); *Backend healthy* goes to **0** (passive outlier ejection — ADR-0011). *Circuit state* goes **open** ~6 s after injection and stays open. Meanwhile backend2's own `/health` still returns `200 ok` (the dummy backend's `/health` is a chaos-free control path — S5.T4-infra). The other three backends split evenly ~33 % each and the generators report no errors or drops. |
 | **Narrate** | "The backend now fails half its requests. Passive outlier detection sees the failures on the live request path and ejects it — traffic moves away within a couple of seconds, before the active probe would even have run three times. The circuit breaker then opens and gates the backend for its 30 s cooldown. The `/health` endpoint is a separate, chaos-free control path, so an orchestrator still sees the process as alive: the backend is *failing* without being *down*." |
-| **ADRs** | ADR-0011 (outlier + circuit composition); ADR-0012 (circuit gate); ADR-0014 (health-endpoint contract); ADR-0013. |
+| **ADRs** | ADR-0011 (outlier + circuit composition); ADR-0012 (circuit gate); ADR-0013 (the gauges); S5.T4-infra (the backend's `/health` path). |
 | **Recovery check** | Set `fail_rate 0` → **Apply**. Health returns in ~10 s (two good probes); wait up to 40 s for the circuit cooldown to close it, then all four backends read `healthy 1` / circuit closed / ~25 %. |
 
 ## Scenario 5 — Kill and revive a backend
 
 **Goal:** show abrupt death, ejection on **every** LB, clean 502s, reinstatement.
 Kill is the Docker Engine's abrupt kill, matching the Sprint 3/4 chaos tests
-(ADR-0025 amendment decision 9), and the demo backends have no restart policy so
-a killed backend stays down (ADR-0023 decision 7).
+(ADR-0025 amendment decision 9), and the demo backends deliberately carry no
+restart policy, so a killed backend stays down (`demo/docker-compose.yml`).
 
 | | |
 |---|---|
-| **Click path** | LB `lb-roundrobin` active. On the **backend1** row click **Kill**. Watch the `container:` label change. |
+| **Click path** | LB `lb-roundrobin` active. On the **backend1** row click **Kill**. Watch the row's `container:` label (control page) and the dashboard's *Backend healthy* panel. |
 | **Wait** | 15 s to eject |
-| **Expected** | backend1's `container` goes **`exited`**; `healthy` → 0 on every LB (all four LBs point at the same backends) and its request share decays to **0** within ~15 s. A handful of requests in flight at the moment of the kill get a clean **502** (measured 5). The other three backends take the whole rate and the generators report no errors. |
+| **Expected** | backend1's `container` goes **`exited`**; *Backend healthy* → 0 on every LB (all four LBs point at the same backends) and its request share decays to **0** within ~15 s. A handful of requests in flight at the moment of the kill get a clean **502** (measured 5). The other three backends take the whole rate and the generators report no errors. |
 | **Narrate** | "The kill is abrupt. Requests already in flight get a 502 — the failure is classified and returned, never retried (ADR-0018); the load balancer never replays a request it cannot know is idempotent. Within the health threshold every LB ejects backend1, and the other three absorb the traffic with zero dropped arrivals." |
-| **ADRs** | ADR-0018 (no retry); ADR-0011/ADR-0012 (ejection and gating); S4.T6 (backend death: clean 502); ADR-0025 amendment. |
+| **ADRs** | ADR-0018 (no retry); ADR-0011/ADR-0012 (ejection and gating); ADR-0025 amendment (kill semantics). The clean 502 is prior work S4.T6 (backend death), not an ADR. |
 
 Then:
 
@@ -231,6 +236,7 @@ docker compose -f demo/docker-compose.yml kill -s HUP lb-roundrobin
 
 | | |
 |---|---|
+| **Wait** | ~15 s (the reload is immediate; the 15 s chart window then refills) |
 | **Expected** | The LB stays up (RPS does not dip). Its log prints `"msg":"config reloaded","event":"config_reloaded","added":0,"removed":1,"unchanged":3`. The remaining three backends pick up the traffic and settle at ~33 % each; **zero** errors and **zero** drops at the generator. backend4's own `/stats` counter still ticks slowly — the *other three LBs' health checkers* keep probing it; the reload removed it from this LB only. |
 | **Narrate** | "SIGHUP changed the backend list and nothing else — the algorithm is not reloadable, only the list is (ADR-0015). Removed backends stop being selected immediately and any in-flight request is allowed to drain inside the 30 s window before it would be cancelled (ADR-0016). At these 2.5 ms latencies drain is instant; the bench proved the zero-drop property with a slow backend. Because the config is a single-file bind mount, the file is rewritten **in place** — a rename would leave the mount pointing at the old file." |
 
@@ -243,6 +249,7 @@ docker compose -f demo/docker-compose.yml kill -s HUP lb-roundrobin
 
 | | |
 |---|---|
+| **Wait** | ~15 s |
 | **Expected** | `added:1 removed:0 unchanged:3` and backend4 returns to ~25 %. |
 | **ADRs** | ADR-0015 (reload architecture); ADR-0016 (drain lifecycle); ADR-0018 (no retry). |
 
@@ -264,12 +271,13 @@ observed in rehearsal.
   at 0–1 (a request lasts ~2.5 ms), so the tie-break, not the balance, is what
   the viewer sees; the slow backend is still avoided because it accumulates
   in-flight.
-- **consistent-hash-bounded** pins each client (each `RANK`) to a backend and
-  spills when the owner's **load** exceeds **capacity**; with Zipf-skewed clients
-  the hottest key's owner is the one that spills (ADR-0009).
+- **consistent-hash-bounded** pins each client container (one hash key per
+  `RANK`) to a backend and spills when the owner's **load** exceeds **capacity**;
+  with Zipf-skewed clients the hottest key's owner is the one that spills
+  (ADR-0008, ADR-0009).
 - **A flaky backend** is ejected by passive outlier detection and gated by the
   circuit breaker while its `/health` keeps returning 200 — failing, not down
-  (ADR-0011, ADR-0014).
+  (ADR-0011; the `/health` chaos-free path is S5.T4-infra).
 - **Never promise an algorithm switch by SIGHUP.** Only the backend list
   reloads; a reload that changes `algorithm` is rejected whole (ADR-0015
   decision 4). "Switching algorithm" here means pointing the eight clients at a
