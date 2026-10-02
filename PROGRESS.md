@@ -484,10 +484,11 @@ Scoped in `.scratch/s5-t13-t19-portfolio-docs/` as one bundle spec plus ten tick
   - Acceptance: as in the issue file.
   - Completed: topics 5–7 and "Decisions not covered here" added; definitions moved to first use across the whole document; every topic-7 primitive cited to a file and line from the approved dossier. Reader check and number trace are in `docs/sessions/2026-10-02-claude.md`. Two numbers (30 s cooldown, 2 passing probes) await owner confirmation. Docs-only (TDD-exempt).
 
-- [IN_PROGRESS] S5.T15 — `docs/what-id-do-differently.md` (Claude Code, started 2026-10-03T00:10+05:30)
+- [DONE] S5.T15 — `docs/what-id-do-differently.md` (Claude Code, completed 2026-10-03)
   - Spec: `.scratch/s5-t13-t19-portfolio-docs/issues/05-t15-what-id-do-differently.md`
   - Depends: S5.T14.3
   - Acceptance: as in the issue file.
+  - Completed: `docs/what-id-do-differently.md` with nine items (no-decay EWMA; no cold-start guard; degraded-scenario leak, cause UNVERIFIED and no numbers; rig-limited benchmarking; stale P2C state after an LB switch; "Time to detection" error-window width; health probes counted as arrivals; number check missing section-boundary tables; seven attribution-trailer commits, facts only) and two empty owner-voice slots. Reader check and number trace are in `docs/sessions/2026-10-03-claude.md`. Improvement options in items 1 and 5 beyond the tracking entries await owner confirmation. Docs-only (TDD-exempt).
 
 - [TODO] S5.T13.1 — Architecture diagrams
   - Spec: `.scratch/s5-t13-t19-portfolio-docs/issues/06-t13-1-architecture-diagrams.md`
