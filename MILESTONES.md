@@ -97,11 +97,14 @@ Strategic plan. Each sprint = one weekend of focused work. Tasks under each spri
 - README with architecture diagram (Mermaid or Excalidraw export).
 - `docs/design-decisions.md` — rationale-heavy doc covering every non-trivial choice.
 - `docs/what-id-do-differently.md` — honest retrospective.
+- S5.T16 — local live-demo stack under `demo/` (ADR-0023; supersedes the original live public deployment): one LB per algorithm sharing four backends, an eight-client Zipf-ranked Poisson traffic generator with a runtime rate control, a dummy-backend admin listener for runtime latency/jitter/failure, and a control service plus a single page that embeds the existing Grafana dashboard. All ports bound to `127.0.0.1`. Gated by a two-phase latency-isolation acceptance check.
+- S5.T17 — demo script: scenario sequence, click path, and expected on-screen state for each step, used to record the demo video.
 
 **Exit criteria**:
 - `make bench-repro` (built on `bench/run.sh`) reproduces all published numbers from a clean checkout, refusing to start on a dirty tree, running containers, or fewer than eight Docker vCPUs.
 - README opens with architecture diagram and 3-sentence project summary.
 - Design decisions doc covers: why stdlib over frameworks, why bounded-loads CH, why P2C, reload architecture, failure-mode interaction, and honest benchmark comparison with Nginx.
+- One-command local demo (`demo/`) passes its latency-isolation acceptance check, and a recorded demo video following the S5.T17 script exists.
 
 ## Post-Sprint 5 — Optional extensions
 

@@ -26,6 +26,7 @@ One-line decision summaries. Read the full ADR when your task touches that subsy
 | [0020](0020-benchmark-tool-vegeta-over-wrk.md) | Benchmark tool — vegeta over wrk | Accepted | vegeta is the only load generator: wrk has no HTTP/2, and splitting tools breaks attribution; constant-rate attacks avoid coordinated omission and HDR histograms come natively. |
 | [0021](0021-bounded-memory-in-benchmark-harness.md) | Bounded memory in the benchmark harness | Amended by ADR-0022 | The `vegeta` container bounds its Go heap (`GOMEMLIMIT`/`GOGC`) and aligns `GOMAXPROCS` to its cpuset, so the 1 MB runs complete on Docker Desktop defaults; raising the VM memory is rejected as unreproducible. |
 | [0022](0022-honest-benchmarking-under-generator-limits.md) | Honest benchmarking under generator limits | Accepted | Cap generator workers/connections, require a step to deliver ≥95% of its target rate to count as sustained, and seed each payload size from the rig's bytes-per-second capacity — so the harness reports the LB's peak, not the generator's, and "no sustainable rate" is a valid result. |
+| [0023](0023-local-live-demo.md) | Local live demo, no public deployment | Accepted | The live public deployment is superseded by a loopback-only `demo/` stack: one LB per algorithm over shared backends, runtime latency via an opt-in backend admin listener, eight Zipf-ranked client services, and a socket-holding control page embedding the existing dashboard; ADR-0005 unchanged. |
 
 ## Decisions without a dedicated ADR
 

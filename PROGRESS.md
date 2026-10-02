@@ -380,11 +380,12 @@ Scoped in `.scratch/s5-t5-t12-bench-execution/` as one bundle spec plus 20 ticke
 
 ## Sprint 5 — Local Live Demo (S5.T16–T17)
 
-Scoped in `.scratch/s5-t16-t17-local-demo/` as one bundle spec plus tickets. The bundle's `spec.md` is the authoritative scope boundary. Decided in the S5.T16–T17 grilling (2026-10-02) and recorded in ADR-0023: **there is no public deployment** — the originally framed live public deployment is superseded by a local-only demo stack under `demo/` (all ports on `127.0.0.1`), and ADR-0005 is unchanged. Order: S5.D1 → {S5.T16.1, S5.T16.2} (parallel, disjoint modules) → S5.T16.3 → S5.T16.5 (the rig is validated before any UI is built on it) → S5.T16.4 → S5.T17.
+Scoped in `.scratch/s5-t16-t17-local-demo/` as one bundle spec plus tickets. The bundle's `spec.md` is the authoritative scope boundary. Decided in the S5.T16–T17 grilling (2026-10-02) and recorded in ADR-0023: **there is no public deployment** — the originally framed live public deployment is superseded by a local-only demo stack under `demo/` (all ports on `127.0.0.1`), and ADR-0005 is unchanged. S5.D1 is [DONE]. Order: S5.D1 → {S5.T16.1, S5.T16.2} (parallel, disjoint modules) → S5.T16.3 → S5.T16.5 (the rig is validated before any UI is built on it) → S5.T16.4 → S5.T17.
 
-- [IN_PROGRESS] S5.D1 — Tracking amendment + ADR-0023 (Claude Code (claude-opus-5-5), started 2026-10-02T06:40:34Z) — MILESTONES/PROGRESS amendment and ADR-0023 for the local live demo
+- [DONE] S5.D1 — Tracking amendment + ADR-0023 (Claude Code (claude-opus-5-5), started 2026-10-02T06:40:34Z, completed 2026-10-02T06:45:00Z)
   - Spec: the S5.T16–T17 grilling session (2026-10-02), recorded in ADR-0023; the bundle spec and issue files under `.scratch/s5-t16-t17-local-demo/` follow
   - Depends: none
+  - Completed: MILESTONES.md Sprint 5 gains the S5.T16 and S5.T17 deliverables and the local-demo exit criterion (no "live demo link" criterion existed to replace); this section and its six `[TODO]` entries with blocking edges; S5.T18 and the degraded-slice leak recorded as proposed; ADR-0023 (local live demo, no public deployment) written, accepted, and indexed. ADR-0023 records two code facts surfaced while drafting: EWMA state on an LB switch is cold only on first activation and stale thereafter, and EWMA has no decay, so p2c-ewma can starve a backend after its latency is restored. Docs-only, no code (TDD-exempt per AGENTS.md).
   - Acceptance: MILESTONES.md Sprint 5 deliverables gain S5.T16 and S5.T17 and its exit criteria gain "one-command local demo passes its acceptance check + recorded demo video" (MILESTONES carried no "live demo link" criterion to replace — verified); this bundle section and its `[TODO]` entries with blocking edges; S5.T18 and the degraded-slice leak recorded as proposed; ADR-0023 written and indexed; docs-only (TDD-exempt per AGENTS.md).
 
 - [TODO] S5.T16.1 — Dummy-backend admin listener
