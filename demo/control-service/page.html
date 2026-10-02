@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>l7LoadBalancer demo control</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: system-ui, sans-serif; margin: 1.5rem; max-width: 1100px; }
+  h1 { font-size: 1.4rem; }
+  h2 { font-size: 1.05rem; margin-top: 1.5rem; }
+  section { border: 1px solid #8884; border-radius: 8px; padding: 1rem; margin: 1rem 0; }
+  label { display: inline-block; min-width: 6rem; }
+  input { width: 6rem; }
+  button { margin-left: .5rem; }
+  .row { margin: .35rem 0; }
+  .muted { opacity: .7; }
+  .ok { color: #2e7d32; }
+  .bad { color: #c62828; font-weight: 600; }
+  table { border-collapse: collapse; margin-top: .5rem; }
+  th, td { border: 1px solid #8884; padding: .2rem .5rem; font-variant-numeric: tabular-nums; }
+  iframe { border: 1px solid #8884; border-radius: 8px; width: 100%; height: 280px; }
+  #result { min-height: 1.2rem; }
+</style>
+</head>
+<body>
+<h1>l7LoadBalancer — local demo control</h1>
+<p class="muted">Loopback only. The charts are panels of the demo Grafana dashboard, at <code>var-window=15s&amp;refresh=5s</code>.</p>
+
+<section>
+  <h2>Active LB</h2>
+  <div class="row">
+    <select id="lb-select"></select>
+    <button onclick="applyLB()">Switch active LB</button>
+    <span id="active-lb" class="muted"></span>
+  </div>
+</section>
+
+<section>
+  <h2>Total load rate</h2>
+  <div class="row">
+    <label for="rate">Total req/s</label>
+    <input id="rate" type="number" min="0" step="10">
+    <button onclick="applyRate()">Set rate</button>
+    <span id="rate-now" class="muted"></span>
+  </div>
+</section>
+
+<section>
+  <h2>Backend profiles</h2>
+  <div id="backends"></div>
+</section>
+
+<section>
+  <h2>Generators</h2>
+  <div class="row" id="gen-totals"></div>
+  <table id="gen-table"><thead><tr><th>client</th><th>target</th><th>offered</th><th>sent</th><th>dropped</th></tr></thead><tbody></tbody></table>
+</section>
+
+<div id="result"></div>
+
+<section>
+  <h2>Charts</h2>
+  <iframe id="chart-rate" title="Request rate by backend" loading="lazy"></iframe>
+  <iframe id="chart-latency" title="Request latency p50 / p99" loading="lazy" style="margin-top:1rem"></iframe>
+  <iframe id="chart-share" title="Request share by backend" loading="lazy" style="margin-top:1rem"></iframe>
+</section>
+
+<script>
+"use strict";
+
+// Panel ids in the single dashboard JSON (l7loadbalancer): 1 request rate,
+// 2 latency p50/p99, 6 request share. The iframe query is fixed at the demo
+// window/refresh; the LB is the active one (ADR-0025 decision 5).
+const PANELS = { "chart-rate": 1, "chart-latency": 2, "chart-share": 6 };
+let state = null;
+
+function el(id) { return document.getElementById(id); }
+
+function setResult(ok, text) {
+  const r = el("result");
+  r.className = ok ? "ok" : "bad";
+  r.textContent = text;
+}
+
+// actionResult turns a fan-out or forward response body into a page message.
+function actionResult(body) {
+  if (body.ok) return { ok: true, text: "ok" };
+  const failed = (body.failed && body.failed.length) ? body.failed.join(", ") : "";
+  const text = body.error ? body.error : ("failed: " + failed);
+  return { ok: false, text: text };
+}
+
+async function post(path, payload) {
+  try {
+    const resp = await fetch(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    if (!resp.ok) {
+      setResult(false, await resp.text());
+      return;
+    }
+    const result = actionResult(await resp.json());
+    setResult(result.ok, result.text);
+    await refresh();
+  } catch (err) {
+    setResult(false, String(err));
+  }
+}
+
+function applyLB() {
+  post("/api/lb", { lb: el("lb-select").value });
+}
+function applyRate() {
+  post("/api/rate", { total_rate: Number(el("rate").value) });
+}
+function applyBackend(name) {
+  post("/api/backend", {
+    backend: name,
+    sleep_ms: Number(el("sleep-" + name).value),
+    jitter_ms: Number(el("jitter-" + name).value),
+    fail_rate: Number(el("fail-" + name).value)
+  });
+}
+
+// setInput updates an input's value unless the owner is typing in it, so the
+// 2 s refresh cannot clobber a value mid-edit.
+function setInput(input, value) {
+  if (document.activeElement !== input) input.value = value;
+}
+
+function numberField(kind, name, min, step) {
+  const wrap = document.createElement("span");
+  wrap.append(kind === "fail" ? " fail_rate " : " " + kind + "_ms ");
+  const input = document.createElement("input");
+  input.type = "number";
+  input.min = String(min);
+  input.step = String(step);
+  input.id = kind + "-" + name;
+  wrap.appendChild(input);
+  return wrap;
+}
+
+function backendRow(name) {
+  const row = document.createElement("div");
+  row.className = "row";
+  const label = document.createElement("label");
+  label.textContent = name;
+  row.appendChild(label);
+  row.appendChild(numberField("sleep", name, 0, 1));
+  row.appendChild(numberField("jitter", name, 0, 1));
+  row.appendChild(numberField("fail", name, 0, 0.05));
+  const btn = document.createElement("button");
+  btn.textContent = "Apply";
+  btn.onclick = function () { applyBackend(name); };
+  row.appendChild(btn);
+  const status = document.createElement("span");
+  status.className = "status bad";
+  row.appendChild(status);
+  return row;
+}
+
+function cell(text, cls) {
+  const td = document.createElement("td");
+  td.textContent = text;
+  if (cls) td.className = cls;
+  return td;
+}
+
+// Peer-derived strings (names, targets, errors) are set with textContent, never
+// innerHTML, so a peer cannot inject markup into the page.
+function renderBackends(backends) {
+  const box = el("backends");
+  if (box.children.length !== backends.length) {
+    box.innerHTML = "";
+    for (const b of backends) box.appendChild(backendRow(b.name));
+  }
+  backends.forEach(function (b, i) {
+    const row = box.children[i];
+    setInput(row.querySelector("#sleep-" + b.name), b.sleep_ms);
+    setInput(row.querySelector("#jitter-" + b.name), b.jitter_ms);
+    setInput(row.querySelector("#fail-" + b.name), b.fail_rate);
+    row.querySelector(".status").textContent = b.error || "";
+  });
+}
+
+function renderGenerators(gens) {
+  let offered = 0, sent = 0, dropped = 0, errors = 0;
+  for (const g of gens) { offered += g.offered; sent += g.sent; dropped += g.dropped; errors += g.errors; }
+  el("gen-totals").textContent =
+    "offered " + offered + " · sent " + sent + " · dropped " + dropped + " · errors " + errors;
+  const tbody = el("gen-table").querySelector("tbody");
+  tbody.innerHTML = "";
+  for (const g of gens) {
+    const tr = document.createElement("tr");
+    tr.appendChild(cell(g.name));
+    tr.appendChild(g.error ? cell(g.error, "bad") : cell(g.target));
+    tr.appendChild(cell(g.offered));
+    tr.appendChild(cell(g.sent));
+    tr.appendChild(cell(g.dropped));
+    tbody.appendChild(tr);
+  }
+}
+
+function renderCharts(lb) {
+  for (const id of Object.keys(PANELS)) {
+    const panel = PANELS[id];
+    el(id).src = state.grafana_url + "/d/l7loadbalancer/?panelId=" + panel +
+      "&viewPanel=" + panel + "&var-window=15s&refresh=5s&var-lb=" + encodeURIComponent(lb) + "&kiosk";
+  }
+}
+
+function render() {
+  el("active-lb").textContent = state.active_lb
+    ? ("active: " + state.active_lb)
+    : "active: mixed / unknown";
+  if (state.total_rate !== null) el("rate-now").textContent = "now: " + state.total_rate + " req/s";
+
+  const sel = el("lb-select");
+  if (sel.options.length === 0) {
+    for (const lb of state.lbs) {
+      const o = document.createElement("option");
+      o.value = lb.name;
+      o.textContent = lb.name;
+      sel.appendChild(o);
+    }
+  }
+  if (state.active_lb) sel.value = state.active_lb;
+
+  renderBackends(state.backends);
+  renderGenerators(state.generators);
+  // Charts follow the selected LB; when the generators are mixed the selection
+  // keeps the last active LB rather than blanking (ADR-0025 decision 5).
+  renderCharts(sel.value);
+}
+
+async function refresh() {
+  try {
+    const resp = await fetch("/api/state");
+    if (!resp.ok) { setResult(false, await resp.text()); return; }
+    state = await resp.json();
+    render();
+  } catch (err) {
+    setResult(false, String(err));
+  }
+}
+
+refresh();
+setInterval(refresh, 2000);
+</script>
+</body>
+</html>

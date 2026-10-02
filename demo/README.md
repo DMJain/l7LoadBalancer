@@ -24,6 +24,7 @@ build takes a few minutes; later `up`s are fast.
 
 | Host address | What |
 |---|---|
+| `http://127.0.0.1:8095` | Control page — switch LB, set rate, set backend profiles |
 | `http://127.0.0.1:3000` | Grafana (dashboard `l7LoadBalancer`) |
 | `http://127.0.0.1:8080` | LB client port — `round_robin` |
 | `http://127.0.0.1:8082` | LB client port — `least_conn` |
@@ -55,9 +56,20 @@ Zipf rank (`s = 1.0`), so rank 1 sends the most and rank 8 the least. Each clien
 is a separate container, so consistent-hash sees eight distinct keys. The mix is
 70% 200 B / 25% 10 KiB / 5% 1 MiB responses with 1 KiB and 64 KiB request bodies.
 
-Runtime control (switch LB, set rate, change a backend's latency/jitter/failure,
-kill and revive backends) arrives with S5.T16.4; until then the defaults above
-are what you see.
+## Control page
+
+Open `http://127.0.0.1:8095/` for the control page (S5.T16.4.1, ADR-0025). From
+it you can switch the active LB, set the total load rate, and set each backend's
+`sleep_ms` / `jitter_ms` / `fail_rate` — no terminal. The page reads the current
+state live from the eight generators and four admin listeners, so it shows the
+active LB, each backend's profile, the total rate and the generators'
+offered/sent/dropped counters, and it names any peer that failed to answer.
+Charts are iframes of the existing dashboard's panels at
+`var-window=15s&refresh=5s`, following the active LB. The control service holds
+no desired state: it validates every input, then fans the change out to all
+eight generators (or forwards a profile to one admin listener) over the internal
+network. Kill and revive over the Docker socket arrive with S5.T16.4.2; until
+then the control service mounts no socket.
 
 ## Acceptance check
 

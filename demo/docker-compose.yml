@@ -18,12 +18,17 @@
 #   * a demo Prometheus scraping each LB as its own job every 1 s (ADR-0023
 #     decision 9);
 #   * a demo Grafana provisioning the same single dashboard JSON the root stack
-#     ships, with embedding and anonymous Viewer access enabled.
+#     ships, with embedding and anonymous Viewer access enabled;
+#   * a control service serving the page from which the owner switches LB, sets
+#     the rate and sets backend profiles, reaching generators and admin
+#     listeners over the internal network only (S5.T16.4.1, ADR-0025).
 #
-# Ports: only Grafana and the four LB client ports are published, every one on
-# 127.0.0.1. Generator control ports, backend admin listeners, and LB metrics
-# and health ports stay on the internal demo network (ADR-0023 decision 2). The
-# stack is never configured or documented for any other bind address.
+# Ports: only Grafana, the control page and the four LB client ports are
+# published, every one on 127.0.0.1. Generator control ports, backend admin
+# listeners, and LB metrics and health ports stay on the internal demo network
+# (ADR-0023 decision 2). The stack is never configured or documented for any
+# other bind address. The control service mounts no Docker socket (that is
+# S5.T16.4.2).
 
 name: l7loadbalancer-demo
 
@@ -192,6 +197,22 @@ services:
         condition: service_healthy
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+
+  # Control page and JSON API (S5.T16.4.1, ADR-0025). It reads the generators and
+  # admin listeners live and fans out to them over the internal network; only its
+  # own page port is published, on 127.0.0.1. GRAFANA_URL is the browser-
+  # reachable Grafana (host loopback) because the page's iframes load in the
+  # owner's browser, not in this container. No Docker socket here (S5.T16.4.2).
+  control:
+    build:
+      context: ./control-service
+    ports:
+      - "127.0.0.1:8095:8090"
+    environment:
+      GENERATORS: "http://gen1:9090,http://gen2:9090,http://gen3:9090,http://gen4:9090,http://gen5:9090,http://gen6:9090,http://gen7:9090,http://gen8:9090"
+      BACKENDS: "http://backend1:9091,http://backend2:9091,http://backend3:9091,http://backend4:9091"
+      LBS: "http://lb-roundrobin:8080,http://lb-leastconn:8080,http://lb-consistent-hash:8080,http://lb-p2c-ewma:8080"
+      GRAFANA_URL: "http://127.0.0.1:3000"
 
   grafana:
     image: grafana/grafana:11.1.0
