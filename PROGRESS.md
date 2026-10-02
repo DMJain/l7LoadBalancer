@@ -478,7 +478,7 @@ Scoped in `.scratch/s5-t13-t19-portfolio-docs/` as one bundle spec plus ten tick
   - Acceptance: as in the issue file.
   - Completed: `docs/design-decisions.md` with an opening paragraph and topics 1–4, each as problem, options, choice, cost; worked examples for capacity, P2C and drain; C3 raw figures with the delivered-rate caveat; no-decay limit stated in topic 3. Reader check is in `docs/sessions/2026-10-02-claude.md`. Docs-only (TDD-exempt).
 
-- [TODO] S5.T14.3 — `docs/design-decisions.md`, topics 5–7 and close-out
+- [IN_PROGRESS] S5.T14.3 — `docs/design-decisions.md`, topics 5–7 and close-out (Claude Code, started 2026-10-02T23:50+05:30)
   - Spec: `.scratch/s5-t13-t19-portfolio-docs/issues/04-t14-3-design-decisions-5-7.md`
   - Depends: S5.T14.2
   - Acceptance: as in the issue file.
