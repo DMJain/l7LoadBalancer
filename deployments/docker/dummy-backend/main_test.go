@@ -75,17 +75,44 @@ func TestHandlerEndpoints(t *testing.T) {
 	}
 }
 
-// TestHandlerNonGETRejected keeps the pre-existing 405 behavior for every path.
-func TestHandlerNonGETRejected(t *testing.T) {
+// TestHandlerMethodContract locks the allowed methods per path: GET everywhere;
+// POST additionally on the payload paths, where the body is read and discarded so
+// the demo traffic generator can send uploads (S5.T16.1); every other method or
+// path keeps the pre-existing 405 with Allow: GET.
+func TestHandlerMethodContract(t *testing.T) {
 	h := newHandler("backend1", 0, 0, true, discardLogger())
 
-	for _, path := range []string{"/", "/health", "/200b", "/10kb", "/1mb"} {
-		t.Run(path, func(t *testing.T) {
-			rec := httptest.NewRecorder()
-			h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, path, nil))
-			assert.Equal(t, http.StatusMethodNotAllowed, rec.Code)
-		})
-	}
+	t.Run("post allowed on payload paths", func(t *testing.T) {
+		for _, path := range []string{"/200b", "/10kb", "/1mb"} {
+			t.Run(path, func(t *testing.T) {
+				rec := httptest.NewRecorder()
+				h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, path, strings.NewReader("body")))
+				assert.Equal(t, http.StatusOK, rec.Code)
+			})
+		}
+	})
+
+	t.Run("other methods and paths rejected", func(t *testing.T) {
+		cases := []struct {
+			method string
+			path   string
+		}{
+			{method: http.MethodPost, path: "/"},
+			{method: http.MethodPost, path: "/health"},
+			{method: http.MethodPost, path: "/stats"},
+			{method: http.MethodPut, path: "/200b"},
+			{method: http.MethodDelete, path: "/10kb"},
+			{method: http.MethodPatch, path: "/1mb"},
+		}
+		for _, tc := range cases {
+			t.Run(tc.method+" "+tc.path, func(t *testing.T) {
+				rec := httptest.NewRecorder()
+				h.ServeHTTP(rec, httptest.NewRequest(tc.method, tc.path, nil))
+				assert.Equal(t, http.StatusMethodNotAllowed, rec.Code)
+				assert.Equal(t, http.MethodGet, rec.Header().Get("Allow"))
+			})
+		}
+	})
 }
 
 // TestHealthBypassesChaos proves the probe endpoint is never subject to the
