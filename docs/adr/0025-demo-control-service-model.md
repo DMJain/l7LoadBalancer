@@ -115,3 +115,62 @@ precedent). It serves one embedded static page plus a small JSON API.
   wording ("panels") and because panel-scoped iframes let the page place the
   latency and share charts beside the controls; the dashboard URL remains the
   fallback.
+
+## Amendment (2026-10-02, S5.T16.4.2) — Docker Engine access for kill and revive
+
+Decision 6 deferred the Docker socket to S5.T16.4.2; this amendment records how
+the service now uses it. Nothing above changes: the service stays stateless, the
+page stays one embedded file, and the API keeps validating before any outbound
+call.
+
+7. **The Engine client is the standard library over the unix socket; no Docker
+   SDK.** `DOCKER_HOST` (default `unix:///var/run/docker.sock`, Docker's own
+   convention) selects the endpoint. A `unix://` host builds an
+   `http.Transport` whose `DialContext` dials the socket, with the base URL
+   `http://docker`; an `http`/`https` host points the same client straight at a
+   TCP endpoint. This keeps AGENTS.md's no-heavyweight-dependency rule and makes
+   the engine an `httptest` stand-in in tests, the same seam the peers use.
+
+8. **Only the four configured backends are addressable, and the container name
+   is derived, never taken from the request.** A request names a *backend*
+   (`backend1`…`backend4`); the service rejects any name not in `BACKENDS`
+   before touching the Engine, then addresses `CONTAINER_PREFIX + name`
+   (default prefix `l7loadbalancer-demo-`). The demo compose pins each backend's
+   `container_name` to exactly that string, so the mapping is explicit and the
+   allowlist is auditable. The Engine is never handed a caller-supplied name.
+
+9. **Kill is the Engine's abrupt kill; revive is start.** `POST
+   /api/backend/kill` calls `POST /containers/{name}/kill` (SIGKILL, matching
+   the Sprint 3/4 chaos tests), and `POST /api/backend/revive` calls
+   `POST /containers/{name}/start` on the same container. A failed Engine call
+   is a `200` body `{"ok":false,"error":…}` (decision 4), so the page renders it
+   as a failed action rather than a swallowed transport error.
+
+10. **Container state is read into `/api/state` and shown on the page.** Each
+    backend's `GET /containers/{name}/json` `State.Status` is reported beside
+    its profile, and a failed read is reported as an error, so the page shows
+    running/exited live.
+
+11. **The control container runs as root only to reach the socket.** The socket
+    is root-equivalent (ADR-0023 decision 8); a non-root scratch user cannot
+    open it, so the demo compose sets `user: "0:0"` on the control service
+    alone. That is acceptable only under ADR-0023 decision 2's loopback-only
+    bound; no other compose file mounts the socket or changes user.
+
+## Alternatives considered (amendment)
+
+- **Docker SDK for Go.** Rejected: a heavyweight dependency for three Engine
+  calls, against AGENTS.md.
+- **`docker stop` instead of `docker kill`.** Rejected by the ticket: kill is
+  abrupt, matching the chaos tests, and drops in-flight connections to show the
+  clean 502.
+- **Compose-generated container names (`<project>-<service>-<index>`).**
+  Rejected: they depend on the project name and instance index; an explicit
+  `container_name` makes the allowlist a stated string rather than a computed
+  one.
+- **A second source of truth for which backends are up.** Rejected: state is
+  read from the Engine on each `/api/state`, consistent with decision 1.
+- **A non-root container with `group_add` for the host socket group.** Rejected:
+  the group id is host-specific and the socket is root-equivalent regardless;
+  running the demo-only control container as root is the honest, portable
+  choice.
