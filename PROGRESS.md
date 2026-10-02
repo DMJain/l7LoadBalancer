@@ -502,10 +502,11 @@ Scoped in `.scratch/s5-t13-t19-portfolio-docs/` as one bundle spec plus ten tick
   - Acceptance: as in the issue file.
   - Completed: `README.md` rewritten (118 lines) in the required order, with the request-path diagram, quickstart, local live demo and marked video slot, headline results C1–C7, the exact dependency line, and a marked empty AI-disclosure slot. `make build` and `make test` pass; `make run` was checked on free ports because the benchmark stack held 8080. Reader check and number trace are in `docs/sessions/2026-10-03-claude.md`. Docs-only (TDD-exempt).
 
-- [IN_PROGRESS] S5.T19.1.1 — Safe fixes and report-first scans (Claude, started 2026-10-02T21:15:21Z)
+- [DONE] S5.T19.1.1 — Safe fixes and report-first scans (Claude, started 2026-10-02T21:15:21Z, completed 2026-10-02T21:18:05Z)
   - Spec: `.scratch/s5-t13-t19-portfolio-docs/issues/08-t19-1-1-fixes-and-scans.md`
   - Depends: S5.T13.2
   - Acceptance: as in the issue file.
+  - Completed: safe fixes applied and scans reported in `docs/sessions/2026-10-03-claude.md`; no secrets, no history rewrite. Owner decisions recorded: `.scratch/` and `docs/agents/` to move to a different branch (new ticket needed), `opencode.jsonc` ships. Seven attribution trailers still awaiting the owner's decision. Docs and config only (TDD-exempt).
 
 - [TODO] S5.T19.1.2 — Release verification
   - Spec: `.scratch/s5-t13-t19-portfolio-docs/issues/09-t19-1-2-release-verification.md`
