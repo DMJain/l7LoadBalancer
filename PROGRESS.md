@@ -409,9 +409,11 @@ Scoped in `.scratch/s5-t16-t17-local-demo/` as one bundle spec plus nine tickets
   - Verified: `python3 -m json.tool` and `docker compose config` clean; against the repo-root stack (`docker compose up -d --build`) traffic through `:8080` produced 3-series data on every panel at the default `$window=5m` — rate ≈4.55/s per backend (round-robin even), p50 2.5 ms / p99 4.95 ms, share ≈0.333 each — and Grafana's `/api/dashboards/uid/l7loadbalancer` returned 6 panels with `window`/`lb` variables and every expression templated; the `?var-window=15s` URL answered 200. The observability stack's own `smoke.sh` (`make run` + `deployments/docker/observability/docker-compose.yml`) printed "All checks passed", and its Prometheus showed non-zero rate/share from the same JSON. `make test` green; the bench `lb` service, paused only to free `:8080/:8081`, was restarted.
   - Acceptance: `$window` (default `5m`) replaces every `[5m]`; an LB variable on Prometheus `job` filters every panel; a per-backend request-share panel; still one dashboard JSON; the root stack renders as before (observability smoke passes).
 
-- [TODO] S5.T16.3.2 — `demo/` compose stack
+- [IN_PROGRESS] S5.T16.3.2 — `demo/` compose stack
   - Spec: `.scratch/s5-t16-t17-local-demo/issues/04-t16-3-2-demo-compose-stack.md`
   - Depends: S5.T16.1, S5.T16.2, S5.T16.3.1
+  - Claimed 2026-10-02T11:40:00Z by OpenCode (deepseek-v4.1-flash).
+  - Scope (Step 2.5): **In scope** — the `demo/` compose file, the four per-algorithm LB configs, the demo Prometheus scrape config and Grafana env/provisioning mounts, the demo README, and `make` up/down targets, all per issue 04. **Out of scope** — S5.T16.5 (acceptance check), S5.T16.4.x (control service/page/socket), S5.T17 (script/video), and any edit to the root stack, bench rig, dashboard JSON, or Go code.
   - Acceptance: four LBs (one config per algorithm, distinct `job`s), four `ADMIN_ENABLED` backends, eight generators from one anchor with `RANK=1..8`, 1 s-scrape Prometheus, embeddable Grafana with anonymous Viewer; every published port on `127.0.0.1`; one-command up/down; traffic visible at `var-window=15s`.
 
 - [TODO] S5.T16.5 — Latency-isolation acceptance check

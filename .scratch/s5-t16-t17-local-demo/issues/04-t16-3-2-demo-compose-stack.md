@@ -6,7 +6,7 @@ Spec: `../spec.md` — *Load balancers*, *Demo stack (S5.T16.3)*; ADR-0023 decis
 
 **Blocked by:** 01 (admin listener), 02 (traffic generator), 03 (dashboard variables).
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 - [ ] A compose file in a top-level demo area, independent of the root stack and the bench rig; neither of those is edited.
 - [ ] Four LBs from the existing LB image, each with its own config file; the configs list the same four backends and differ only in `algorithm` (`round_robin`, `least_conn`, `consistent_hash_bounded`, `p2c_ewma`) plus anything that must be unique per instance.
