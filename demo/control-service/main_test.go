@@ -149,18 +149,75 @@ func (b *backendStub) snapshot() (sleepMS, jitterMS int, failRate float64, posts
 	return b.sleepMS, b.jitterMS, b.failRate, b.posts
 }
 
+// engineStub stands in for the Docker Engine API (S5.T16.4.2): it serves the
+// three endpoints the control service calls — kill, start and inspect — and
+// records every request, so a test can prove a disallowed target made no Engine
+// call and that kill/revive reached the right container.
+type engineStub struct {
+	srv *httptest.Server
+
+	mu    sync.Mutex
+	calls []string
+	fail  bool
+	state string
+}
+
+func newEngineStub(t *testing.T) *engineStub {
+	t.Helper()
+	e := &engineStub{state: "running"}
+	e.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		e.mu.Lock()
+		defer e.mu.Unlock()
+		e.calls = append(e.calls, r.Method+" "+r.URL.Path)
+		if e.fail {
+			http.Error(w, `{"message":"engine error"}`, http.StatusInternalServerError)
+			return
+		}
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/kill"), strings.HasSuffix(r.URL.Path, "/start"):
+			w.WriteHeader(http.StatusNoContent)
+		case strings.HasSuffix(r.URL.Path, "/json"):
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{"State": map[string]any{"Status": e.state}})
+		default:
+			http.Error(w, "not found", http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(e.srv.Close)
+	return e
+}
+
+func (e *engineStub) snapshot() []string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return append([]string(nil), e.calls...)
+}
+
+func (e *engineStub) setFail(fail bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.fail = fail
+}
+
+func (e *engineStub) setState(state string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.state = state
+}
+
 // rig is the eight-generator / four-backend stand-in set the control service is
-// pointed at, plus the LBs it validates against.
+// pointed at, plus the LBs it validates against and the Docker Engine stand-in.
 type rig struct {
 	gens     []*genStub
 	backends []*backendStub
+	engine   *engineStub
 	handler  http.Handler
 }
 
 func newRig(t *testing.T) *rig {
 	t.Helper()
-	r := &rig{}
-	cfg := config{grafanaURL: "http://127.0.0.1:3000"}
+	r := &rig{engine: newEngineStub(t)}
+	cfg := config{grafanaURL: "http://127.0.0.1:3000", dockerHost: r.engine.srv.URL}
 	for i := 1; i <= 8; i++ {
 		g := newGenStub(t)
 		r.gens = append(r.gens, g)
@@ -169,7 +226,8 @@ func newRig(t *testing.T) *rig {
 	for i := 1; i <= 4; i++ {
 		b := newBackendStub(t)
 		r.backends = append(r.backends, b)
-		cfg.backends = append(cfg.backends, peer{name: "backend" + strconv.Itoa(i), url: b.srv.URL})
+		name := "backend" + strconv.Itoa(i)
+		cfg.backends = append(cfg.backends, peer{name: name, url: b.srv.URL, container: "l7loadbalancer-demo-" + name})
 	}
 	cfg.lbs = []peer{
 		{name: "lb-roundrobin", url: "http://lb-roundrobin:8080"},
@@ -377,7 +435,8 @@ func TestStateReportsMixedWhenGeneratorsDisagree(t *testing.T) {
 }
 
 // TestServesEmbeddedPage proves the page is served with the embedded markers the
-// browser needs: the dashboard iframe query and the API endpoints (S5.T16.4.1).
+// browser needs: the dashboard iframe query, the API endpoints and the
+// kill/revive controls (S5.T16.4.1, S5.T16.4.2).
 func TestServesEmbeddedPage(t *testing.T) {
 	r := newRig(t)
 	rec := r.do(t, http.MethodGet, "/", "")
@@ -387,4 +446,103 @@ func TestServesEmbeddedPage(t *testing.T) {
 	assert.Contains(t, body, "var-window=15s")
 	assert.Contains(t, body, "refresh=5s")
 	assert.Contains(t, body, "/api/state")
+	assert.Contains(t, body, "/api/backend/kill")
+	assert.Contains(t, body, "/api/backend/revive")
 }
+
+// TestKillReachesTheRightContainer proves kill is the Engine's abrupt kill on
+// the named backend's container and nothing else (S5.T16.4.2).
+func TestKillReachesTheRightContainer(t *testing.T) {
+	r := newRig(t)
+	rec := r.do(t, http.MethodPost, "/api/backend/kill", `{"backend":"backend3"}`)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var resp containerResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	assert.True(t, resp.OK, "error: %s", resp.Error)
+	assert.Equal(t, "l7loadbalancer-demo-backend3", resp.Container)
+	assert.Equal(t, []string{"POST /containers/l7loadbalancer-demo-backend3/kill"}, r.engine.snapshot())
+
+	for i, g := range r.gens {
+		_, _, gets, posts := g.snapshot()
+		assert.Zero(t, gets+posts, "generator %d was called on a kill", i+1)
+	}
+	for i, b := range r.backends {
+		_, _, _, posts := b.snapshot()
+		assert.Zero(t, posts, "admin listener %d was called on a kill", i+1)
+	}
+}
+
+// TestReviveStartsTheSameContainer proves revive starts the named backend's
+// container again (S5.T16.4.2).
+func TestReviveStartsTheSameContainer(t *testing.T) {
+	r := newRig(t)
+	rec := r.do(t, http.MethodPost, "/api/backend/revive", `{"backend":"backend2"}`)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var resp containerResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	assert.True(t, resp.OK, "error: %s", resp.Error)
+	assert.Equal(t, []string{"POST /containers/l7loadbalancer-demo-backend2/start"}, r.engine.snapshot())
+}
+
+// TestKillReviveInvalidInputsMakeNoEngineCall proves the allowlist is enforced
+// before any Engine call: a name outside the four backends, a missing name and
+// an unknown field are all rejected with 400 (S5.T16.4.2).
+func TestKillReviveInvalidInputsMakeNoEngineCall(t *testing.T) {
+	cases := []struct {
+		name string
+		path string
+		body string
+	}{
+		{"kill unknown backend", "/api/backend/kill", `{"backend":"nginx"}`},
+		{"kill missing backend", "/api/backend/kill", `{}`},
+		{"kill unknown field", "/api/backend/kill", `{"backend":"backend1","extra":1}`},
+		{"revive unknown backend", "/api/backend/revive", `{"backend":"../etc"}`},
+		{"revive missing backend", "/api/backend/revive", `{}`},
+		{"revive unknown field", "/api/backend/revive", `{"backend":"backend1","extra":1}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newRig(t)
+			rec := r.do(t, http.MethodPost, tc.path, tc.body)
+			assert.Equal(t, http.StatusBadRequest, rec.Code, "body: %s", rec.Body.String())
+			assert.Empty(t, r.engine.snapshot(), "an Engine call was made on an invalid input")
+		})
+	}
+}
+
+// TestEngineErrorIsPropagated proves a failed Engine call is returned to the
+// page as a failed action, naming the error, never swallowed (S5.T16.4.2).
+func TestEngineErrorIsPropagated(t *testing.T) {
+	r := newRig(t)
+	r.engine.setFail(true)
+
+	rec := r.do(t, http.MethodPost, "/api/backend/kill", `{"backend":"backend1"}`)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var resp containerResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	assert.False(t, resp.OK)
+	assert.Contains(t, resp.Error, "500")
+	assert.Equal(t, []string{"POST /containers/l7loadbalancer-demo-backend1/kill"}, r.engine.snapshot())
+}
+
+// TestStateIncludesContainerState proves GET /api/state reports each backend's
+// Engine container state beside its profile (S5.T16.4.2).
+func TestStateIncludesContainerState(t *testing.T) {
+	r := newRig(t)
+	r.engine.setState("exited")
+
+	rec := r.do(t, http.MethodGet, "/api/state", "")
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var st stateResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &st))
+	require.Len(t, st.Backends, 4)
+	for i, b := range st.Backends {
+		assert.Equal(t, "exited", b.ContainerState, "backend %d container state", i+1)
+		assert.Empty(t, b.ContainerError)
+	}
+}
+
