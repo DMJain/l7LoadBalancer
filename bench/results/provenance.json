@@ -1,0 +1,19 @@
+{
+  "git_sha": "8c2b7d4adf0df3afc3433458f9f4908651b4801c",
+  "git_dirty": false,
+  "slices": ["core", "protocol", "failure", "degraded"],
+  "start_time": "2026-10-01T20:09:46Z",
+  "finish_time": "2026-10-02T00:25:40Z",
+  "host_os": "Darwin 25.6.0 arm64",
+  "host_cpu": "Apple M3",
+  "docker_version": "29.0.1",
+  "compose_version": "2.40.3-desktop.1",
+  "docker_cpus": 8,
+  "docker_memory_bytes": 8217731072,
+  "cpusets": {"backend1": "2", "backend2": "3", "backend3": "4", "backend4": "5", "lb": "0-1", "nginx": "0-1", "vegeta": "6-7"},
+  "lb_go_version": "go1.25.1",
+  "lb_gomaxprocs": 2,
+  "nginx_version": "1.27.5",
+  "nginx_workers": 2,
+  "vegeta_version": "v12.13.0"
+}

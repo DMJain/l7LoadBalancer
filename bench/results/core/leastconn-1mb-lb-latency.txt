@@ -1,0 +1,41 @@
+# algorithm=leastconn size=1mb competitor=lb load=latency comparison=matched peak_rps=150 rates_pct=30 50 70 90
+
+# rate_rps=45 (30% of peak 150)
+Requests      [total, rate, throughput]         450, 45.10, 45.07
+Duration      [total, attack, wait]             9.985s, 9.978s, 7.587ms
+Latencies     [min, mean, 50, 90, 95, 99, max]  2.569ms, 6.633ms, 6.301ms, 9.287ms, 9.868ms, 11.435ms, 15.788ms
+Bytes In      [total, mean]                     471859200, 1048576.00
+Bytes Out     [total, mean]                     0, 0.00
+Success       [ratio]                           100.00%
+Status Codes  [code:count]                      200:450  
+Error Set:
+
+# rate_rps=75 (50% of peak 150)
+Requests      [total, rate, throughput]         749, 75.11, 75.08
+Duration      [total, attack, wait]             9.976s, 9.972s, 4.217ms
+Latencies     [min, mean, 50, 90, 95, 99, max]  2.052ms, 6.275ms, 5.582ms, 8.064ms, 9.436ms, 26.205ms, 73.137ms
+Bytes In      [total, mean]                     785383424, 1048576.00
+Bytes Out     [total, mean]                     0, 0.00
+Success       [ratio]                           100.00%
+Status Codes  [code:count]                      200:749  
+Error Set:
+
+# rate_rps=105 (70% of peak 150)
+Requests      [total, rate, throughput]         1049, 105.09, 105.03
+Duration      [total, attack, wait]             9.987s, 9.981s, 6.01ms
+Latencies     [min, mean, 50, 90, 95, 99, max]  1.951ms, 5.826ms, 4.979ms, 7.403ms, 8.817ms, 34.65ms, 71.559ms
+Bytes In      [total, mean]                     1099956224, 1048576.00
+Bytes Out     [total, mean]                     0, 0.00
+Success       [ratio]                           100.00%
+Status Codes  [code:count]                      200:1049  
+Error Set:
+
+# rate_rps=135 (90% of peak 150)
+Requests      [total, rate, throughput]         1348, 135.09, 135.04
+Duration      [total, attack, wait]             9.983s, 9.978s, 4.353ms
+Latencies     [min, mean, 50, 90, 95, 99, max]  2.207ms, 9.57ms, 5.852ms, 11.399ms, 32.502ms, 101.074ms, 143.913ms
+Bytes In      [total, mean]                     1413480448, 1048576.00
+Bytes Out     [total, mean]                     0, 0.00
+Success       [ratio]                           100.00%
+Status Codes  [code:count]                      200:1348  
+Error Set:

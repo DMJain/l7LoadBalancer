@@ -1,0 +1,14 @@
+# algorithm=consistent-hash size=10kb competitor=lb load=degraded comparison=nearest-equivalent rate_rps=1500 backend3_sleep_ms=50
+# arrivals backend=backend1 count=1534 share_pct=2.92
+# arrivals backend=backend2 count=17112 share_pct=32.56
+# arrivals backend=backend3 count=17282 share_pct=32.89
+# arrivals backend=backend4 count=16620 share_pct=31.63
+# hotkey owner=backend3 spill=yes
+Requests      [total, rate, throughput]         44951, 1500.10, 1497.55
+Duration      [total, attack, wait]             30.016s, 29.965s, 51.096ms
+Latencies     [min, mean, 50, 90, 95, 99, max]  50.222ms, 52.631ms, 51.783ms, 54.143ms, 55.631ms, 74.557ms, 106.43ms
+Bytes In      [total, mean]                     460298240, 10240.00
+Bytes Out     [total, mean]                     0, 0.00
+Success       [ratio]                           100.00%
+Status Codes  [code:count]                      200:44951  
+Error Set:

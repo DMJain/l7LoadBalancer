@@ -1,0 +1,13 @@
+# algorithm=leastconn size=10kb competitor=nginx load=degraded comparison=matched rate_rps=1500 backend3_sleep_ms=50
+# arrivals backend=backend1 count=13133 share_pct=24.99
+# arrivals backend=backend2 count=13132 share_pct=24.99
+# arrivals backend=backend3 count=13132 share_pct=24.99
+# arrivals backend=backend4 count=13150 share_pct=25.03
+Requests      [total, rate, throughput]         44960, 1499.96, 1497.43
+Duration      [total, attack, wait]             30.025s, 29.974s, 50.714ms
+Latencies     [min, mean, 50, 90, 95, 99, max]  50.168ms, 52.029ms, 51.449ms, 53.102ms, 54.095ms, 67.024ms, 116.871ms
+Bytes In      [total, mean]                     460390400, 10240.00
+Bytes Out     [total, mean]                     0, 0.00
+Success       [ratio]                           100.00%
+Status Codes  [code:count]                      200:44960  
+Error Set:

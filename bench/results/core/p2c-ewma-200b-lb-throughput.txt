@@ -1,0 +1,9 @@
+# algorithm=p2c-ewma size=200b competitor=lb load=throughput comparison=nearest-equivalent peak_rps=4500 peak_status=sustained delivery_min_pct=95
+Requests      [total, rate, throughput]         44967, 4499.87, 4499.65
+Duration      [total, attack, wait]             9.993s, 9.993s, 487.959µs
+Latencies     [min, mean, 50, 90, 95, 99, max]  118.542µs, 1.671ms, 545.197µs, 2.721ms, 4.713ms, 32.589ms, 80.213ms
+Bytes In      [total, mean]                     8993400, 200.00
+Bytes Out     [total, mean]                     0, 0.00
+Success       [ratio]                           100.00%
+Status Codes  [code:count]                      200:44967  
+Error Set:

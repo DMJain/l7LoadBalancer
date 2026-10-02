@@ -1,0 +1,13 @@
+# algorithm=leastconn size=10kb competitor=lb load=degraded comparison=matched rate_rps=1500 backend3_sleep_ms=50
+# arrivals backend=backend1 count=13403 share_pct=25.50
+# arrivals backend=backend2 count=13243 share_pct=25.20
+# arrivals backend=backend3 count=13036 share_pct=24.80
+# arrivals backend=backend4 count=12874 share_pct=24.50
+Requests      [total, rate, throughput]         44986, 1500.03, 1497.43
+Duration      [total, attack, wait]             30.042s, 29.99s, 52.179ms
+Latencies     [min, mean, 50, 90, 95, 99, max]  50.189ms, 52.101ms, 51.594ms, 53.487ms, 54.487ms, 61.68ms, 100.359ms
+Bytes In      [total, mean]                     460656640, 10240.00
+Bytes Out     [total, mean]                     0, 0.00
+Success       [ratio]                           100.00%
+Status Codes  [code:count]                      200:44986  
+Error Set:

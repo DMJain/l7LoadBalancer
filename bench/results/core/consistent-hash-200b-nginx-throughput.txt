@@ -1,0 +1,14 @@
+# algorithm=consistent-hash size=200b competitor=nginx load=throughput comparison=nearest-equivalent peak_rps=3000 peak_status=sustained delivery_min_pct=95
+# arrivals backend=backend1 count=5 share_pct=0.01
+# arrivals backend=backend2 count=5 share_pct=0.01
+# arrivals backend=backend3 count=45005 share_pct=99.97
+# arrivals backend=backend4 count=5 share_pct=0.01
+# hotkey owner=backend3 spill=no
+Requests      [total, rate, throughput]         29987, 3000.13, 3000.05
+Duration      [total, attack, wait]             9.996s, 9.995s, 286.333µs
+Latencies     [min, mean, 50, 90, 95, 99, max]  82.125µs, 482.773µs, 274.749µs, 751.376µs, 1.147ms, 4.622ms, 24.342ms
+Bytes In      [total, mean]                     5997400, 200.00
+Bytes Out     [total, mean]                     0, 0.00
+Success       [ratio]                           100.00%
+Status Codes  [code:count]                      200:29987  
+Error Set:

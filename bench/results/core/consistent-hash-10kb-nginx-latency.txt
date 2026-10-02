@@ -1,0 +1,61 @@
+# algorithm=consistent-hash size=10kb competitor=nginx load=latency comparison=nearest-equivalent peak_rps=8000 rates_pct=30 50 70 90
+
+# rate_rps=2400 (30% of peak 8000)
+# arrivals backend=backend1 count=6 share_pct=0.02
+# arrivals backend=backend2 count=6 share_pct=0.02
+# arrivals backend=backend3 count=36007 share_pct=99.95
+# arrivals backend=backend4 count=6 share_pct=0.02
+# hotkey owner=backend3 spill=no
+Requests      [total, rate, throughput]         23992, 2400.51, 2400.06
+Duration      [total, attack, wait]             9.996s, 9.995s, 1.886ms
+Latencies     [min, mean, 50, 90, 95, 99, max]  112.333µs, 1.339ms, 387.93µs, 1.73ms, 2.364ms, 29.134ms, 96.94ms
+Bytes In      [total, mean]                     245678080, 10240.00
+Bytes Out     [total, mean]                     0, 0.00
+Success       [ratio]                           100.00%
+Status Codes  [code:count]                      200:23992  
+Error Set:
+
+# rate_rps=4000 (50% of peak 8000)
+# arrivals backend=backend1 count=10 share_pct=0.02
+# arrivals backend=backend2 count=10 share_pct=0.02
+# arrivals backend=backend3 count=60010 share_pct=99.95
+# arrivals backend=backend4 count=10 share_pct=0.02
+# hotkey owner=backend3 spill=no
+Requests      [total, rate, throughput]         39983, 3999.75, 3999.69
+Duration      [total, attack, wait]             9.997s, 9.996s, 143.25µs
+Latencies     [min, mean, 50, 90, 95, 99, max]  83.417µs, 1.069ms, 411.123µs, 1.83ms, 2.641ms, 15.376ms, 64.749ms
+Bytes In      [total, mean]                     409425920, 10240.00
+Bytes Out     [total, mean]                     0, 0.00
+Success       [ratio]                           100.00%
+Status Codes  [code:count]                      200:39983  
+Error Set:
+
+# rate_rps=5600 (70% of peak 8000)
+# arrivals backend=backend1 count=8 share_pct=0.02
+# arrivals backend=backend2 count=8 share_pct=0.02
+# arrivals backend=backend3 count=52992 share_pct=99.95
+# arrivals backend=backend4 count=8 share_pct=0.02
+# hotkey owner=backend3 spill=no
+Requests      [total, rate, throughput]         32794, 3287.48, 3287.39
+Duration      [total, attack, wait]             9.976s, 9.975s, 266µs
+Latencies     [min, mean, 50, 90, 95, 99, max]  175.083µs, 1.038ms, 559.696µs, 1.384ms, 2.119ms, 10.427ms, 65.331ms
+Bytes In      [total, mean]                     335810560, 10240.00
+Bytes Out     [total, mean]                     0, 0.00
+Success       [ratio]                           100.00%
+Status Codes  [code:count]                      200:32794  
+Error Set:
+
+# rate_rps=7200 (90% of peak 8000)
+# arrivals backend=backend1 count=12 share_pct=0.02
+# arrivals backend=backend2 count=12 share_pct=0.02
+# arrivals backend=backend3 count=76230 share_pct=99.95
+# arrivals backend=backend4 count=12 share_pct=0.02
+# hotkey owner=backend3 spill=no
+Requests      [total, rate, throughput]         51897, 5211.23, 5211.08
+Duration      [total, attack, wait]             9.959s, 9.959s, 275.083µs
+Latencies     [min, mean, 50, 90, 95, 99, max]  125.625µs, 1.5ms, 423.682µs, 1.456ms, 3.539ms, 20.393ms, 115.711ms
+Bytes In      [total, mean]                     531425280, 10240.00
+Bytes Out     [total, mean]                     0, 0.00
+Success       [ratio]                           100.00%
+Status Codes  [code:count]                      200:51897  
+Error Set:

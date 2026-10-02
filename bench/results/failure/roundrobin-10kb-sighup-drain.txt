@@ -1,0 +1,24 @@
+# algorithm=roundrobin size=10kb competitor=lb load=sighup-drain comparison=matched rate_rps=1750
+# snapshot=before backend=backend1 count=95493
+# snapshot=before backend=backend2 count=95508
+# snapshot=before backend=backend3 count=26176
+# snapshot=before backend=backend4 count=95540
+# snapshot=applied backend=backend1 count=96007
+# snapshot=applied backend=backend2 count=96026
+# snapshot=applied backend=backend3 count=26697
+# snapshot=applied backend=backend4 count=95710
+# snapshot=end backend=backend1 count=105780
+# snapshot=end backend=backend2 count=105779
+# snapshot=end backend=backend3 count=36430
+# snapshot=end backend=backend4 count=95710
+Requests      [total, rate, throughput]         68204, 1136.75, 1136.74
+Duration      [total, attack, wait]             1m0s, 59.999s, 243.583µs
+Latencies     [min, mean, 50, 90, 95, 99, max]  163.542µs, 3.04ms, 307.144µs, 798.086µs, 1.248ms, 68.078ms, 465.317ms
+Bytes In      [total, mean]                     698408960, 10240.00
+Bytes Out     [total, mean]                     0, 0.00
+Success       [ratio]                           100.00%
+Status Codes  [code:count]                      200:68204  
+Error Set:
+
+measurements: mode=sighup-drain event=docker-compose-kill-s-HUP-lb event_at_s=29 non_2xx=0 transport_errors=0 drops=0 pre_p99_ms=1.856 post_p99_ms=2.140 p99_factor=2 p50_ms=0.307 p99_ms=68.078 p99_peak_ms=448.342 p99_recovery_s=30 drain_before_applied_backend4=170 drain_applied_end_backend4=0
+verdict=PASS

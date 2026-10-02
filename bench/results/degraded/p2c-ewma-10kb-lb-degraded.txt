@@ -1,0 +1,13 @@
+# algorithm=p2c-ewma size=10kb competitor=lb load=degraded comparison=nearest-equivalent rate_rps=1500 backend3_sleep_ms=50
+# arrivals backend=backend1 count=14840 share_pct=28.24
+# arrivals backend=backend2 count=12885 share_pct=24.52
+# arrivals backend=backend3 count=13604 share_pct=25.88
+# arrivals backend=backend4 count=11228 share_pct=21.36
+Requests      [total, rate, throughput]         44994, 1499.99, 1497.45
+Duration      [total, attack, wait]             30.047s, 29.996s, 51.068ms
+Latencies     [min, mean, 50, 90, 95, 99, max]  50.2ms, 52.196ms, 51.64ms, 53.642ms, 54.704ms, 63.309ms, 108.676ms
+Bytes In      [total, mean]                     460738560, 10240.00
+Bytes Out     [total, mean]                     0, 0.00
+Success       [ratio]                           100.00%
+Status Codes  [code:count]                      200:44994  
+Error Set:

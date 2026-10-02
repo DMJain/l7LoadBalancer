@@ -1,0 +1,9 @@
+# algorithm=leastconn size=10kb competitor=lb load=throughput comparison=matched peak_rps=3000 peak_status=sustained delivery_min_pct=95
+Requests      [total, rate, throughput]         20085, 2013.15, 2012.96
+Duration      [total, attack, wait]             9.978s, 9.977s, 902.333µs
+Latencies     [min, mean, 50, 90, 95, 99, max]  319.333µs, 2.121ms, 1.292ms, 4.286ms, 5.665ms, 10.735ms, 63.231ms
+Bytes In      [total, mean]                     205670400, 10240.00
+Bytes Out     [total, mean]                     0, 0.00
+Success       [ratio]                           100.00%
+Status Codes  [code:count]                      200:20085  
+Error Set:

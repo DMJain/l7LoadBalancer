@@ -1,0 +1,9 @@
+# algorithm=leastconn size=200b competitor=nginx load=throughput comparison=matched peak_rps=5000 peak_status=sustained delivery_min_pct=95
+Requests      [total, rate, throughput]         49988, 5000.09, 4999.99
+Duration      [total, attack, wait]             9.998s, 9.997s, 187.625µs
+Latencies     [min, mean, 50, 90, 95, 99, max]  88.625µs, 712.415µs, 281.912µs, 1.158ms, 2.365ms, 9.404ms, 32.388ms
+Bytes In      [total, mean]                     9997600, 200.00
+Bytes Out     [total, mean]                     0, 0.00
+Success       [ratio]                           100.00%
+Status Codes  [code:count]                      200:49988  
+Error Set:

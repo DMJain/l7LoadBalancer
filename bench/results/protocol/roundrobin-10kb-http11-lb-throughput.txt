@@ -1,0 +1,9 @@
+# algorithm=roundrobin size=10kb competitor=lb load=throughput comparison=matched peak_rps=4500 peak_status=sustained delivery_min_pct=95
+Requests      [total, rate, throughput]         42741, 4274.37, 4274.26
+Duration      [total, attack, wait]             10s, 9.999s, 241.542µs
+Latencies     [min, mean, 50, 90, 95, 99, max]  128.917µs, 1.553ms, 499.297µs, 2.292ms, 5.126ms, 28.611ms, 76.771ms
+Bytes In      [total, mean]                     437667840, 10240.00
+Bytes Out     [total, mean]                     0, 0.00
+Success       [ratio]                           100.00%
+Status Codes  [code:count]                      200:42741  
+Error Set:
