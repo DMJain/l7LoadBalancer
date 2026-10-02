@@ -20,11 +20,12 @@
 # (the only service with busybox) rather than publishing anything — ADR-0023
 # decision 2.
 #
-# Verification hook: SLOW_BACKENDS (default "backend3") selects which backend(s)
-# phase 1 injects 200 ms into, while the assertion stays fixed at the spec's
-# shape (backend3 slow, backends 1/2/4 fast). The negative run sets it to two
-# backends (`SLOW_BACKENDS="backend2 backend3" demo/acceptance.sh`) and confirms
-# phase 1 fails, naming the leaked backend with its measured p50.
+# Verification hook: INJECT_BACKENDS (default "backend3") selects which
+# backend(s) phase 1 injects 200 ms into, so the mandated negative run can put
+# latency on a second backend too. The assertion does not follow it — it stays
+# the spec's fixed shape (backend3 slow, backends 1/2/4 fast) — so
+# `INJECT_BACKENDS="backend2 backend3" demo/acceptance.sh` makes phase 1 fail,
+# naming the backend whose latency is not isolated.
 #
 # Every failure names the assertion, the LB and the measured value. An EXIT trap
 # restores every backend's profile and the generators' rate and target, pass or
@@ -52,13 +53,22 @@ readonly P2C_URL="http://lb-p2c-ewma:8080"
 
 readonly BACKENDS=(backend1 backend2 backend3 backend4)
 readonly GENS=(gen1 gen2 gen3 gen4 gen5 gen6 gen7 gen8)
-readonly SLOW_BACKENDS="${SLOW_BACKENDS:-backend3}"
+readonly INJECT_BACKENDS="${INJECT_BACKENDS:-backend3}"
 
 tmpdir="$(mktemp -d)"
 backend_snapshot="$tmpdir/backends.tsv"
 gen_snapshot="$tmpdir/generators.tsv"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
+
+# json_field <json> <key> prints a top-level field of a JSON object.
+json_field() { python3 -c 'import json, sys; print(json.loads(sys.argv[1])[sys.argv[2]])' "$1" "$2"; }
+
+# backend_profile_is_clean <profile-json> succeeds when the profile is the zero
+# baseline the check requires.
+backend_profile_is_clean() {
+	python3 -c 'import json, sys; p = json.loads(sys.argv[1]); sys.exit(0 if p["sleep_ms"] == 0 and p["jitter_ms"] == 0 and p["fail_rate"] == 0 else 1)' "$1"
+}
 
 # in_prom runs wget inside the running demo Prometheus container (the only
 # shell-capable service on the demo network), so internal-only ports can be
@@ -185,9 +195,8 @@ echo "    both LBs up, all four backends selectable on each"
 for b in "${BACKENDS[@]}"; do
 	body=$(admin_get "$b") || fail "$b admin listener did not answer (ADMIN_ENABLED? stack up?)"
 	printf '%s\t%s\n' "$b" "$body" >>"$backend_snapshot"
-	clean=$(python3 -c 'import json, sys; p = json.loads(sys.argv[1]); print("yes" if p["sleep_ms"] == 0 and p["jitter_ms"] == 0 and p["fail_rate"] == 0 else "no")' "$body")
-	if [ "$clean" != yes ]; then
-		vals=$(python3 -c 'import json, sys; p = json.loads(sys.argv[1]); print("sleep_ms=%s jitter_ms=%s fail_rate=%s" % (p["sleep_ms"], p["jitter_ms"], p["fail_rate"]))' "$body")
+	if ! backend_profile_is_clean "$body"; then
+		vals="sleep_ms=$(json_field "$body" sleep_ms) jitter_ms=$(json_field "$body" jitter_ms) fail_rate=$(json_field "$body" fail_rate)"
 		fail "precondition: $b is not at sleep_ms=0 jitter_ms=0 fail_rate=0 ($vals); run the check on a fresh up"
 	fi
 done
@@ -206,16 +215,16 @@ for g in "${GENS[@]}"; do
 		sleep 1
 	done
 	[ "$up" = 1 ] || fail "generator $g control endpoint never answered at http://$g:9090/"
-	rate=$(python3 -c 'import json, sys; print(json.loads(sys.argv[1])["total_rate"])' "$body")
-	target=$(python3 -c 'import json, sys; print(json.loads(sys.argv[1])["target"])' "$body")
+	rate=$(json_field "$body" total_rate)
+	target=$(json_field "$body" target)
 	printf '%s\t%s\t%s\n' "$g" "$rate" "$target" >>"$gen_snapshot"
 	gen_set "$g" "{\"total_rate\":$CHECK_TOTAL_RATE,\"target\":\"$RR_URL\"}" >/dev/null \
 		|| fail "generator $g rejected the check rate/target update"
 done
 echo "    all eight generators at ${CHECK_TOTAL_RATE} req/s, target $RR_URL"
 
-echo "==> 2. Phase 1: $SLOW_BACKENDS at ${SLOW_MS} ms, $RR_JOB active"
-for b in $SLOW_BACKENDS; do
+echo "==> 2. Phase 1: $INJECT_BACKENDS at ${SLOW_MS} ms, $RR_JOB active"
+for b in $INJECT_BACKENDS; do
 	admin_set "$b" "{\"sleep_ms\":$SLOW_MS,\"jitter_ms\":0}" >/dev/null \
 		|| fail "could not set $b to sleep_ms=$SLOW_MS"
 done
@@ -230,12 +239,12 @@ for b in "${BACKENDS[@]}"; do
 			|| fail "phase 1 [$RR_JOB]: backend3 p50=${p}ms < ${SLOW_P50_MIN_MS}ms (injected ${SLOW_MS}ms is not visible on backend3)"
 	else
 		num_cmp "$p" "<=" "$FAST_P50_MAX_MS" \
-			|| fail "phase 1 [$RR_JOB]: $b p50=${p}ms > ${FAST_P50_MAX_MS}ms (injected latency leaked off backend3)"
+			|| fail "phase 1 [$RR_JOB]: $b p50=${p}ms > ${FAST_P50_MAX_MS}ms (injected latency is not isolated to backend3)"
 	fi
 done
 echo "    injected latency is isolated to backend3"
 
-echo "==> 3. Phase 2: switch generators to $P2C_JOB; $SLOW_BACKENDS still at ${SLOW_MS} ms"
+echo "==> 3. Phase 2: switch generators to $P2C_JOB; backend3 still at ${SLOW_MS} ms"
 for g in "${GENS[@]}"; do
 	gen_set "$g" "{\"target\":\"$P2C_URL\"}" >/dev/null \
 		|| fail "generator $g rejected the target switch to $P2C_URL"
@@ -251,6 +260,6 @@ num_cmp "$share" "<" "$SHARE_MAX_PCT" \
 
 echo
 echo "All checks passed."
-echo "  Phase 1: ${SLOW_BACKENDS} at ${SLOW_MS} ms stayed isolated on $RR_JOB"
+echo "  Phase 1: ${INJECT_BACKENDS} at ${SLOW_MS} ms stayed isolated on $RR_JOB"
 echo "  Phase 2: $P2C_JOB moved traffic off $slowest (share=${share}% < ${SHARE_MAX_PCT}%)"
 echo

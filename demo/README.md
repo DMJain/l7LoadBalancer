@@ -81,9 +81,11 @@ control service. It proves two things (ADR-0023 decision 10):
 
 Any failure names the assertion, the LB and the measured values, and exits
 non-zero. An exit trap restores every backend profile and the generators' rate
-and target, so the check is safe to re-run. `SLOW_BACKENDS` (default `backend3`)
-is a verification hook for the negative run — set it to two backends to confirm
-phase 1 fails: `SLOW_BACKENDS="backend2 backend3" demo/acceptance.sh`.
+and target, so the check is safe to re-run. `INJECT_BACKENDS` (default
+`backend3`) is the negative-run hook: it changes which backends phase 1 injects
+into, while the assertion stays fixed at backend3 slow / `backend1/2/4` fast.
+Set it to two backends to confirm phase 1 fails:
+`INJECT_BACKENDS="backend2 backend3" demo/acceptance.sh`.
 
 ## Independence
 
