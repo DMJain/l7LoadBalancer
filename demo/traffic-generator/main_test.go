@@ -258,6 +258,36 @@ func TestReceivedRateWithinTolerance(t *testing.T) {
 	}, time.Second, 10*time.Millisecond)
 }
 
+// TestRuntimeRateChangeTakesEffect proves a raised total rate actually reaches
+// the stand-in more often without a restart (S5.T16.2).
+func TestRuntimeRateChangeTakesEffect(t *testing.T) {
+	c := newCountServer(t)
+	cfg := baseConfig(c.URL)
+	cfg.totalRate = 20
+	g, base := controlServer(t, cfg)
+	runGenerator(t, g)
+
+	time.Sleep(1500 * time.Millisecond)
+	_, _, before := c.snapshot()
+	require.Positive(t, len(before), "no traffic at the baseline rate")
+
+	resp := postControl(t, base, `{"total_rate":300}`)
+	resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	// Settle past the old low-rate wait, then count the raised-rate window.
+	time.Sleep(500 * time.Millisecond)
+	_, _, mark := c.snapshot()
+	time.Sleep(1500 * time.Millisecond)
+	_, _, after := c.snapshot()
+
+	raised := len(after) - len(mark)
+	assert.Greater(t, raised, len(before)*3, "raised rate did not reach the stand-in (%d vs baseline %d)", raised, len(before))
+
+	st := getStatus(t, base)
+	assert.Positive(t, st.Completed, "response bodies were never drained and completed")
+}
+
 // TestArrivalsAreNotAFixedInterval proves arrivals are spread, not a metronome
 // (S5.T16.2).
 func TestArrivalsAreNotAFixedInterval(t *testing.T) {
