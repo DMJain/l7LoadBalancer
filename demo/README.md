@@ -24,6 +24,13 @@ To rehearse or record a walkthrough, follow
 [`DEMO-SCRIPT.md`](DEMO-SCRIPT.md): the ordered scenarios, click paths, the ADR
 behind each claim, and the expected on-screen state (S5.T17.1).
 
+## Walkthrough video
+
+**Video pending.** The recorded walkthrough (S5.T17.2) follows `DEMO-SCRIPT.md`
+from a fresh `make demo-up` with `demo/acceptance.sh` passing first; the link is
+added here once it is recorded and its storage location is fixed by the owner
+(spec open decision 8).
+
 ## What is published
 
 | Host address | What |

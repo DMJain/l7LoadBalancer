@@ -453,3 +453,4 @@ Scoped in `.scratch/s5-t16-t17-local-demo/` as one bundle spec plus nine tickets
   - Spec: `.scratch/s5-t16-t17-local-demo/issues/09-t17-2-record-demo-video.md`
   - Depends: S5.T17.1
   - Acceptance: recorded from a fresh `up` with the S5.T16.5 check passing first; follows the script; storage location decided by the owner; linked from the demo README.
+  - Prepare (OpenCode (deepseek-v4.1-flash), 2026-10-02): owner deferred the video's storage location and the README link until after recording, so only a `demo/README.md` "Walkthrough video" **Video pending** placeholder was added — no link. Recording from a fresh `make demo-up` with `demo/acceptance.sh` passing first, and fixing where the video lives (spec open decision 8), remain the owner's; this ticket stays `[TODO]`.
