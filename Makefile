@@ -34,6 +34,14 @@ bench: ## Run Go benchmarks
 bench-repro: ## Reproduce the published numbers from a fresh clone: preflight, certs, images, smoke, full matrix (~2-2.5h)
 	./bench/repro.sh
 
+.PHONY: demo-up
+demo-up: ## Bring up the local live demo stack (demo/), all ports on 127.0.0.1
+	docker compose -f demo/docker-compose.yml up -d --build
+
+.PHONY: demo-down
+demo-down: ## Tear down the local live demo stack
+	docker compose -f demo/docker-compose.yml down
+
 .PHONY: soak
 soak: ## Run the S4.T10 soak test, non-race, both tolerances (SOAK_DURATION=2m to shorten)
 	go test ./test/chaos -run TestChaosSoakConnectionLifecycle -soak -soak-duration=$(SOAK_DURATION) -timeout 2h -v

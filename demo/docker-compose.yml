@@ -1,0 +1,210 @@
+# Local live demo stack (S5.T16.3.2, ADR-0023).
+#
+# One command brings the whole demo up:
+#   docker compose -f demo/docker-compose.yml up -d --build
+# (or `make demo-up`). It is independent of the repo-root stack
+# (docker-compose.yml) and the benchmark rig (bench/docker-compose.yml): neither
+# is edited or affected; see ADR-0023 decision 3.
+#
+# Topology:
+#   * four LB instances, one per algorithm, all built from the repo-root image,
+#     each bind-mounting its own config from demo/configs/ and sharing the same
+#     four backends;
+#   * four dummy backends with the runtime admin listener enabled (only this
+#     stack sets ADMIN_ENABLED=true, ADR-0023 decision 7);
+#   * eight traffic clients expanded from one anchor with RANK=1..8, so each is
+#     a distinct container IP and therefore a distinct consistent-hash key
+#     (ADR-0023 decision 6);
+#   * a demo Prometheus scraping each LB as its own job every 1 s (ADR-0023
+#     decision 9);
+#   * a demo Grafana provisioning the same single dashboard JSON the root stack
+#     ships, with embedding and anonymous Viewer access enabled.
+#
+# Ports: only Grafana and the four LB client ports are published, every one on
+# 127.0.0.1. Generator control ports, backend admin listeners, and LB metrics
+# and health ports stay on the internal demo network (ADR-0023 decision 2). The
+# stack is never configured or documented for any other bind address.
+
+name: l7loadbalancer-demo
+
+# Shared backend definition: four identical dummy backends differing only in
+# -name. The admin listener lets the demo set latency/jitter/failure at runtime
+# without recreating a container (ADR-0023 decision 7); the bench rig and root
+# stack leave ADMIN_ENABLED unset. LOG_REQUESTS is off so per-request backend
+# logging cannot become the demo's resource ceiling. No restart policy: a killed
+# backend must stay down until the control service revives it (S5.T16.4.2) —
+# `restart: unless-stopped` would undo the kill.
+x-backend: &backend
+  build:
+    context: ../deployments/docker/dummy-backend
+  environment:
+    ADMIN_ENABLED: "true"
+    LOG_REQUESTS: "false"
+
+# Shared LB definition: four instances built from the repo-root image, each
+# differing in its config bind-mount, its published client port, and its
+# Prometheus job (demo/prometheus/prometheus.yml).
+x-lb: &lb
+  build:
+    context: ..
+    dockerfile: Dockerfile
+  depends_on:
+    - backend1
+    - backend2
+    - backend3
+    - backend4
+  healthcheck:
+    test: ["CMD", "/l7lb", "probe", "http://127.0.0.1:8081/livez"]
+    interval: 5s
+    timeout: 3s
+    retries: 3
+
+# Shared generator definition (build + dependencies). The environment is a
+# separate anchor so each of the eight services can add its own RANK while
+# keeping one source of truth for the rest.
+x-generator: &generator
+  build:
+    context: ./traffic-generator
+  depends_on:
+    - lb-roundrobin
+    - lb-leastconn
+    - lb-consistent-hash
+    - lb-p2c-ewma
+
+x-generator-env: &generator-env
+  CLIENTS: "8"
+  ZIPF_S: "1.0"
+  # Total rate across all eight clients; each derives its Zipf share of it
+  # (ADR-0024 decision 1). Sized so the rank-8 client still sends steadily and
+  # every LB keeps in-flight counts above zero.
+  TOTAL_RATE: "400"
+  TARGET_LB: "http://lb-roundrobin:8080"
+  # The four LBs are the only targets the generator will accept (S5.T16.2).
+  TARGET_ALLOWLIST: "http://lb-roundrobin:8080,http://lb-leastconn:8080,http://lb-consistent-hash:8080,http://lb-p2c-ewma:8080"
+  MAX_INFLIGHT: "64"
+  # Bound the generator heap as ADR-0021/0022 require (ADR-0024 decision 3).
+  GOMEMLIMIT: "256MiB"
+  GOGC: "50"
+
+services:
+  backend1:
+    <<: *backend
+    command: ["-name", "backend1"]
+
+  backend2:
+    <<: *backend
+    command: ["-name", "backend2"]
+
+  backend3:
+    <<: *backend
+    command: ["-name", "backend3"]
+
+  backend4:
+    <<: *backend
+    command: ["-name", "backend4"]
+
+  lb-roundrobin:
+    <<: *lb
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - ./configs/roundrobin.yaml:/etc/l7lb/config.yaml:ro
+
+  lb-leastconn:
+    <<: *lb
+    ports:
+      - "127.0.0.1:8082:8080"
+    volumes:
+      - ./configs/leastconn.yaml:/etc/l7lb/config.yaml:ro
+
+  lb-consistent-hash:
+    <<: *lb
+    ports:
+      - "127.0.0.1:8083:8080"
+    volumes:
+      - ./configs/consistent-hash.yaml:/etc/l7lb/config.yaml:ro
+
+  lb-p2c-ewma:
+    <<: *lb
+    ports:
+      - "127.0.0.1:8084:8080"
+    volumes:
+      - ./configs/p2c-ewma.yaml:/etc/l7lb/config.yaml:ro
+
+  gen1:
+    <<: *generator
+    environment:
+      <<: *generator-env
+      RANK: "1"
+
+  gen2:
+    <<: *generator
+    environment:
+      <<: *generator-env
+      RANK: "2"
+
+  gen3:
+    <<: *generator
+    environment:
+      <<: *generator-env
+      RANK: "3"
+
+  gen4:
+    <<: *generator
+    environment:
+      <<: *generator-env
+      RANK: "4"
+
+  gen5:
+    <<: *generator
+    environment:
+      <<: *generator-env
+      RANK: "5"
+
+  gen6:
+    <<: *generator
+    environment:
+      <<: *generator-env
+      RANK: "6"
+
+  gen7:
+    <<: *generator
+    environment:
+      <<: *generator-env
+      RANK: "7"
+
+  gen8:
+    <<: *generator
+    environment:
+      <<: *generator-env
+      RANK: "8"
+
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    depends_on:
+      - lb-roundrobin
+      - lb-leastconn
+      - lb-consistent-hash
+      - lb-p2c-ewma
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    depends_on:
+      - prometheus
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      # Demo-only: anonymous Viewer access and iframe embedding, so the control
+      # page can embed panels without a login (ADR-0023 decision 9). The root
+      # stack's Grafana settings are unchanged.
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: "Viewer"
+      GF_SECURITY_ALLOW_EMBEDDING: "true"
+    volumes:
+      # Same single dashboard JSON and provisioning as the root stack — mounted,
+      # never copied, so the two can never drift (ADR-0023 decision 9). The
+      # datasource points at the `prometheus` service on this network.
+      - ../deployments/docker/observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../deployments/docker/observability/grafana/dashboards:/var/lib/grafana/dashboards:ro

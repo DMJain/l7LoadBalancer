@@ -1,0 +1,28 @@
+# Demo LB — round-robin (S5.T16.3.2, ADR-0023 decision 4).
+#
+# One of four LB instances in demo/docker-compose.yml. The four configs are
+# identical except for `algorithm`; each LB has its own container and its own
+# config, so "switching algorithm" is re-pointing the traffic, never a reload.
+# The four backends are the shared demo backends, reached by compose service
+# name. Container ports (metrics :9090, health :8081) stay on the demo network;
+# only the client port is published, on 127.0.0.1 (ADR-0023 decision 2).
+
+listen: ":8080"
+
+algorithm: "round_robin"
+
+metrics:
+  listen: ":9090"
+
+health_endpoint:
+  listen: ":8081"
+
+backends:
+  - name: "backend1"
+    url: "http://backend1:8080"
+  - name: "backend2"
+    url: "http://backend2:8080"
+  - name: "backend3"
+    url: "http://backend3:8080"
+  - name: "backend4"
+    url: "http://backend4:8080"

@@ -1,0 +1,31 @@
+# Prometheus scrape config for the local demo stack (S5.T16.3.2, ADR-0023
+# decisions 4 and 9).
+#
+# Each LB is its own job, so the `job` label is the LB identity downstream and
+# the dashboard's `$lb` variable (populated from `label_values(job)`) filters
+# every panel. 1 s scrape interval: the demo embeds panels at `var-window=15s`,
+# which needs enough samples in a short window; the root stack's Prometheus
+# keeps its 15 s interval and is unchanged.
+#
+# Targets are compose service names on the demo network; the LB metrics
+# listener stays internal (ADR-0023 decision 2).
+
+global:
+  scrape_interval: 1s
+
+scrape_configs:
+  - job_name: lb-roundrobin
+    static_configs:
+      - targets: ["lb-roundrobin:9090"]
+
+  - job_name: lb-leastconn
+    static_configs:
+      - targets: ["lb-leastconn:9090"]
+
+  - job_name: lb-consistent-hash
+    static_configs:
+      - targets: ["lb-consistent-hash:9090"]
+
+  - job_name: lb-p2c-ewma
+    static_configs:
+      - targets: ["lb-p2c-ewma:9090"]
