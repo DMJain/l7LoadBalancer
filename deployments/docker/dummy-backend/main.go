@@ -87,9 +87,10 @@ func main() {
 		os.Exit(1)
 	}
 
+	b := newBackend(*name, profile{sleepMS: sleepMS, failRate: failRate}, logRequests, logger)
 	server := &http.Server{
 		Addr:              *addr,
-		Handler:           newHandler(*name, sleepMS, failRate, logRequests, logger),
+		Handler:           b.handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
@@ -143,60 +144,100 @@ func tlsFilesFromEnv() (certFile, keyFile string, err error) {
 	return certFile, keyFile, nil
 }
 
-// newHandler returns the dummy backend's HTTP handler. Every GET except
-// /health and /stats sleeps for sleepMS, then fails with HTTP 500 with
-// probability failRate. /health is the always-200, chaos-free probe target;
-// /stats reports the arrival count of benchmark requests. The paths /200b,
-// /10kb, and /1mb serve fixed-size pre-generated bodies; every other path
-// answers with a JSON body identifying the backend so distribution stays
-// observable even through failing responses. Non-GET requests get a 405.
-func newHandler(name string, sleepMS int, failRate float64, logRequests bool, logger *slog.Logger) http.Handler {
-	// arrivals counts benchmark requests that reach this backend. It is read by
-	// /stats and incremented on arrival below; a plain atomic is all that is
-	// needed because a backend is a single process (S5.T5.5.2).
-	var arrivals atomic.Int64
+// profile is one immutable snapshot of a backend's injected chaos: the base
+// sleep, the uniform jitter applied around it, and the per-request failure
+// probability. It is held behind an atomic.Pointer and swapped whole, so a
+// request reads one consistent (sleep, jitter, fail_rate) triple even while the
+// admin listener is changing it (S5.T16.1).
+type profile struct {
+	sleepMS  int
+	jitterMS int
+	failRate float64
+}
 
+// backend is one dummy-backend process. It owns the identity and logging switch
+// and the two pieces of shared mutable state: the arrival counter (incremented
+// on entry, read by /stats) and the chaos profile (read once per request, written
+// by the admin listener when ADMIN_ENABLED is set). net/http serves each request
+// on its own goroutine, so both are safe for concurrent use; each backend runs as
+// its own container, so one counter and one profile are the whole story
+// (S5.T5.5.2, S5.T16.1).
+type backend struct {
+	name        string
+	logger      *slog.Logger
+	logRequests bool
+	arrivals    atomic.Int64
+	profile     atomic.Pointer[profile]
+}
+
+// newBackend builds the backend with its initial chaos profile. The env values
+// (SLEEP_MS, FAIL_RATE, jitter 0) are that initial profile; with ADMIN_ENABLED
+// unset nothing can change it, so runtime behaviour is unchanged (S5.T16.1).
+func newBackend(name string, initial profile, logRequests bool, logger *slog.Logger) *backend {
+	b := &backend{name: name, logger: logger, logRequests: logRequests}
+	b.profile.Store(&initial)
+	return b
+}
+
+// newHandler returns the dummy backend's HTTP handler bound to a fresh initial
+// profile, with no admin listener. Every GET except /health and /stats sleeps
+// for sleepMS, then fails with HTTP 500 with probability failRate. /health is
+// the always-200, chaos-free probe target; /stats reports the arrival count of
+// benchmark requests. The paths /200b, /10kb, and /1mb serve fixed-size
+// pre-generated bodies; every other path answers with a JSON body identifying
+// the backend so distribution stays observable even through failing responses.
+// Non-GET requests get a 405.
+func newHandler(name string, sleepMS int, failRate float64, logRequests bool, logger *slog.Logger) http.Handler {
+	return newBackend(name, profile{sleepMS: sleepMS, failRate: failRate}, logRequests, logger).handler()
+}
+
+// handler returns the request handler served on the backend's proxied port. It
+// reads the chaos profile once per request, so a concurrent admin write cannot
+// change the sleep and failure of a request already in flight.
+func (b *backend) handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 
 		if r.Method != http.MethodGet {
 			w.Header().Set("Allow", http.MethodGet)
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			logRequest(logger, logRequests, r, name, http.StatusMethodNotAllowed, start)
+			logRequest(b.logger, b.logRequests, r, b.name, http.StatusMethodNotAllowed, start)
 			return
 		}
 
 		// /health is the LB health-checker's target; it must stay cheap and
-		// always-200, so it deliberately bypasses SLEEP_MS/FAIL_RATE. Otherwise
-		// an injected failure rate would make the LB flap.
+		// always-200, so it deliberately bypasses the injected sleep/failure.
+		// Otherwise an injected failure rate would make the LB flap.
 		if r.URL.Path == "/health" {
 			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte("ok\n"))
-			logRequest(logger, logRequests, r, name, http.StatusOK, start)
+			logRequest(b.logger, b.logRequests, r, b.name, http.StatusOK, start)
 			return
 		}
 
 		// /stats reports the arrival count. Like /health it is a control
-		// endpoint, so it bypasses SLEEP_MS/FAIL_RATE and is not itself counted.
+		// endpoint, so it bypasses the injected sleep/failure and is not itself
+		// counted.
 		if r.URL.Path == "/stats" {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
-			_ = json.NewEncoder(w).Encode(statsResponse{Backend: name, Requests: arrivals.Load()})
-			logRequest(logger, logRequests, r, name, http.StatusOK, start)
+			_ = json.NewEncoder(w).Encode(statsResponse{Backend: b.name, Requests: b.arrivals.Load()})
+			logRequest(b.logger, b.logRequests, r, b.name, http.StatusOK, start)
 			return
 		}
 
 		// Arrival: counted before any injected latency or failure decision, so a
 		// request still in flight is already visible to /stats.
-		arrivals.Add(1)
+		b.arrivals.Add(1)
 
-		if sleepMS > 0 {
-			time.Sleep(time.Duration(sleepMS) * time.Millisecond)
+		p := b.profile.Load()
+		if p.sleepMS > 0 {
+			time.Sleep(time.Duration(p.sleepMS) * time.Millisecond)
 		}
 
 		status := http.StatusOK
-		if failRate > 0 && rand.Float64() < failRate {
+		if p.failRate > 0 && rand.Float64() < p.failRate {
 			status = http.StatusInternalServerError
 		}
 
@@ -206,14 +247,14 @@ func newHandler(name string, sleepMS int, failRate float64, logRequests bool, lo
 			w.Header().Set("Content-Type", "application/octet-stream")
 			w.WriteHeader(status)
 			_, _ = w.Write(payload)
-			logRequest(logger, logRequests, r, name, status, start)
+			logRequest(b.logger, b.logRequests, r, b.name, status, start)
 			return
 		}
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
-		_ = json.NewEncoder(w).Encode(map[string]string{"backend": name})
-		logRequest(logger, logRequests, r, name, status, start)
+		_ = json.NewEncoder(w).Encode(map[string]string{"backend": b.name})
+		logRequest(b.logger, b.logRequests, r, b.name, status, start)
 	})
 }
 
