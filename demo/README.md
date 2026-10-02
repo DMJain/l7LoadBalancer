@@ -59,6 +59,32 @@ Runtime control (switch LB, set rate, change a backend's latency/jitter/failure,
 kill and revive backends) arrives with S5.T16.4; until then the defaults above
 are what you see.
 
+## Acceptance check
+
+Before trusting the rig (or building a UI on it), run the latency-isolation
+check against a live stack:
+
+```sh
+docker compose -f demo/docker-compose.yml up -d --build
+demo/acceptance.sh
+```
+
+It drives the generators' control endpoints and the backends' admin listeners
+directly and reads the demo Prometheus's HTTP API, so it does not depend on the
+control service. It proves two things (ADR-0023 decision 10):
+
+1. **Phase 1** — with `round_robin` active and `backend3` at 200 ms (jitter 0),
+   after 30 s `backend3`'s p50 is ≥ 150 ms while `backend1/2/4` stay ≤ 20 ms: the
+   injected latency is isolated.
+2. **Phase 2** — with `p2c_ewma` active and `backend3` still slow, after 30 s
+   convergence `backend3`'s request share is < 15%: the selector moves off it.
+
+Any failure names the assertion, the LB and the measured values, and exits
+non-zero. An exit trap restores every backend profile and the generators' rate
+and target, so the check is safe to re-run. `SLOW_BACKENDS` (default `backend3`)
+is a verification hook for the negative run — set it to two backends to confirm
+phase 1 fails: `SLOW_BACKENDS="backend2 backend3" demo/acceptance.sh`.
+
 ## Independence
 
 This stack is separate from the repo-root stack (`docker-compose.yml`) and the
