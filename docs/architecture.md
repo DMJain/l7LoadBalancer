@@ -7,6 +7,105 @@ close-outs, and `docs/design/sprint-1-contracts.md` for the frozen Sprint 1
 contracts. Sprints 1–4 are complete. This document is the Sprint 1–4
 reference._
 
+## At a glance
+
+This section shows the two pictures a reader needs first: how one request travels, and which packages depend on which. The sections below give the detail.
+
+A **Layer 7** load balancer works at the application layer. It reads each HTTP request (method, path, headers) before it decides where to send it. A **backend** is one of the servers that do the real work. A **reverse proxy** receives a client's request, forwards it to a backend, and returns the backend's response. This project builds its reverse proxy on Go's standard `httputil.ReverseProxy`. A **selector** picks which backend gets a request. The project has four. Round-robin takes the backends in turn. Least-connections picks the backend with the fewest requests in flight. Consistent hashing sends the same key to the same backend. Power of two choices compares two random backends and takes the better one.
+
+A **health check** is a periodic request that tests whether a backend answers. An **active** check is sent by the load balancer on a timer. A **passive** check judges real client traffic as it passes. A backend that fails is marked unhealthy. A **circuit** is a per-backend switch that stops traffic to a backend that keeps failing. A circuit is open when it blocks traffic.
+
+### How one request travels
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as Client
+    participant P as Proxy handler
+    participant S as Selector
+    participant R as Reverse proxy
+    participant B as Backend
+    C->>P: HTTP request
+    P->>S: pick a backend
+    S-->>P: chosen backend
+    alt none selectable, or the circuit denies
+        P-->>C: 503, count untouched
+    else backend allowed
+        P->>P: active count +1
+        P->>R: hand over request
+        R->>B: forward request
+        alt backend answers
+            B-->>R: response
+            R-->>P: record status and latency
+            P-->>C: response body copied
+            P->>P: body closed, count -1
+        else transport error
+            R-->>P: error
+            P-->>C: 502, or 499 if the client left
+            P->>P: count -1
+        end
+    end
+```
+
+Each number below matches the arrow with the same number.
+
+1. The client sends an HTTP request. The proxy handler, this project's code, receives it.
+2. The handler asks the selector for a backend. The selector considers only backends that are healthy and whose circuit is not open.
+3. The selector returns one backend. If none is selectable, the next step answers 503 (service unavailable). Any other selection error answers 502 (bad gateway).
+4. The handler also asks the circuit gate whether this backend may take a request. The selector filters the list. The gate checks the one chosen backend at the moment of use, because its circuit may have opened since. If the circuit denies the request, or no backend was selectable, the handler answers 503. The backend is never contacted and the active count is untouched.
+5. The handler raises the backend's **active-connection count**. This is the number of requests in flight to that backend. Least-connections reads it, so it must stay correct.
+6. The handler passes the request to the reverse proxy.
+7. The reverse proxy points the request at the chosen backend and forwards it.
+8. The backend sends its response.
+9. When the response headers arrive, the reverse proxy records the status code and the round-trip time. The latency estimate, outlier detection and the circuit all use these results later. It also wraps the response body, so the handler learns when the body is done.
+10. The handler copies the response body to the client.
+11. When the body is closed, the handler lowers the active-connection count. The client has then finished reading or given up. This happens exactly once per request. [ADR-0007](adr/0007-proxy-request-lifecycle-and-exactly-once-decrement.md) explains why.
+12. If the backend call fails instead, the reverse proxy reports a transport error.
+13. The handler answers 502. If the client had already left, it records the request as 499 instead. That non-standard code means "client closed the request".
+14. The handler lowers the active-connection count on this path too, once. Without that, each failed call would leave the count too high.
+
+### Which package depends on which
+
+```mermaid
+flowchart TD
+    cmd["cmd/l7LoadBalancer"] --> app
+    cmd --> config
+    cmd --> logger
+    app --> proxy
+    app --> health
+    app --> circuit
+    app --> metrics
+    app --> balancer
+    app --> backend
+    app --> config
+    app --> logger
+    proxy --> backend
+    proxy --> balancer
+    proxy --> logger
+    proxy --> metrics
+    balancer --> backend
+    balancer --> config
+    health --> backend
+    health --> logger
+    health --> metrics
+    circuit --> backend
+    circuit --> logger
+    circuit --> metrics
+    backend --> config
+```
+
+An arrow from A to B means package A imports package B. Every name except the first is a package under `internal/`. The entry point `cmd/l7LoadBalancer` reads flags, loads the config and starts `app`. The package `app` builds every other piece and wires them together. `config`, `logger` and `metrics` import no other package of this project.
+
+The edges come from the compiler's own view of the code, not from a written list. Reproduce them with this command:
+
+```
+go list -f '{{.ImportPath}} {{join .Imports " "}}' ./cmd/... ./internal/...
+```
+
+The diagram leaves out test files and the standard library, and it leaves out the packages outside `internal/` (the demo programs, the dummy backend and the chaos harness).
+
+**Dependency rule: `backend` does not import `balancer`.** A backend record holds one server's identity and live state: health, active count and latency estimate. It has no notion of how a selection policy chooses it. Suppose `backend` imported `balancer`. A change to a policy could then force a change to the data the policy reads. The two could no longer be read or tested apart. The compiler already blocks the direct reverse import, because `balancer` imports `backend` and Go rejects import cycles. A change that worked around that block would show the boundary had started to leak.
+
 ## Overview
 
 l7LoadBalancer is a Layer 7 HTTP load balancer built on Go's standard library
