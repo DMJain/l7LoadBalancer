@@ -210,7 +210,7 @@ func (e *engineClient) state(ctx context.Context, container string) (string, err
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		_, _ = io.Copy(io.Discard, resp.Body)
-		return "", errors.New(resp.Status)
+		return "", fmt.Errorf("engine returned %s", resp.Status)
 	}
 	var body struct {
 		State struct {
@@ -240,7 +240,7 @@ func (e *engineClient) post(ctx context.Context, path string) error {
 		return nil
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return errors.New(resp.Status)
+		return fmt.Errorf("engine returned %s", resp.Status)
 	}
 	return nil
 }
@@ -351,6 +351,11 @@ func newServer(cfg config, logger *slog.Logger) (*server, error) {
 	}
 	if len(cfg.backends) == 0 {
 		return nil, errors.New("at least one backend is required")
+	}
+	for _, b := range cfg.backends {
+		if b.container == "" {
+			return nil, fmt.Errorf("backend %q has no container name", b.name)
+		}
 	}
 	if len(cfg.lbs) == 0 {
 		return nil, errors.New("at least one LB is required")

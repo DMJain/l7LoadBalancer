@@ -545,3 +545,21 @@ func TestStateIncludesContainerState(t *testing.T) {
 		assert.Empty(t, b.ContainerError)
 	}
 }
+
+// TestStateReportsContainerError proves a failed Engine read is reported on the
+// page as a failed container state, not swallowed (S5.T16.4.2).
+func TestStateReportsContainerError(t *testing.T) {
+	r := newRig(t)
+	r.engine.setFail(true)
+
+	rec := r.do(t, http.MethodGet, "/api/state", "")
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var st stateResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &st))
+	require.Len(t, st.Backends, 4)
+	for i, b := range st.Backends {
+		assert.Empty(t, b.ContainerState, "backend %d should have no state on an Engine error", i+1)
+		assert.Contains(t, b.ContainerError, "500", "backend %d container error", i+1)
+	}
+}
