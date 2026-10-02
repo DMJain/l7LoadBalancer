@@ -2,7 +2,7 @@
 
 Prometheus + Grafana for the load balancer's Sprint 3 observability. Prometheus
 scrapes the load balancer's always-on `metrics.listen` endpoint; Grafana renders
-the committed five-panel dashboard. The stack is intentionally separate from
+the committed six-panel dashboard. The stack is intentionally separate from
 `deployments/docker/docker-compose.yml` (S1.T9, dummy backends only) and from
 Sprint 5's future bench compose — see ADR-0013 decision 17.
 
@@ -18,8 +18,19 @@ host gateway.
 | `prometheus/prometheus.yml` | Scrape config → `host.docker.internal:9090`, 15s interval |
 | `grafana/provisioning/datasources/prometheus.yml` | Prometheus datasource (uid `prometheus`) |
 | `grafana/provisioning/dashboards/dashboards.yml` | Loads the dashboards directory |
-| `grafana/dashboards/l7loadbalancer.json` | The five-panel dashboard |
+| `grafana/dashboards/l7loadbalancer.json` | The six-panel dashboard |
 | `smoke.sh` | Scripted smoke test (see below) |
+
+## Dashboard variables
+
+The dashboard carries two variables. Both default to exactly the rendering the
+root stack had before they existed, and both can be set from the URL
+(`?var-window=15s&var-lb=...`).
+
+| Variable | Type | Default | Meaning |
+|----------|------|---------|---------|
+| `$window` | interval | `5m` | The rate/histogram range for every panel. Use `var-window=15s` for a short, fast-reacting window. |
+| `$lb` | query (`label_values(job)`) | the only scrape `job` in this stack (`l7loadbalancer`) | Filters every panel and the request-share panel to one LB. The demo stack scrapes four LBs and uses this variable to switch between them. |
 
 ## Ports
 

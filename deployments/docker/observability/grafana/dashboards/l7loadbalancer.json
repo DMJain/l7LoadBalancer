@@ -84,7 +84,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (backend, status_class) (rate(lb_requests_total[5m]))",
+          "expr": "sum by (backend, status_class) (rate(lb_requests_total{job=~\"$lb\"}[$window]))",
           "legendFormat": "{{backend}} {{status_class}}",
           "refId": "A"
         }
@@ -168,7 +168,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "histogram_quantile(0.50, sum by (le, backend) (rate(lb_request_duration_seconds_bucket[5m])))",
+          "expr": "histogram_quantile(0.50, sum by (le, backend) (rate(lb_request_duration_seconds_bucket{job=~\"$lb\"}[$window])))",
           "legendFormat": "{{backend}} p50",
           "refId": "A"
         },
@@ -177,7 +177,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "histogram_quantile(0.99, sum by (le, backend) (rate(lb_request_duration_seconds_bucket[5m])))",
+          "expr": "histogram_quantile(0.99, sum by (le, backend) (rate(lb_request_duration_seconds_bucket{job=~\"$lb\"}[$window])))",
           "legendFormat": "{{backend}} p99",
           "refId": "B"
         }
@@ -254,7 +254,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "lb_circuit_state == 1",
+          "expr": "lb_circuit_state{job=~\"$lb\"} == 1",
           "legendFormat": "{{backend}} {{state}}",
           "refId": "A"
         }
@@ -332,7 +332,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "lb_backend_healthy",
+          "expr": "lb_backend_healthy{job=~\"$lb\"}",
           "legendFormat": "{{backend}}",
           "refId": "A"
         }
@@ -416,12 +416,98 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "lb_active_requests",
+          "expr": "lb_active_requests{job=~\"$lb\"}",
           "legendFormat": "{{backend}}",
           "refId": "A"
         }
       ],
       "title": "Active connections by backend",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineInterpolation": "smooth",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "max": 1,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 16
+      },
+      "id": 6,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "mean"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (backend) (rate(lb_requests_total{job=~\"$lb\"}[$window])) / scalar(sum(rate(lb_requests_total{job=~\"$lb\"}[$window])))",
+          "legendFormat": "{{backend}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Request share by backend (selected LB)",
       "type": "timeseries"
     }
   ],
@@ -432,7 +518,52 @@
     "sprint-3"
   ],
   "templating": {
-    "list": []
+    "list": [
+      {
+        "auto": false,
+        "auto_count": 30,
+        "auto_min": "10s",
+        "current": {
+          "selected": true,
+          "text": "5m",
+          "value": "5m"
+        },
+        "hide": 0,
+        "label": "Window",
+        "name": "window",
+        "options": [
+          {
+            "selected": true,
+            "text": "5m",
+            "value": "5m"
+          }
+        ],
+        "query": "15s,30s,1m,5m,10m,30m,1h,6h,12h",
+        "refresh": 2,
+        "skipUrlSync": false,
+        "type": "interval"
+      },
+      {
+        "current": {},
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "definition": "label_values(job)",
+        "hide": 0,
+        "includeAll": false,
+        "label": "LB",
+        "multi": false,
+        "name": "lb",
+        "options": [],
+        "query": "label_values(job)",
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 1,
+        "type": "query"
+      }
+    ]
   },
   "time": {
     "from": "now-15m",

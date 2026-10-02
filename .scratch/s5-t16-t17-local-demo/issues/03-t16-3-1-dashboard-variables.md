@@ -6,12 +6,12 @@ Spec: `../spec.md` — *Demo stack (S5.T16.3)*, dashboard changes; ADR-0023 deci
 
 **Blocked by:** None (can start immediately). S5.D1 is done.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] A `$window` interval variable, default `5m`, replaces every hard-coded `[5m]` range in the dashboard JSON.
-- [ ] An LB variable populated from the Prometheus `job` label filters every panel; in the root stack it resolves to the single LB job, so every panel shows what it shows today.
-- [ ] A per-backend request-share panel: each backend's request rate over `$window` divided by the total, for the selected LB.
-- [ ] Still one dashboard JSON; no demo-specific copy. No provisioning, Prometheus or Grafana environment change in the root stack.
-- [ ] Verified against the root stack: the observability smoke script passes; with traffic driven as its README describes, every pre-existing panel shows data with the defaults; a URL with `var-window=15s` renders the same panels with the shorter window.
-- [ ] The observability README notes the two variables and their defaults.
-- [ ] Config-only (no Go): exempt from Red-Green per AGENTS.md; `make test` still green.
+- [x] A `$window` interval variable, default `5m`, replaces every hard-coded `[5m]` range in the dashboard JSON.
+- [x] An LB variable populated from the Prometheus `job` label filters every panel; in the root stack it resolves to the single LB job, so every panel shows what it shows today.
+- [x] A per-backend request-share panel: each backend's request rate over `$window` divided by the total, for the selected LB.
+- [x] Still one dashboard JSON; no demo-specific copy. No provisioning, Prometheus or Grafana environment change in the root stack.
+- [x] Verified against the root stack: the observability smoke script passes; with traffic driven as its README describes, every pre-existing panel shows data with the defaults; a URL with `var-window=15s` renders the same panels with the shorter window.
+- [x] The observability README notes the two variables and their defaults.
+- [x] Config-only (no Go): exempt from Red-Green per AGENTS.md; `make test` still green.
