@@ -30,7 +30,7 @@ func assertAllHealthy(t *testing.T, a *assembly, fbs []*flippableBackend) {
 	require.Empty(t, a.logs.transitionRecords(), "no transition lines before any failure")
 }
 
-// TestChaosActiveOnlyEvictionAndRecovery is S3.T8 arc (i). A backend process
+// TestChaosActiveOnlyEvictionAndRecovery is arc (i). A backend process
 // dies (connection refused, not a handler swap to 503), the active checker
 // ejects it after its consecutive-failure threshold, the selector stops
 // choosing it, and a restart on the same address drives reinstatement and
@@ -84,7 +84,7 @@ func TestChaosActiveOnlyEvictionAndRecovery(t *testing.T) {
 	}, eventuallyDeadline, eventuallyTick, "selector must resume choosing the restarted backend")
 }
 
-// TestChaosCombined500SignalHealthOnlyRecovery is S3.T8 arc (iii). A backend
+// TestChaosCombined500SignalHealthOnlyRecovery is arc (iii). A backend
 // starts returning pure 500s: the failure signal ejects it (active-probe
 // failure path) and opens its circuit. Flipping it back to 200 recovers only
 // the health axis — the circuit stays open — which is the mechanical

@@ -1,5 +1,5 @@
 # Build the demo control service as a static, dependency-free binary and ship it
-# in a scratch image (S5.T16.4.1; the traffic-generator precedent). The program
+# in a scratch image (the traffic-generator precedent). The program
 # imports only the standard library, so it builds from this single-file package
 # with no go.mod; page.html is embedded into the binary.
 FROM golang:1.25-alpine AS build

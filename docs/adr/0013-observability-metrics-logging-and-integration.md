@@ -1,354 +1,81 @@
-# ADR-0013: Observability — metrics collector, transition logging, and their integration
+# ADR-0013: Observability: metrics collector, transition logging, and their integration
 
-- **Status**: Accepted
-- **Date**: 2026-09-20
-- **Deciders**: Darshan Jain (project owner) + opencode agent (S3.T4, design session recorded in `.scratch/s3-t4-t7-observability/spec.md`)
+**Status:** Accepted
 
 ## Context
 
-Sprint 3's resilience subsystems (active health checks, passive outlier
-detection, the per-backend circuit breaker) are implemented and enforce
-failure isolation, but they are invisible from outside the process:
-`internal/metrics` is a stub that only reserves metric names, `internal/logger`
-has no transition vocabulary, and neither `internal/health` nor
-`internal/circuit` emits a single `slog` line. `MILESTONES.md`'s Sprint 3 exit
-criteria ("Grafana shows per-backend latency histograms and circuit state",
-"chaos test: injecting 500s on one backend eventually opens its circuit")
-describe observable outcomes that nothing currently produces.
+The health checker, the outlier detector and the circuit breaker isolate failures, but without metrics and logs nobody outside the process can see them. The package graph makes `internal/metrics` a leaf with no internal imports. So `metrics` cannot read `Backend` state, and the request-path packages must push values into it.
 
-The frozen package dependency graph makes `internal/metrics` a leaf with no
-internal imports, so observability cannot be installed by having `metrics` read
-`Backend` state; the traffic-path packages must push into it. Two further
-constraints shape the design: the existing `RoundTripObserver` fan-out only
-fires around an actual backend round trip, so it misses the two 503 short
-circuits (no healthy backend; circuit-denied) entirely; and the circuit
-breaker's lazy, read-triggered Half-Open promotion (ADR-0011/ADR-0012) has no
-single call site that always observes the promotion — the same CAS can be won
-by a `Registry.Selectable()` scan, which has no logger.
-
-This ADR records the decisions for the whole observability workstream
-(S3.T4–T7) before implementation begins, per `AGENTS.md` Step 2. It is written
-from the design-session record in the spec above.
+Two more facts shape the design. The `RoundTripObserver` fan-out runs only around a real backend round trip, so it misses the two 503 short circuits (no healthy backend, circuit denied). Also, the lazy Open to Half-Open promotion (ADR-0011, ADR-0012) has no single call site with a logger. A `Registry.Selectable()` scan can win the same CAS.
 
 ## Decision
 
-### Metrics package (`internal/metrics`)
+### Metrics
 
-1. **`internal/metrics` stays a true leaf: a push-only `Collector`.** Other
-   packages call exported methods (`ObserveRequest`, `SetBackendHealthy`,
-   `SetCircuitState`, `IncActiveConnections`/`DecActiveConnections`, etc.);
-   `metrics` never reads `backend`/`config`/`proxy` state and adds no internal
-   import. This preserves the frozen dependency graph in `AGENTS.md` unchanged.
-
-2. **The `Collector` owns its own private `prometheus.NewRegistry()`, never
-   `prometheus.DefaultRegisterer`.** A collector is a value an owner constructs
-   and hands around, with no package-level `sync.Once` and no global mutable
-   state, so tests construct independent instances, run `t.Parallel()`, and
-   assert through `prometheus/testutil` without cross-test collisions. The
-   `promhttp` handler is built from that same private registry.
-
-3. **`lb_requests_total` and `lb_request_duration_seconds` are driven from one
-   whole-request hook in `proxy.ServeHTTP`, at the existing `start :=
-   time.Now()` / deferred `logRequest` location.** The duration is the whole
-   client-facing request — selection, circuit check, and backend round trip
-   together — which is the operator's conventional meaning. `RoundTripObserver`'s
-   own duration measurement stays purely internal (feeding P2C-EWMA, passive
-   detection, and the circuit), so there is exactly one definition of "request
-   duration" in the metrics surface. Labels are exactly `backend`, `method`,
-   `status_class` — never `status_code` (unbounded cardinality). **S5.T3-main
-   amends this:** `lb_requests_total` gained a fourth label, `protocol`
-   (`http/1.1`/`h2`/`h2c`, the closed `metrics.ClientProtocol` set), so a
-   dashboard can prove HTTP/2 was negotiated rather than silently falling back.
-   Its cardinality is bounded at three values, and the amendment is to the
-   request counter only — the duration histogram keeps the three-label set.
-
-4. **The histogram buckets are `doc.go`'s provisional set** (`.005, .01, .025,
-   .05, .1, .25, .5, 1, 2.5, 5, 10` seconds), annotated as provisional pending
-   Sprint 5's real benchmark data rather than invented numbers.
-
-5. **`lb_circuit_state` is a label-enum gauge (`backend`, `state` ∈
-   `closed`/`open`/`half_open`), and its setter unconditionally writes all
-   three series on every call** — target state `1`, the other two `0`. A
-   numeric-encoded single gauge was rejected: it needs an encoding table kept in
-   sync with `internal/circuit`'s state type and is not directly queryable by
-   state name. The unconditional zeroing is a correctness requirement on the
-   setter itself, so a later caller that only sets the new state cannot silently
-   break the exactly-one-state-is-`1` invariant.
-
-6. **`lb_backend_healthy` is a plain per-backend 0/1 gauge**, carrying none of
-   the enum-mutual-exclusion concern of `lb_circuit_state`.
-
-7. **A new `lb_active_connections` gauge (label `backend`) is added,
-   amending the metric-name reservations in `internal/metrics/doc.go` and
-   `docs/design/sprint-1-contracts.md`.** This fills an acknowledged
-   `MILESTONES.md` gap (Sprint 3's deliverable list names an active-connections
-   gauge); it does not reverse a locked decision, so it is recorded here rather
-   than in a separate ADR. It is incremented/decremented at the exact call sites
-   `proxy` already uses for `Backend.IncActive()`/`DecActive()`, so the gauge
-   cannot drift from the real count.
-
-8. **`Config` gains a `metrics.listen` field (always-on, default `:9090` when
-   omitted), served by `promhttp.HandlerFor` on its own `http.Server` separate
-   from client traffic, started and shut down in `main.go` on the existing
-   `sigCtx`.** It follows S3.T0.3's nil-means-omitted pointer pattern and
-   `KnownFields(true)` strictness; there is no disable toggle, matching the
-   `health:`/`circuit:` precedent of no per-subsystem disable switch.
-
-9. **Startup seeding of every backend's initial gauge values
-   (`healthy=1`, `state=closed`, `active_connections=0`) goes through the
-   `Collector`'s own setter methods** — `SetBackendHealthy`,
-   `SetCircuitState`, and `SetActiveConnections(backend, 0)` — not a separate
-   seeding code path, because Prometheus `Vec` metrics materialize no series
-   until first written and a never-degraded system must render a complete
-   dashboard on its first scrape. Where a gauge has a transition method that
-   is already a setter (healthy, circuit) seeding calls exactly that method;
-   the active-connections gauge's real transitions use
-   `IncActiveConnections`/`DecActiveConnections`, so seeding its initial `0`
-   uses `SetActiveConnections`. (Implemented in S3.T6; recorded here as the
-   design.)
+1. `internal/metrics` is a push-only `Collector`. Other packages call its methods (`ObserveRequest`, `SetBackendHealthy`, `SetCircuitState`, `IncActiveRequests`, and so on). It never reads `backend`, `config` or `proxy` state and imports no internal package.
+2. Each `Collector` owns a private `prometheus.NewRegistry()`, never `prometheus.DefaultRegisterer`. There is no global state, so tests can make independent instances and run with `t.Parallel()`. The `promhttp` handler uses the same private registry.
+3. `lb_requests_total` and `lb_request_duration_seconds` come from one whole-request hook in `proxy.ServeHTTP`. The duration covers selection, the circuit check and the backend round trip. `RoundTripObserver` keeps its own backend-leg timing for internal use only (P2C-EWMA, passive detection, the circuit). So the metrics show one definition of "request duration".
+   - `lb_request_duration_seconds` labels: `backend`, `method`, `status_class`.
+   - `lb_requests_total` labels: the same three plus `protocol` (`http/1.1`, `h2`, `h2c`, the closed `metrics.ClientProtocol` set). A dashboard can then prove that HTTP/2 was negotiated. HTTP/1.0 is labelled `http/1.1`.
+   - There is never a `status_code` label, because its cardinality is unbounded.
+4. The histogram buckets are provisional: `.005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10` seconds.
+5. `lb_circuit_state` is a label-enum gauge (`backend`, `state` in `closed`/`open`/`half_open`). The setter writes all three series on every call: `1` for the current state, `0` for the others. So exactly one state is always `1`, whatever the caller does. A numeric single gauge was rejected because it needs an encoding table and cannot be queried by state name.
+6. `lb_backend_healthy` is a plain per-backend 0/1 gauge.
+7. `lb_active_requests` (label `backend`) counts in-flight requests. The proxy changes it at the same call sites as `Backend.IncActive()`/`DecActive()`, so it cannot drift from the real count.
+8. `metrics.listen` (default `:9090`) serves `promhttp.HandlerFor` on its own `http.Server`, apart from client traffic. It is always on, with no disable switch, like `health` and `circuit`.
+9. At startup, each backend's gauges are seeded through the normal setters: `SetBackendHealthy` (1), `SetCircuitState` (closed) and `SetActiveRequests(backend, 0)`. Prometheus `Vec` metrics show no series until the first write. Seeding makes the first scrape of a healthy system show a full dashboard.
 
 ### Transition logging
 
-10. **`backend.CircuitTransition`
-    (`NoChange`/`Opened`/`Closed`/`HalfOpened`/`Reopened`) is returned by
-    `Backend.CircuitFailure`, `CircuitSuccess`, and `CircuitAllow` alongside
-    their existing return values.** It is a plain exported type in
-    `internal/backend`, so a caller can tell whether *this* call changed the
-    circuit's state, and `internal/backend` gains no logging dependency.
-    `internal/circuit.Breaker` (`circuit.New` gains a `*slog.Logger`) logs at
-    its `ObserveRoundTrip`/`Allow` call sites whenever the transition is not
-    `NoChange`. The `backend.CircuitGate` and `proxy.RoundTripObserver`
-    interfaces `Breaker` implements are untouched — those wrapper methods
-    absorb the extra return value internally.
+10. `Backend.CircuitFailure`, `CircuitSuccess` and `CircuitAllow` also return a `backend.CircuitTransition`. The values are:
 
-    `Reopened` (added when this decision was implemented, see Amendment below)
-    distinguishes a Half-Open trial failure (`HalfOpen→Open`) from the
-    `Opened` (`Closed→Open`) case. Both move the circuit to Open, but they map
-    to different log reasons (`trial_failure` vs `consecutive_failures`), and a
-    four-value enum carrying only the resulting state cannot tell them apart.
-    One value per logged reason keeps the mapping bijective.
+    | Constant | Transition | Log reason |
+    |---|---|---|
+    | `CircuitNoChange` | none | none |
+    | `CircuitOpened` | Closed to Open | `consecutive_failures` |
+    | `CircuitReopened` | Half-Open to Open | `trial_failure` |
+    | `CircuitClosed` | Half-Open to Closed | `trial_success` |
+    | `CircuitHalfOpened` | Open to Half-Open | `cooldown_elapsed` |
 
-    Transitions: `Opened` = `Closed→Open` (consecutive failures reached the
-    threshold), `Closed` = `HalfOpen→Closed` (trial success), `HalfOpened` =
-    `Open→HalfOpen` (cooldown elapsed), `Reopened` = `HalfOpen→Open` (trial
-    failure), `NoChange` = the call changed nothing.
+    Each log reason maps to exactly one value. `internal/backend` gets no logging dependency. `circuit.Breaker` (`circuit.New` takes a `*slog.Logger`) logs when the value is not `CircuitNoChange`. The `CircuitGate` and `RoundTripObserver` interfaces do not change. `CircuitAllow` reports `CircuitHalfOpened` only when its own CAS did the promotion, so exactly one concurrent caller reports it.
+11. The active checker logs a transition when a counter equals the threshold (`==`), not at `>=`. So a long failure or success streak logs once. The passive `OutlierDetector` logs at its existing once-per-episode `ejected` guard.
+12. The canonical log fields include `event` and `reason`. Both are closed snake_case vocabularies in `internal/logger`:
+    - `event`: `health_ejected`, `health_reinstated`, `circuit_opened`, `circuit_closed`, `circuit_half_opened`.
+    - `reason`: `probe_failures`, `probe_recovered` (active), `outlier_window` (passive), `consecutive_failures`, `trial_success`, `trial_failure`, `cooldown_elapsed` (circuit).
+    - `health_ejected` and `circuit_opened` log at WARN. `health_reinstated`, `circuit_closed` and `circuit_half_opened` log at INFO.
+13. Known gap: a Half-Open promotion won by the `Registry.Selectable()` read path is never logged. `Backend.CircuitOpen()` returns `bool` and has no logger. This is an accepted limitation.
 
-11. **`internal/health`'s active checker emits its transition line behind an
-    equality gate (`counter == threshold`), not the `>=` gate the `Mark*` calls
-    use**, reusing the counters `prober` already owns and adding no field — so a
-    sustained failure or success streak logs once per genuine transition, not
-    once per probe. The passive `OutlierDetector` logs at its existing
-    `ejected`-per-episode guard, which already makes `MarkUnhealthy` fire once
-    per episode. Both packages gain a `*slog.Logger` via their existing
-    constructors.
+### Integration
 
-12. **Two new canonical log fields, `event` and `reason`, are added to the
-    frozen vocabulary in `internal/logger/doc.go`.** Both are closed, snake_case
-    Go-constant vocabularies (matching the algorithm-identifier convention).
-    `event` is exactly `health_ejected`, `health_reinstated`,
-    `circuit_opened`, `circuit_closed`, `circuit_half_opened`; `reason` is
-    exactly `probe_failures`/`probe_recovered` (active), `outlier_window`
-    (passive), and `consecutive_failures`/`trial_success`/`trial_failure`/
-    `cooldown_elapsed` (circuit). `health_ejected` and `circuit_opened` (via
-    either `consecutive_failures` or `trial_failure`) are logged at WARN;
-    `health_reinstated`, `circuit_closed`, and `circuit_half_opened` at INFO,
-    matching the existing 5xx-is-WARN convention. A Half-Open trial admission
-    is a routine lifecycle event, so it is INFO.
+14. The whole-request hook uses the existing `ServeHTTP` timer and deferred hook. The proxy holds a `*metrics.Collector`. There is no `RequestObserver` interface, because it would have only one implementation. A request with no healthy backend is counted with `backend=""`. A circuit-denied request is counted with the real backend name.
+15. `health.Checker`, `health.OutlierDetector` and `circuit.Breaker` get a `*metrics.Collector` and a `*slog.Logger` through their constructors. They update gauges at the same edge-triggered points where they log. A log line and a gauge for one transition therefore always agree.
+16. `internal/balancer` does not import `metrics`. The proxy sees `ErrNoHealthyBackends` and records it.
 
-13. **Known, permanent gap: a Half-Open promotion whose CAS is won by
-    `Registry.Selectable()`'s read path is never logged.** `Backend.CircuitOpen()`
-    has no path to a logger without a cross-package plumbing change out of
-    scope. This is recorded explicitly as an accepted limitation (the same shape
-    as ADR-0012's stale-while-half-open note), not left implicit. Remediating it
-    is not approved this sprint.
+### Dashboard and compose stacks
 
-### Integration (`proxy`, `health`, `circuit`)
+17. `deployments/docker/observability/` holds Prometheus and Grafana with provisioned datasource and dashboard. Prometheus scrapes the load balancer every 15s. The dashboard shows request rate by `backend`/`status_class`, p50/p99 latency by `backend`, circuit state, backend health, active requests, and request share by backend. It has a `window` variable (default `5m`) and an `lb` variable. There are no alert rules and no TLS or auth on the metrics endpoint (ADR-0005).
+18. The repo-root `docker-compose.yml` runs the LB image, three dummy backends, Prometheus and Grafana with one command. The compose files under `deployments/docker/` stay for the host-process flows (`make run`, the chaos scripts).
+    - It uses `prometheus-stack.yml`, which differs from `prometheus.yml` only in the target `l7lb:9090`.
+    - It mounts the shared Grafana provisioning and dashboard directories read-only, so there is one source of truth.
+    - It publishes `8080` (client), `8081` (health) and `3000` (Grafana). Prometheus, `:9090` and the backends stay internal.
+    - Prometheus waits for the LB to be healthy. Every service has `restart: unless-stopped`.
+    - `./configs/docker.yaml` is mounted over `/etc/l7lb/config.yaml`, so config edits need no rebuild.
 
-14. **The whole-request metrics hook reuses the existing `ServeHTTP` timer and
-    deferred-hook location; no new fan-out interface is introduced.** `metrics`
-    is the hook's only consumer (unlike `RoundTripObserver`'s three), so the
-    proxy holds a `*metrics.Collector` (or a small consumer-defined interface if
-    a test seam is wanted) rather than a `RequestObserver` abstraction with one
-    implementation. A request that finds no healthy backend is counted with
-    `backend=""`; a circuit-denied request is counted with the real backend
-    label `Select()` already identified — the two are never conflated.
+### Admin routes and the algorithm gauge
 
-15. **`health.Checker`, `health.OutlierDetector`, and `circuit.Breaker` each
-    receive a `*metrics.Collector` alongside the `*slog.Logger`, via their
-    existing constructors.** Gauge updates happen at the exact edge-triggered
-    call sites the log lines use (the `CircuitTransition != NoChange` check, the
-    `== threshold` gate, the `ejected`-per-episode guard), so a log line and a
-    gauge for the same transition can never disagree.
-
-16. **`internal/balancer` requires zero changes and zero new imports.** A
-    balancer-level selection failure (`ErrNoHealthyBackends`) is visible to the
-    proxy — the whole-request hook's owner — so "metrics reflect balancer
-    failures" is satisfied without `balancer` importing `metrics`.
-
-### Grafana dashboard and demo stack (`deployments/docker/observability/`)
-
-17. **A new docker-compose stack (Prometheus + Grafana with datasource and
-    dashboard provisioning) is kept entirely separate from S1.T9's
-    dummy-backends compose and Sprint 5's future bench compose.** One dashboard
-    JSON covers exactly the instrumented set — five panels: request rate by
-    `backend`/`status_class`, latency p50/p99 by `backend`, circuit state (the
-    label-enum read directly), backend healthy, and active connections.
-    Prometheus scrapes the load balancer's `metrics.listen` port at a
-    reasonable default interval (15s). No alerting rules, no TLS/auth on the
-    endpoint (the latter out of scope per ADR-0005).
-
-### Repo-root demo stack (`docker-compose.yml`)
-
-18. **A single `docker-compose.yml` at the repository root composes the whole
-    demonstrable system — the LB image (S3.T10), the three dummy backends,
-    Prometheus, and Grafana — up under one command.** It is **additive**: the
-    two composes under `deployments/docker/` (`docker-compose.yml`, backends
-    only, for the host-process `make run` and chaos flow; `observability/`,
-    Prometheus + Grafana against a host-process LB) remain canonical and
-    untouched for the flows they were built for, and the chaos scripts
-    (`chaos/eviction.sh`, `chaos/circuit.sh`) keep targeting the host-process
-    LB. The root compose does not replace or supersede them.
-
-    - **Per-stack Prometheus config.** A new
-      `deployments/docker/observability/prometheus/prometheus-stack.yml` sits
-      alongside the existing `prometheus.yml`; the only delta is
-      `targets: ["l7lb:9090"]` (service name over the compose network) instead
-      of `targets: ["host.docker.internal:9090"]`. `prometheus.yml` is
-      otherwise unchanged (it gains only a header cross-reference comment), so
-      neither stack's scrape target is fragile to the other.
-
-    - **Single-source Grafana provisioning.** The root compose bind-mounts the
-      existing `deployments/docker/observability/grafana/provisioning` and
-      `.../grafana/dashboards` trees read-only, so the dashboard JSON and
-      datasource config have one source of truth across both stacks. The
-      Prometheus service is named exactly `prometheus`, so the provisioning
-      YAML's hardcoded `http://prometheus:9090` datasource resolves in either
-      stack.
-
-    - **Published host ports.** Exactly `8080` (LB client traffic), `8081` (LB
-      health endpoint — published so a reviewer can `curl /readyz` during the
-      demo), and `3000` (Grafana). Prometheus, the LB metrics endpoint
-      (`:9090`), and the backends stay internal to the compose network.
-
-    - **Mixed health-gating dependency chain.** Backends start immediately
-      (they stay on the `scratch` base and have no shell to run a probe with,
-      so adding one to `dummy-backend` was rejected as unrelated scope creep);
-      the LB waits only for the backends to start and advertises health via its
-      own `probe` `HEALTHCHECK`; Prometheus waits for the LB's
-      `condition: service_healthy` so it never scrapes a not-yet-listening
-      metrics port; Grafana waits only for Prometheus to start, since it
-      retries datasource connections gracefully. Every service carries
-      `restart: unless-stopped`, so the
-      `docker stop backend-a` / `docker start backend-a` circuit-recovery demo
-      works without the container vanishing.
-
-    - **Config bind-mount.** `./configs/docker.yaml` is bind-mounted over the
-      image's baked `/etc/l7lb/config.yaml`, a no-op override at first, so a
-      reviewer can edit config on disk and `docker compose restart l7lb`
-      without rebuilding.
-
-    No network split (single default bridge), no image push, no multi-arch
-    build, and no deployment-target commitment — all deferred/out of scope per
-    ADR-0005 (see also its 2026-09-22 amendment).
+19. The metrics listener also serves `net/http/pprof` and the reload routes `POST /admin/reload` and `GET /admin/reload/last` (ADR-0015). Anyone who can reach this listener can replace the backend list. This is accepted because the listener is operational and unpublished. The repo-root, bench and demo compose files never publish it. An operator who runs the bare binary should bind `metrics.listen` to loopback. It is not a production control plane, and ADR-0005 keeps authentication out of scope. The last reload outcome is served as JSON, not as a metric, because its error text cannot be a label value.
+20. `lb_algorithm_info{algorithm}` is 1 for the selection algorithm in use. `Build` seeds it, and a reload that changes the algorithm moves it (ADR-0015). `SetAlgorithm(previous, current)` sets the new series to 1 first and then deletes the old one. A scrape therefore never sees zero algorithms, and the `Collector` keeps no state. Cardinality is bounded by the four algorithms.
 
 ## Consequences
 
-- Positive: the frozen package graph is unchanged; `metrics` stays a leaf and
-  `balancer` stays untouched, so this workstream adds no cycle risk.
-- Positive: one definition of request duration (whole-request), one detection
-  signal per transition shared by the log line and the gauge, and one seeding
-  code path — each removes a class of drift.
-- Positive: private registries make the collector trivially testable in
-  isolation and `t.Parallel()`-safe.
-- Negative: `Backend`, `circuit.New`, and the `health` constructors each grow a
-  parameter or return value (API churn that is additive, not breaking).
-- Negative: metric and log values are closed Go vocabularies, so adding a
-  transition requires editing the vocabulary constants in two places
-  (`internal/logger/doc.go` and its producer) rather than logging a free string.
-- Neutral: `lb_active_connections` amends a reservation rather than reversing
-  a decision; the reservation doc is updated in the same change.
-- Negative (known, permanent): Half-Open promotions won by a `Selectable()`
-  scan are never logged (decision 13).
-
-## Alternatives considered
-
-- **Let `internal/metrics` import `backend` and scrape state itself:**
-  rejected — breaks the frozen leaf rule and inverts the push direction the
-  package graph requires.
-- **Use `prometheus.DefaultRegisterer`:** rejected — process-global mutable
-  state makes independent, parallel test instances collide.
-- **A numeric-encoded `lb_circuit_state` gauge:** rejected in decision 5 — an
-  encoding table to maintain and not queryable by state name.
-- **A `RequestObserver` fan-out mirroring `RoundTripObserver`:** rejected in
-  decision 14 — an abstraction with one real implementation, and no second
-  consumer in sight.
-- **Exposing `RoundTripObserver`'s backend-leg duration as the latency
-  histogram:** rejected in decision 3 — two definitions of "request duration"
-  invites operators to read the wrong one.
-- **Having `Backend` import `log/slog` directly to log transitions:** rejected
-  in decision 10 — `CircuitTransition` keeps `backend` a plain state holder and
-  keeps policy/logging in `circuit`.
-- **Fixing the Half-Open-via-`Selectable()` logging gap now:** rejected in
-  decision 13 — a cross-package plumbing change with no approved ticket;
-  documented as an accepted limitation instead.
-- **A metrics disable toggle or per-backend `metrics.listen` overrides:**
-  rejected in decision 8 — always-on, global config only, consistent with
-  ADR-0011 decision 10.
-
-## Amendment — 2026-09-21: `CircuitTransition` gains a fifth value
-
-**Supersedes the four-value list in decision 10.** Decision 10 originally
-named `NoChange`/`Opened`/`Closed`/`HalfOpened`, but decision 12 requires four
-distinct circuit log reasons (`consecutive_failures`, `trial_success`,
-`trial_failure`, `cooldown_elapsed`). Two of those — `consecutive_failures`
-(`Closed→Open`) and `trial_failure` (`HalfOpen→Open`) — both result in an Open
-circuit, so a four-value enum carrying only the resulting state cannot tell
-`circuit.Breaker` which reason to log. Decision 12's phrase
-"`circuit_half_opened`-via-`trial_failure`" was the symptom of this
-inconsistency: a failed trial reopens the circuit (`circuit_opened`), it does
-not half-open it.
-
-Resolved with the project owner during S3.T5.4 by adding **`Reopened`** for the
-`HalfOpen→Open` trial-failure transition, so each logged reason maps 1:1 to a
-transition value. This amends decision 10 in place (five values) and corrects
-decision 12's WARN/INFO list. The Go constants are exported as
-`CircuitNoChange`/`CircuitOpened`/`CircuitReopened`/`CircuitClosed`/
-`CircuitHalfOpened` — the `Circuit` prefix avoids generic names like
-`backend.Opened`; the bare names in decision 10 are shorthand.
-
-The Half-Open-promotion logging gap in decision 13 is unchanged: a promotion
-whose CAS is won by `Registry.Selectable()`'s `Backend.CircuitOpen()` read is
-still never logged, because only `CircuitAllow` can report a promotion it
-performed and has a logger. `CircuitAllow` reports `CircuitHalfOpened` when
-*it* performed the promotion (the promotion CAS has exactly one winner, so
-exactly one concurrent caller reports it — tying the report to the promotion
-rather than to winning the trial slot keeps the exactly-once guarantee under a
-race). `CircuitOpen` continues to return `bool`, not a transition.
-
-## Amendment (2026-10-07, S5.T20.1) — the metrics listener carries the reload admin routes
-
-The metrics listener (decision 8), which S4.T9 already extended with
-`net/http/pprof`, gains two routes: `POST /admin/reload` and
-`GET /admin/reload/last` (ADR-0015 decisions 13–17). No metric is added: the
-last reload's outcome is served as JSON because its error text cannot be a
-label value, and the reload-outcome counter stays the deferred proposal.
-
-This is the first route on the listener that changes state, so the exposure
-statement is now stronger than pprof's. Anyone who can reach the listener can
-replace the backend list. That is accepted because the listener stays
-operational and unpublished: the repo-root, bench and demo compose files never
-publish it (`docker-compose.yml`, `bench/docker-compose.yml`,
-`demo/docker-compose.yml`), and the bare binary's default `:9090` should be
-bound to loopback by an operator who does not want it reachable. It is not a
-production control plane, and ADR-0005 keeps authentication out of scope.
-
-## Amendment (2026-10-07, S5.T20.7) — `lb_algorithm_info`
-
-A new info-style gauge, `lb_algorithm_info{algorithm}`, is 1 for the selection
-algorithm currently in use. `Build` seeds it, and a reload that changes the
-algorithm moves it (ADR-0015 decisions 18–21). The setter takes the previous
-and the new name: it sets the new series to 1 first, then deletes the old one,
-so a scrape never sees zero current algorithms, and the leaf `Collector` stays
-stateless (decision 1). Cardinality is bounded by the four implemented
-algorithms. Dashboards use it to show the current algorithm and to mark the
-moment it changes.
+- The package graph does not change. `metrics` stays a leaf, and `balancer` does not change.
+- There is one definition of request duration, one detection point for each transition (shared by the log and the gauge) and one seeding path. Each removes a source of drift.
+- Private registries make the collector easy to test in parallel.
+- `Backend`, `circuit.New` and the `health` constructors grow a parameter or a return value.
+- Metric and log values are closed Go vocabularies. A new transition needs edits in `internal/logger` and in its producer.
+- Half-Open promotions won by a `Selectable()` scan are not logged.
+- Rejected alternatives:
+  - Letting `metrics` import `backend` (breaks the leaf rule).
+  - `DefaultRegisterer` (global state).
+  - Exposing the backend-leg duration as the histogram (two meanings of latency).
+  - Logging from `Backend` directly (`backend` must stay a plain state holder).

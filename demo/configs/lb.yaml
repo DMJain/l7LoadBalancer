@@ -1,4 +1,4 @@
-# Demo LB (S5.T20.8, ADR-0023 decisions 14–15).
+# Demo LB (ADR-0023 decisions 14–15).
 #
 # The demo's one load balancer. Change `algorithm` here and send
 #   docker compose -f demo/docker-compose.yml kill -s HUP lb

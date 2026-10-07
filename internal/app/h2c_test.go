@@ -107,7 +107,7 @@ func TestBuildH2CModeServerConstruction(t *testing.T) {
 
 // TestRunH2CListenerServesHTTP2PriorKnowledge proves App.Run's h2c handler
 // accepts a prior-knowledge cleartext HTTP/2 connection (the client speaks the
-// HTTP/2 preface immediately) and serves a full request as HTTP/2.0 (S5.T2).
+// HTTP/2 preface immediately) and serves a full request as HTTP/2.0.
 // The http2.Transport with AllowHTTP + a plaintext DialTLSContext sends the
 // preface (prior knowledge) without the HTTP/1.1 Upgrade handshake.
 func TestRunH2CListenerServesHTTP2PriorKnowledge(t *testing.T) {
@@ -144,7 +144,7 @@ func TestRunH2CListenerServesHTTP2PriorKnowledge(t *testing.T) {
 // Upgrade mechanism (RFC 7540 §3.2): a plaintext HTTP/1.1 request carrying
 // Upgrade: h2c and HTTP2-Settings is answered with 101 Switching Protocols.
 // The stdlib's own unencrypted-HTTP/2 server only detects the prior-knowledge
-// preface, which is why x/net/http2/h2c is used (S5.T2).
+// preface, which is why x/net/http2/h2c is used.
 func TestRunH2CListenerUpgrade(t *testing.T) {
 	silenceDefault(t)
 

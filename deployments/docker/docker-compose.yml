@@ -1,12 +1,12 @@
-# Dummy backends for exercising the load balancer (S1.T9).
+# Dummy backends for exercising the load balancer.
 #
 # Three stdlib-only Go services, each mapped to a host port that
 # configs/example.yaml already points at (9001/9002/9003), so
 # `docker compose up -d` plus `make run` needs no extra configuration.
 #
 # The load balancer itself is NOT a service here on purpose: it runs locally
-# via `make run`. Sprint 5 owns the separate, more elaborate "LB + Nginx + 4
-# backends" bench compose, kept distinct so the two don't drift apart.
+# via `make run`. The separate, more elaborate "LB + Nginx + 4
+# backends" bench compose is kept distinct so the two don't drift apart.
 #
 # The per-service SLEEP_MS / FAIL_RATE defaults below are distinct and
 # non-zero, so `docker compose up` immediately demonstrates uneven latency

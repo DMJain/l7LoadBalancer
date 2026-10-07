@@ -20,7 +20,7 @@ import (
 // balancer.NewFromConfig. The constants name every algorithm the project
 // intends to support; the narrower set accepted by the current build is
 // implementedAlgorithms. See ADR-0004 and
-// docs/design/sprint-1-contracts.md "Algorithm identifier table".
+// docs/architecture.md "Algorithm identifier table".
 const (
 	AlgorithmRoundRobin     = "round_robin"
 	AlgorithmLeastConn      = "least_conn"
@@ -45,14 +45,12 @@ var backendNamePattern = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 
 // envVarNamePattern matches the variable name inside a backend URL's ${...}
 // reference: [A-Za-z_][A-Za-z0-9_]*. There is deliberately no ${VAR:-default}
-// syntax; anything else is a malformed reference and fails the load. S4.T16.
+// syntax; anything else is a malformed reference and fails the load.
 var envVarNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // Duration and listen defaults, applied by Validate when the corresponding
 // YAML field is omitted. Exported so tests, docs, and the packages that consume
-// them (health, circuit) reference one value instead of restating it. Sprint 3
-// added the health/circuit/metrics defaults; S4.T7 added DefaultReadTimeout;
-// S4.T8 added the four transport defaults.
+// them (health, circuit) reference one value instead of restating it.
 //
 // ADR-0011 decision 10 is why these three are config while the
 // consecutive-failure/-success thresholds, the passive-outlier window size and
@@ -76,7 +74,7 @@ const (
 	DefaultMetricsListen = ":9090"
 	// DefaultHealthEndpointListen is the address the orchestrator probe
 	// endpoint (livez/readyz/startupz) binds when health_endpoint.listen is
-	// omitted. Always-on, mirroring DefaultMetricsListen. ADR-0014 (S3.T12).
+	// omitted. Always-on, mirroring DefaultMetricsListen. ADR-0014.
 	DefaultHealthEndpointListen = ":8081"
 	// DefaultDrainWindow is how long a removed backend may keep its in-flight
 	// requests before they are cancelled, when reload.drain_window is omitted.
@@ -86,7 +84,6 @@ const (
 	// a full request, including the body, when server.read_timeout is omitted.
 	// Generous enough for slow-but-legitimate uploads while still bounding a
 	// slow-loris body; the server's ReadHeaderTimeout covers slow headers.
-	// S4.T7.
 	DefaultReadTimeout = 60 * time.Second
 	// DefaultIdleTimeout is how long an idle client keep-alive connection is
 	// held open before it is closed, when server.idle_timeout is omitted. In
@@ -95,50 +92,49 @@ const (
 	// connection, and IdleTimeout is what reclaims idle connections. 90s is a
 	// deliberate server keep-alive bound, generous enough for multiplexed
 	// HTTP/2 connections; http.Server itself has no non-zero default (left
-	// unset it would derive from ReadTimeout). S5.T1.
+	// unset it would derive from ReadTimeout).
 	DefaultIdleTimeout = 90 * time.Second
 	// DefaultDialTimeout bounds dialing a backend when transport.dial_timeout
 	// is omitted. LAN backends accept in milliseconds; 5s is generous headroom
-	// that still fails a non-accepting address fast. S4.T8.
+	// that still fails a non-accepting address fast.
 	DefaultDialTimeout = 5 * time.Second
 	// DefaultResponseHeaderTimeout bounds how long a backend may take to begin
 	// answering headers before the round trip is failed, when
-	// transport.response_header_timeout is omitted. S4.T8.
+	// transport.response_header_timeout is omitted.
 	DefaultResponseHeaderTimeout = 30 * time.Second
 	// DefaultMaxIdleConnsPerHost is the per-host idle connection pool size when
 	// transport.max_idle_conns_per_host is omitted. The stdlib default of 2 is
 	// far too low for a proxy multiplexing many requests onto few backends.
-	// S4.T8.
 	DefaultMaxIdleConnsPerHost = 100
 	// DefaultIdleConnTimeout recycles idle keep-alive connections when
 	// transport.idle_conn_timeout is omitted. Kept at the stdlib default
-	// deliberately; the Sprint 5 benchmarks can revisit. S4.T8.
+	// deliberately.
 	DefaultIdleConnTimeout = 90 * time.Second
 	// DefaultForceHTTP2 is whether HTTP/2 is negotiated with https:// backends
 	// via ALPN when transport.force_http2 is omitted. True: a https:// backend
 	// URL should speak HTTP/2 by default, and Go's automatic HTTP/2 is silently
 	// lost once the transport customizes TLSClientConfig, so construction code
-	// applies this default explicitly. S5.T3-main.
+	// applies this default explicitly.
 	DefaultForceHTTP2 = true
 )
 
 // Config is the top-level load balancer configuration, loaded from YAML.
 //
-// Sprint 3's health and circuit knobs are nested `health:`/`circuit:` sections
+// The health and circuit knobs are nested `health:`/`circuit:` sections
 // rather than flat top-level keys, so each subsystem's settings stay grouped
 // and the schema remains legible as it grows. See ADR-0011 decision 10.
 type Config struct {
 	Listen string `yaml:"listen"`
 	// TLS selects TLS mode when the `tls:` block is present (non-nil). The
 	// block's presence — not an enum field — is the mode switch, so there is
-	// no second source of truth that can disagree with it (S5.T1).
+	// no second source of truth that can disagree with it.
 	TLS *TLSConfig `yaml:"tls"`
 	// H2C selects cleartext HTTP/2 mode when true. It is mutually exclusive
 	// with a present `tls:` block; Validate rejects them together naming both
-	// (S5.T1). Plain HTTP is the absence of both. In h2c mode app.Build wraps
+	//. Plain HTTP is the absence of both. In h2c mode app.Build wraps
 	// the proxy handler in golang.org/x/net/http2/h2c, which serves both
 	// prior-knowledge and HTTP/1.1-Upgrade h2c connections over the plaintext
-	// client listener (S5.T2).
+	// client listener.
 	H2C            bool                 `yaml:"h2c"`
 	Algorithm      string               `yaml:"algorithm"`
 	Health         HealthConfig         `yaml:"health"`
@@ -156,7 +152,7 @@ type Config struct {
 // and installed on the client http.Server, which then negotiates HTTP/2 via
 // ALPN automatically. Deliberately minimal: no min_version, cipher suites, or
 // OCSP — Go's crypto/tls defaults are secure, and adding those knobs later is a
-// backwards-compatible extension point (S5.T1).
+// backwards-compatible extension point.
 type TLSConfig struct {
 	// CertFile is the path to the PEM-encoded certificate (or chain).
 	CertFile string `yaml:"cert_file"`
@@ -203,7 +199,7 @@ type MetricsConfig struct {
 
 // HealthEndpointConfig holds the orchestrator probe endpoint's tunables. Like
 // MetricsConfig it is always-on with a single listen address; Listen follows
-// the same nil-means-omitted convention. ADR-0014 (S3.T12).
+// the same nil-means-omitted convention. ADR-0014.
 type HealthEndpointConfig struct {
 	// Listen is the host:port the /livez, /readyz, and /startupz endpoints
 	// bind. Omitted → DefaultHealthEndpointListen.
@@ -218,25 +214,25 @@ type HealthEndpointConfig struct {
 // spans end-of-request-headers through the entire response body copy, so a
 // slow-but-healthy upstream (large response, slow client) would trip it even
 // though nothing is wrong. It is not symmetric with ReadTimeout and must not be
-// added without revisiting this reasoning (S4.T7). The residual exposure — a
+// added without revisiting this reasoning. The residual exposure — a
 // client that stalls reading while the proxy still has buffered data to send
 // pins one goroutine until the OS TCP retry window, but only while data
-// remains to write — is recorded in the bundle spec and is out of scope here.
+// remains to write — is accepted and not handled here.
 type ServerConfig struct {
 	// ReadTimeout bounds reading a full client request, including the body.
 	// Omitted → DefaultReadTimeout. Not reloadable: NonBackendChanges names
 	// "server" when it differs, so a reload that would silently change it is
-	// rejected (S4.T7).
+	// rejected.
 	//
 	// It applies in plain HTTP mode only. In the HTTP/2 modes (TLS, h2c) the
 	// server sets ReadTimeout to 0 because ReadTimeout spans the whole
 	// connection and would kill every multiplexed stream on it; IdleTimeout is
-	// the connection-lifetime bound there instead (S5.T1).
+	// the connection-lifetime bound there instead.
 	ReadTimeout *time.Duration `yaml:"read_timeout"`
 	// IdleTimeout bounds an idle client keep-alive connection. Omitted →
 	// DefaultIdleTimeout. It applies in every mode: in plain HTTP it is the
 	// idle keep-alive bound, and in the HTTP/2 modes it is the primary
-	// connection-lifetime bound, where ReadTimeout is disabled (S5.T1). Not
+	// connection-lifetime bound, where ReadTimeout is disabled. Not
 	// reloadable: NonBackendChanges names "server" when it differs.
 	IdleTimeout *time.Duration `yaml:"idle_timeout"`
 }
@@ -244,10 +240,10 @@ type ServerConfig struct {
 // TransportConfig holds the upstream http.Transport tunables. Nested like the
 // other subsystems and following the same nil-means-omitted convention; after
 // Validate returns nil every pointer is non-nil. These knobs replace
-// http.DefaultTransport for the proxy's backend connections (S4.T8). Backend
+// http.DefaultTransport for the proxy's backend connections. Backend
 // protocol selection is scheme-driven: an http:// URL uses HTTP/1.1 and an
 // https:// URL negotiates HTTP/2 via ALPN, both on the same shared transport
-// (S5.T3-main). MaxConnsPerHost is deliberately out of scope.
+// transport. MaxConnsPerHost is deliberately out of scope.
 type TransportConfig struct {
 	// ForceHTTP2 enables HTTP/2 negotiation with https:// backends via ALPN.
 	// Omitted → DefaultForceHTTP2 (true). It is a pointer because the default
@@ -255,13 +251,13 @@ type TransportConfig struct {
 	// which forces HTTP/1.1 to backends for debugging. app.buildTransport sets
 	// http.Transport.ForceAttemptHTTP2 explicitly from it — Go silently stops
 	// auto-negotiating HTTP/2 the moment TLSClientConfig is customized, and
-	// tls_skip_verify customizes it (S5.T3-main).
+	// tls_skip_verify customizes it.
 	ForceHTTP2 *bool `yaml:"force_http2"`
 	// TLSSkipVerify disables verification of a backend's TLS certificate.
 	// Omitted → false. It is a plain bool because false is the zero value, so
 	// omission needs no special handling. Set true only for self-signed backend
 	// certs in test/staging: an explicit opt-in, never a hardcoded insecure
-	// default (S5.T3-main).
+	// default.
 	TLSSkipVerify bool `yaml:"tls_skip_verify"`
 	// DialTimeout bounds dialing and connection establishment to a backend.
 	// Omitted → DefaultDialTimeout.
@@ -312,10 +308,9 @@ type BackendConfig struct {
 // resolved URL is what Validate checks and a secret can live only in the
 // environment. Only backend URLs are templated — every other field passes
 // through untouched. Interpolation re-runs on every Load, so a reload resolves
-// from the current environment. See expandBackendURLs and the S4.T16 bundle
-// spec.
+// from the current environment. See expandBackendURLs.
 //
-// Error handling convention (frozen S1.T0.5): errors are wrapped, not
+// Error handling convention: errors are wrapped, not
 // sentinel — fmt.Errorf("config: %w", err). The wrapped OS error remains
 // inspectable via errors.Is(err, os.ErrNotExist) for callers that need it.
 func Load(path string) (*Config, error) {
@@ -336,7 +331,7 @@ func Load(path string) (*Config, error) {
 // same strict decoding and ${VAR} expansion, and returns the config
 // unvalidated. source names the input in errors ("config: parse <source>: …"),
 // since there is no path to name. The reload admin endpoint calls it with a
-// request body (S5.T20.1, ADR-0015 decision 13).
+// request body (ADR-0015 decision 13).
 func Parse(r io.Reader, source string) (*Config, error) {
 	cfg, err := decode(r)
 	if err != nil {
@@ -364,7 +359,7 @@ func decode(r io.Reader) (*Config, error) {
 // expandBackendURLs resolves ${VAR} references in every backend URL from the
 // process environment, in place. It is the one expansion step Load runs after
 // decode and before returning, so Validate and every consumer see only
-// resolved values. Non-backend fields are not touched. S4.T16.
+// resolved values. Non-backend fields are not touched.
 func expandBackendURLs(cfg *Config) error {
 	for i := range cfg.Backends {
 		expanded, err := expandEnv(cfg.Backends[i].Name, cfg.Backends[i].URL)
@@ -381,7 +376,7 @@ func expandBackendURLs(cfg *Config) error {
 // empty variable, an unterminated ${, an empty ${}, or a name with invalid
 // characters is an error naming the backend; the expanded value is never
 // included in an error, so a resolved secret cannot reach the logs through this
-// path. raw with no ${ is returned unchanged. S4.T16.
+// path. raw with no ${ is returned unchanged.
 func expandEnv(backendName, raw string) (string, error) {
 	if !strings.Contains(raw, "${") {
 		return raw, nil
@@ -417,11 +412,11 @@ func expandEnv(backendName, raw string) (string, error) {
 // Validate checks the config for correctness: non-empty Listen, at most one
 // listener mode, a complete tls: block when present, at least one backend,
 // each backend URL parseable with a host, unique backend names, a recognized
-// Algorithm value, positive Sprint 3 durations, and host:port-valid
+// Algorithm value, positive health, circuit and metrics durations, and host:port-valid
 // metrics/health-endpoint listen addresses.
 //
 // Validate normalizes before it validates: an empty Algorithm is set to
-// AlgorithmRoundRobin, and each omitted Sprint 3 duration or listen address is
+// AlgorithmRoundRobin, and each omitted health, circuit or metrics duration or listen address is
 // set to its exported default. After Validate returns nil, every field is
 // populated and valid, so downstream consumers never re-check or re-default.
 // This is why Validate mutates; splitting Normalize() out isn't justified by
@@ -491,8 +486,7 @@ func (c *Config) Validate() error {
 	return normalizeListen("health_endpoint listen", &c.HealthEndpoint.Listen, DefaultHealthEndpointListen)
 }
 
-// normalizeAndValidateDefaults applies the Sprint 3, S4.T7, S4.T8, S5.T1, and
-// S5.T3-main defaults to every omitted duration (and the transport's
+// normalizeAndValidateDefaults applies the documented defaults to every omitted duration (and the transport's
 // force_http2 bool) and rejects an explicitly-set non-positive duration. Called
 // last so the listener and backend checks keep their fail-fast order.
 func (c *Config) normalizeAndValidateDefaults() error {
@@ -535,8 +529,8 @@ func (c *Config) normalizeAndValidateDefaults() error {
 // nil-ness distinguishes "key absent" from "key set to empty", mirroring
 // normalizeDuration. field is the config key being validated, used only to
 // build an attributable error message. Both the metrics and health-endpoint
-// listeners share this: they are always-on (ADR-0013 decision 8, ADR-0014
-// (S3.T12)), so an explicit empty string is an error rather than a way to
+// listeners share this: they are always-on (ADR-0013 decision 8, ADR-0014),
+// so an explicit empty string is an error rather than a way to
 // switch either off.
 func normalizeListen(field string, value **string, def string) error {
 	if *value == nil {
@@ -614,7 +608,7 @@ func validateBackendName(name string) error {
 
 // validateBackendURL enforces a parseable URL that starts with a lowercase
 // http:// or https:// scheme, has a non-empty host, and carries no query
-// string or fragment. Paths are allowed by the schema; note that Sprint 1's
+// string or fragment. Paths are allowed by the schema; note that the
 // proxy Director sets only scheme/host, so a configured path prefix is a
 // known limitation, not joined onto the request path (see ADR-0007).
 //
@@ -623,10 +617,10 @@ func validateBackendName(name string) error {
 // otherwise pass a post-parse check against "http".
 //
 // Every error names only the backend and the url field, never the raw URL:
-// after env interpolation (S4.T16) the raw string can embed a resolved secret,
+// after env interpolation the raw string can embed a resolved secret,
 // and main logs validation errors. url.Parse's own error is deliberately not
 // wrapped here because it echoes the raw URL; the parse branch reports only
-// that the url is invalid (S4.T17).
+// that the url is invalid.
 func validateBackendURL(name, raw string) error {
 	if !strings.HasPrefix(raw, "http://") && !strings.HasPrefix(raw, "https://") {
 		return fmt.Errorf("config: backend %q url must use http or https scheme", name)

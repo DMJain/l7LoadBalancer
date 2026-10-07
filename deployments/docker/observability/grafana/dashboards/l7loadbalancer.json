@@ -514,8 +514,7 @@
   "refresh": "10s",
   "schemaVersion": 39,
   "tags": [
-    "l7loadbalancer",
-    "sprint-3"
+    "l7loadbalancer"
   ],
   "templating": {
     "list": [

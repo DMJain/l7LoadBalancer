@@ -23,8 +23,8 @@ import (
 const (
 	// hotKeySeed is a locked constant: the checked-in test asserts the
 	// previously-verified busiest-backend shares this seed produces (naive
-	// 4005, bounded 3126 of 10000 — the exact figures the Sprint 2 spec
-	// froze). Changing it re-derives the numbers but not the property under
+	// 4005, bounded 3126 of 10000 — the exact figures previously
+	// verified). Changing it re-derives the numbers but not the property under
 	// test.
 	hotKeySeed = 2253
 
@@ -150,7 +150,7 @@ func (s *ConsistentHashBoundedLoads) wouldNeedFallback(addr string) bool {
 // hashing piles roughly two-fifths of all traffic onto one backend, while
 // bounded-loads holds the busiest backend to the capacity bound
 // (ceil(10000/4 * 1.25) = 3125, plus the one-over the `<=` admission rule
-// allows). The assertion windows are the ones the Sprint 2 spec froze from
+// allows). The assertion windows are the ones frozen from
 // this seed's verified output; the general distribution is in ADR-0009, backed
 // by the offline reproducer.
 func TestConsistentHashHotKeyRebalances(t *testing.T) {

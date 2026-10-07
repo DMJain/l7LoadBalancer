@@ -60,7 +60,7 @@ func TestCollectorObserveRequest(t *testing.T) {
 	assert.Equal(t, 2.0, m.GetCounter().GetValue())
 
 	// The protocol label is part of identity: an HTTP/2 request to the same
-	// backend/method/status is a distinct series (S5.T3-main).
+	// backend/method/status is a distinct series.
 	c.ObserveRequest("backend-a", "GET", "2xx", "h2", 5*time.Millisecond)
 	h2 := findMetric(t, c, "lb_requests_total",
 		map[string]string{"backend": "backend-a", "method": "GET", "status_class": "2xx", "protocol": "h2"})
@@ -90,7 +90,7 @@ func TestCollectorObserveRequestHistogram(t *testing.T) {
 		bounds = append(bounds, b.GetUpperBound())
 	}
 	assert.Equal(t, []float64{.005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10}, bounds,
-		"provisional bucket set from doc.go, pending Sprint 5 benchmark data")
+		"provisional bucket set from doc.go, pending benchmark data")
 }
 
 func TestCollectorRecordProbe(t *testing.T) {
@@ -196,7 +196,7 @@ func TestCollectorActiveRequests(t *testing.T) {
 // TestCollectorDeletesBackendSeries proves the deletion operations reload needs
 // for a removed backend: its healthy series and every circuit-state series are
 // gone, while its active-requests series is deliberately left in place
-// (deleted only at drain completion, S4.T4).
+// (deleted only at drain completion).
 func TestCollectorDeletesBackendSeries(t *testing.T) {
 	t.Parallel()
 	c := NewCollector()
@@ -218,7 +218,7 @@ func TestCollectorDeletesBackendSeries(t *testing.T) {
 		"the active-requests series is not deleted here")
 }
 
-// TestCollectorDeleteActiveRequests proves the drain's deletion (S4.T4): a
+// TestCollectorDeleteActiveRequests proves the drain's deletion: a
 // removed backend's active-requests series is gone, and a same-name fresh
 // backend's series survives when the drain skips the deletion because the name
 // is in use — modelled here as deleting the old instance's series before the
@@ -303,7 +303,7 @@ func TestCollectorExpositionEndpoint(t *testing.T) {
 	assert.NotContains(t, text, "status_code", "status_code is deliberately never a label")
 }
 
-// TestCollectorSetAlgorithm covers lb_algorithm_info (S5.T20.7, ADR-0013
+// TestCollectorSetAlgorithm covers lb_algorithm_info (ADR-0013
 // amendment): the current algorithm reads 1, a move sets the new series and
 // deletes the old one, and seeding passes an empty previous name.
 func TestCollectorSetAlgorithm(t *testing.T) {

@@ -43,7 +43,7 @@ demo-down: ## Tear down the local live demo stack
 	docker compose -f demo/docker-compose.yml down
 
 .PHONY: soak
-soak: ## Run the S4.T10 soak test, non-race, both tolerances (SOAK_DURATION=2m to shorten)
+soak: ## Run the soak test, non-race, both tolerances (SOAK_DURATION=2m to shorten)
 	go test ./test/chaos -run TestChaosSoakConnectionLifecycle -soak -soak-duration=$(SOAK_DURATION) -timeout 2h -v
 
 .PHONY: soak-race
@@ -51,7 +51,7 @@ soak-race: ## Run the soak under the race detector (goroutine tolerance only)
 	go test -race ./test/chaos -run TestChaosSoakConnectionLifecycle -soak -soak-duration=$(SOAK_DURATION) -timeout 2h -v
 
 .PHONY: e2e
-e2e: ## Run the S4.T14 SIGHUP e2e zero-drop test (builds and spawns the real binary; needs `go` on PATH; run `ulimit -n 10240` first in restrained environments)
+e2e: ## Run the SIGHUP e2e zero-drop test (builds and spawns the real binary; needs `go` on PATH; run `ulimit -n 10240` first in restrained environments)
 	go test ./test/chaos -run TestChaosSighupReloadZeroDrop1000 -e2e -timeout 10m -v
 
 .PHONY: fmt

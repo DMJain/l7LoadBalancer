@@ -6,8 +6,7 @@
 //
 // It exists so production, the chaos harness, and integration tests build the
 // system the same way: Build assembles the graph, and Run serves it until the
-// context is cancelled. main is left with flags, file I/O, and signals
-// (S4.T0, spec D3–D4). Nothing reloads the graph yet — S4.T3 adds that.
+// context is cancelled. main is left with flags, file I/O, and signals.
 //
 // The package sits above proxy, health, circuit, metrics, balancer, backend,
 // and config, is imported only by main and tests, and keeps the dependency
@@ -53,7 +52,7 @@ const readHeaderTimeout = 5 * time.Second
 // build time and never mutated here; Run only starts and stops the servers.
 //
 // loadedCfg is the one config record the application keeps: the field the
-// reload operation (S4.T3) replaces, holding the config the running system was
+// reload operation replaces, holding the config the running system was
 // last built or reloaded from, so each reload diffs against the currently
 // loaded config rather than the startup config and successive reloads compose.
 // It is an atomic pointer so a reader never sees a half-replaced config
@@ -178,7 +177,7 @@ func (a *App) LoadedConfig() *config.Config { return a.loadedCfg.Load() }
 
 // Reload replaces the running backend set with the one in cfg, an already
 // parsed and validated config, while traffic flows. It is the application's
-// reload operation (S4.T3). Production reaches it through ReloadFrom, from
+// reload operation. Production reaches it through ReloadFrom, from
 // main's SIGHUP loop or the admin endpoint; it takes the same reload mutex, so
 // it is safe to call concurrently with either (ADR-0015 decisions 6 and 14).
 // Its outcome is recorded as the last reload (decision 16).
@@ -191,7 +190,7 @@ func (a *App) LoadedConfig() *config.Config { return a.loadedCfg.Load() }
 // the reload with nothing changed; after the backend diff is applied the new
 // selector is swapped into the proxy in one atomic store, so requests in
 // flight keep their backend and the next request uses the new algorithm
-// (ADR-0015 decisions 18–21, S5.T20.7). Otherwise the diff is taken against the currently
+// (ADR-0015 decisions 18–21). Otherwise the diff is taken against the currently
 // loaded config (not the startup config), applied to the registry, and the
 // loaded-config record is replaced; unchanged backends keep their instance and
 // all their state (ADR-0015 decisions 2, 6, 12).
@@ -209,9 +208,9 @@ func (a *App) LoadedConfig() *config.Config { return a.loadedCfg.Load() }
 //     now would recreate it negative. A name shared with a removed backend
 //     skips the active seed for that same reason — the fresh instance must not
 //     reset a series the removed instance's requests are still decrementing;
-//     the drain (S4.T4) deletes the series only once it is idle and no current
+//     the drain deletes the series only once it is idle and no current
 //     backend shares the name;
-//   - one drain goroutine starts per removed backend (S4.T4), letting its
+//   - one drain goroutine starts per removed backend, letting its
 //     in-flight requests finish until it is idle or reload.drain_window
 //     expires, then cancelling the rest and logging one backend drained line.
 //     Drains run independently of this call and of later reloads (ADR-0016).
@@ -397,7 +396,7 @@ type runError struct {
 // client server in h2c mode and in plain mode has no TLSConfig and so is served
 // with ListenAndServe: in h2c mode its handler is the h2c handler (cleartext
 // HTTP/2), in plain mode it is the proxy handler (HTTP/1.1). The metrics and
-// health-endpoint servers are always plain HTTP (S5.T1, S5.T2).
+// health-endpoint servers are always plain HTTP.
 func serve(srv *http.Server, label string, errCh chan<- runError) {
 	var err error
 	if srv.TLSConfig != nil {
@@ -415,11 +414,11 @@ func serve(srv *http.Server, label string, errCh chan<- runError) {
 // buildClientServer constructs the client-facing http.Server for the config's
 // listener mode. IdleTimeout is taken from config in every mode, so the knob is
 // never accepted-but-ignored. Plain HTTP sets ReadTimeout from config (the
-// slow-loris bound of S4.T7). TLS mode loads the configured cert pair into the
+// slow-loris bound). TLS mode loads the configured cert pair into the
 // server's TLSConfig up front — so a bad path is a startup error, not a silent
 // plaintext listener — which also makes net/http's ListenAndServeTLS negotiate
 // HTTP/2 via ALPN. It deliberately does NOT set srv.TLSNextProto: an empty map
-// there would silently disable HTTP/2 (S5.T1). h2c mode leaves TLSConfig nil
+// there would silently disable HTTP/2. h2c mode leaves TLSConfig nil
 // (its handler, built in Build, serves HTTP/2 over cleartext) and joins TLS in
 // disabling ReadTimeout.
 //
@@ -450,7 +449,7 @@ func buildClientServer(cfg *config.Config, handler http.Handler) (*http.Server, 
 		// Same rationale as TLS: h2c is HTTP/2 regardless of encryption.
 	default:
 		// Plain HTTP: ReadTimeout bounds the full client request read
-		// including the body, the slow-body slow-loris vector (S4.T7).
+		// including the body, the slow-body slow-loris vector.
 		// WriteTimeout is deliberately omitted: it would span the whole
 		// response copy and trip on a slow-but-healthy upstream. See
 		// Config.ServerConfig.
@@ -460,12 +459,12 @@ func buildClientServer(cfg *config.Config, handler http.Handler) (*http.Server, 
 }
 
 // buildMetricsHandler returns the metrics listener's handler: the Prometheus
-// /metrics endpoint plus net/http/pprof's profile endpoints on the same mux
-// (S4.T9). pprof shares the already-on, unauthenticated operational listener
+// /metrics endpoint plus net/http/pprof's profile endpoints on the same mux.
+// pprof shares the already-on, unauthenticated operational listener
 // rather than adding a second port, so it adds no attack surface the project
 // has not already accepted; security hardening is out of scope (ADR-0005).
 //
-// admin serves the reload admin routes under /admin/ (S5.T20.1). They are the
+// admin serves the reload admin routes under /admin/. They are the
 // listener's first state-changing routes; the listener is never published by
 // any compose file (ADR-0013 amendment of 2026-10-07).
 func buildMetricsHandler(c *metrics.Collector, admin http.Handler) http.Handler {
@@ -481,7 +480,7 @@ func buildMetricsHandler(c *metrics.Collector, admin http.Handler) http.Handler 
 }
 
 // buildTransport constructs the tuned *http.Transport the proxy uses for
-// backend connections in place of http.DefaultTransport (S4.T8): a bounded
+// backend connections in place of http.DefaultTransport: a bounded
 // dial, a response-header timeout, and a per-host idle pool. MaxIdleConns is
 // sized from max_idle_conns_per_host × backend count so the per-host knob is
 // not silently capped by the stdlib default of 100; operators tune per-host,
@@ -489,11 +488,11 @@ func buildMetricsHandler(c *metrics.Collector, admin http.Handler) http.Handler 
 //
 // Protocol selection is scheme-driven and shared: one transport handles both
 // http:// (HTTP/1.1) and https:// (HTTP/2 via ALPN) backends in the same
-// config, so migrating backends to HTTP/2 is incremental (S5.T3-main).
+// config, so migrating backends to HTTP/2 is incremental.
 // ForceAttemptHTTP2 is set explicitly from force_http2 for a reason: Go only
 // auto-negotiates HTTP/2 on a transport whose TLSClientConfig is nil, and
 // tls_skip_verify sets it — so without this line every https:// backend would
-// silently fall back to HTTP/1.1 with no error, warning, or log (spec §17).
+// silently fall back to HTTP/1.1 with no error, warning, or log.
 //
 // cfg must already have passed Validate.
 func buildTransport(cfg *config.Config) *http.Transport {

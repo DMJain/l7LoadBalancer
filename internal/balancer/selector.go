@@ -11,10 +11,10 @@ import (
 )
 
 // Selector chooses a backend for a given request. Implementations live in
-// this package, not in the consumer (proxy), because Sprint 1 and Sprint 2
-// together add four implementations that all satisfy this one contract,
+// this package, not in the consumer (proxy), because four
+// implementations that all satisfy this one contract,
 // and proxy only ever needs the interface type — no methods of its own to
-// hide behind it. See docs/design/sprint-1-contracts.md "Interface
+// hide behind it. See docs/architecture.md "Interface
 // placement decision".
 type Selector interface {
 	Select(ctx context.Context, r *http.Request) (*backend.Backend, error)
@@ -29,7 +29,7 @@ var ErrNoHealthyBackends = errors.New("balancer: no healthy backends")
 // NewFromConfig builds the Selector named by cfg.Algorithm. This is the
 // selector factory; it lives here (not in main.go) so main stays a thin
 // wiring layer and the balancer package owns the config-string-to-type
-// mapping it also documents (docs/design/sprint-1-contracts.md "Algorithm
+// mapping it also documents (docs/architecture.md "Algorithm
 // identifier table").
 //
 // It accepts exactly the identifiers config.Validate accepts
@@ -37,7 +37,7 @@ var ErrNoHealthyBackends = errors.New("balancer: no healthy backends")
 // the empty string — returns a wrapped error rather than falling back to a
 // default: config.Validate already normalizes an omitted algorithm to
 // round_robin, so an unrecognized value here means validation was skipped,
-// and defaulting would mask that. Each sprint adds a case per new selector.
+// and defaulting would mask that. Each new selector adds a case here.
 func NewFromConfig(cfg *config.Config, reg *backend.Registry) (Selector, error) {
 	switch cfg.Algorithm {
 	case config.AlgorithmRoundRobin:

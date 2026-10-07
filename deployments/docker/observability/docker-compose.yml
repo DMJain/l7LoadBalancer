@@ -1,9 +1,9 @@
-# Observability demo stack for the load balancer (S3.T7): Prometheus scrapes
+# Observability demo stack for the load balancer: Prometheus scrapes
 # the load balancer's always-on metrics.listen endpoint, Grafana renders the
 # committed six-panel dashboard.
 #
-# Kept entirely separate from deployments/docker/docker-compose.yml (S1.T9,
-# dummy backends only) and Sprint 5's future bench compose, per ADR-0013
+# Kept entirely separate from deployments/docker/docker-compose.yml
+# (dummy backends only) and the bench compose, per ADR-0013
 # decision 17. The load balancer itself still runs locally via `make run`.
 #
 # Prometheus listens on host :9091 (not :9090) so it does not collide with the

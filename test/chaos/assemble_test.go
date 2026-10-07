@@ -103,8 +103,7 @@ func chaosConfig(fbs []*flippableBackend) *config.Config {
 }
 
 // assemble builds the system through internal/app's Build seam — production
-// and test wiring now converge, closing the Sprint 3 retro's assemble debt —
-// and starts it with Run on a context cancelled at test cleanup. It retains
+// and test wiring converge — and starts it with Run on a context cancelled at test cleanup. It retains
 // every log record (see assembleWith).
 func assemble(t *testing.T, cfg *config.Config) *assembly {
 	t.Helper()

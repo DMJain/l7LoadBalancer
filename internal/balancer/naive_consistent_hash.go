@@ -20,8 +20,8 @@ import (
 // that the bounded-loads decision and its fixed-seed hot-key test depend on —
 // so that decision is measured against a working naive implementation rather
 // than argued from a citation. ADR-0008 records the ring it shares and the
-// comparator's role in the Sprint 2 design; the bounded-loads evidence and its
-// ADR (S2.T2) live with ConsistentHashBoundedLoads.
+// comparator's role; the bounded-loads evidence and its
+// ADR live with ConsistentHashBoundedLoads.
 //
 // It is intentionally not named ConsistentHash. A reader who meets the
 // consistent_hash config identifier would take a type of that name to be what

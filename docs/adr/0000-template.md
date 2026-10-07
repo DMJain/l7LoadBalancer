@@ -1,24 +1,15 @@
-# ADR-XXXX: <title>
+# ADR-NNNN: <title>
 
-- **Status**: Proposed | Accepted | Superseded by ADR-YYYY | Deprecated
-- **Date**: YYYY-MM-DD
-- **Deciders**: <names / agents>
+**Status:** Accepted | Superseded by ADR-NNNN | Amended by ADR-NNNN
 
 ## Context
 
-What is the situation? What forces are at play?
+State the problem and the facts that constrain the decision.
 
 ## Decision
 
-What was decided.
+State what the project does. Number the decisions if there is more than one.
 
 ## Consequences
 
-- Positive: ...
-- Negative: ...
-- Neutral: ...
-
-## Alternatives considered
-
-- Option A: ... — rejected because ...
-- Option B: ... — rejected because ...
+List the good and bad results of the decision. Name the options that the project did not use, and give the reason for each.

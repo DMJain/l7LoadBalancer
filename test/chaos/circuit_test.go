@@ -12,20 +12,20 @@ import (
 )
 
 // circuitIsolationProbeInterval pushes the active checker's cadence far past the
-// test window. T9 owns the circuit-gate axis, and it must be isolated from the
+// test window. The circuit-gate axis is tested here, and it must be isolated from the
 // health axis to be observable: active probes treat a 5xx as a failure, so the
 // fast 20ms path used by the eviction arcs would health-eject the 500-serving
 // backend and drop it out of Registry.Selectable before a half-open trial could
 // ever be taken. A long interval keeps the backend healthy for the test's
 // duration without bending any production constant (the cadence is a config
-// knob, ADR-0011 decision 10). See the ticket's recorded deviations.
+// knob, ADR-0011 decision 10).
 const circuitIsolationProbeInterval = time.Hour
 
-// circuitChaosCooldown is the T9 cooldown, deliberately longer than the shared
+// circuitChaosCooldown is the circuit chaos cooldown, deliberately longer than the shared
 // fast-path 200ms: arc (iv) sends a request immediately after tripping and must
 // land inside the cooldown even under -race scheduling. The extra headroom
 // costs the suite a few hundred milliseconds and removes the fixed-duration
-// race the ticket's "no flake under -race" story forbids.
+// race a "no flake under -race" requirement forbids.
 const circuitChaosCooldown = 500 * time.Millisecond
 
 // circuitChaosConfig builds a single-backend, round-robin config whose active
@@ -53,7 +53,7 @@ func circuitChaosConfig(fbs []*flippableBackend) *config.Config {
 	}
 }
 
-// newCircuitAssembly assembles the T9 fixture: one flippable backend, healthy
+// newCircuitAssembly assembles the circuit fixture: one flippable backend, healthy
 // and serving 200, behind a proxy whose active checker is neutralized. It
 // returns the assembly and its single backend.
 func newCircuitAssembly(t *testing.T) (*assembly, *flippableBackend) {
@@ -77,7 +77,7 @@ func tripCircuit(t *testing.T, a *assembly, x *flippableBackend) {
 	}, eventuallyDeadline, eventuallyTick, "repeated 5xx must open the circuit")
 }
 
-// TestChaosCircuitTripCooldownAndTrialSuccess is S3.T9 arc (iv). Repeated 5xx
+// TestChaosCircuitTripCooldownAndTrialSuccess is arc (iv). Repeated 5xx
 // trips the circuit; a request during the cooldown is denied 503 without
 // touching active-connection accounting; and the first request after the
 // cooldown is admitted as the half-open trial, whose single success closes the
@@ -123,7 +123,7 @@ func TestChaosCircuitTripCooldownAndTrialSuccess(t *testing.T) {
 	assertTransitionNotLogged(t, a.logs, logger.EventCircuitHalfOpened, x.id, logger.ReasonCooldownElapsed)
 }
 
-// TestChaosCircuitTrialFailureReopens is S3.T9 arc (v). The circuit trips as in
+// TestChaosCircuitTrialFailureReopens is arc (v). The circuit trips as in
 // arc (iv), but the backend keeps failing through the cooldown, so the half-open
 // trial's single failure reopens the circuit. The reopen is observable only as
 // the trial_failure line — the gauge is open before and after — which is exactly
@@ -146,7 +146,7 @@ func TestChaosCircuitTrialFailureReopens(t *testing.T) {
 	assertTransitionNotLogged(t, a.logs, logger.EventCircuitHalfOpened, x.id, logger.ReasonCooldownElapsed)
 }
 
-// TestChaosCircuitNoPromotionWithoutTraffic is S3.T9 arc (vi). With zero traffic
+// TestChaosCircuitNoPromotionWithoutTraffic is arc (vi). With zero traffic
 // through the cooldown window the circuit must stay strictly Open — no timer or
 // background goroutine may promote it. The first request after the cooldown is
 // the one that drives the promotion and takes the trial, mechanically proving

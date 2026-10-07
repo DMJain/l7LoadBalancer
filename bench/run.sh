@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 #
-# run.sh — the benchmark execution harness (S5.T4-harness, issue 06).
+# run.sh — the benchmark execution harness.
 #
 # This script is the single source of truth for the benchmark matrix and its
 # parameters. Thresholds, rates, durations, and warmup are constants below, not
 # flags: published numbers must be reproducible from a clean checkout with the
 # same thresholds, and flags would invite "but I ran it with different
-# thresholds" comparisons (spec §28, §32).
+# thresholds" comparisons.
 #
 # Usage:  ./bench/run.sh [core|protocol|failure|degraded|smoke|all]   (default: all)
 #
@@ -16,26 +16,26 @@
 #   degraded  one backend +50 ms, per-backend distribution — 8 runs
 #   smoke     a ~1-minute preflight over every (protocol, algorithm,
 #             competitor) combination the matrix uses — 10 attacks, not part
-#             of `all` (S5.T5.3)
+#             of `all`
 #   all       the full 71-run matrix (smoke excluded)
 #
 # Every algorithm runs head-to-head with an Nginx competitor. Each result
 # header records `comparison=matched` (roundrobin, leastconn) or
 # `comparison=nearest-equivalent` (consistent-hash, p2c-ewma), and every
-# nearest-equivalent competitor's header states its gap (S5.T5.2).
+# nearest-equivalent competitor's header states its gap.
 #
 # Results land as .txt summaries + .hdr HDR histograms + .json reports under
 # bench/results/{core,protocol,failure,degraded}/ with parameter-encoded filenames, and
-# each slice prints a summary table to stdout (spec §27, §30, §32). Every
+# each slice prints a summary table to stdout. Every
 # invocation also writes bench/results/provenance.json — the commit, dirty
 # state, host, tool versions, cpusets and start/finish times a reader needs to
-# interpret the numbers (S5.T5.7.3).
+# interpret the numbers.
 #
-# Progress (S5.T5.7.2) goes to stderr before every run, so the stdout summary
+# Progress goes to stderr before every run, so the stdout summary
 # tables stay clean for piping.
 #
 # Everything runs in-compose via `docker compose run vegeta`; the host never
-# needs a vegeta binary (spec §22). The LB and Nginx are recreated per
+# needs a vegeta binary. The LB and Nginx are recreated per
 # algorithm/protocol by changing the mounted config, because only the backend
 # list is SIGHUP-reloadable — algorithm and listener mode are not (ADR-0015).
 #
@@ -53,45 +53,44 @@
 # rate (SEED_RATE_1MB / SEED_RATE_SMALL) because the generator's ceiling is
 # bytes-per-second-bounded, not requests-per-second-bounded.
 #
-# Failure-mode steady state is TLS+HTTP/2 at 50% of discovered peak (spec §29).
+# Failure-mode steady state is TLS+HTTP/2 at 50% of discovered peak.
 # `docker compose kill -s HUP lb` is the host-side form of the in-container
-# `kill -HUP 1` the ticket names: the distroless image has no shell or kill
+# `kill -HUP 1`: the distroless image has no shell or kill
 # binary, and the LB is PID 1 in its container (ADR-0019).
 #
-# No-op reload (S5.T9.1): the reload run re-reads an unchanged config and is
+# No-op reload: the reload run re-reads an unchanged config and is
 # judged PASS/FAIL against criteria fixed as constants before any run — zero
 # non-2xx/transport errors over the whole run, and post-event p99 within
 # RELOAD_P99_FACTOR of the same run's pre-event p99 (warmup to the event). The
 # result file carries both windows' p99, the error counts and a verdict line
 # naming any failed criterion, so the writeup reports a verdict, not a judgment
-# call (spec §36, §37, §38, §44).
+# call.
 #
-# Drain reload (S5.T9.2): the LB mounts a working copy of the committed
+# Drain reload: the LB mounts a working copy of the committed
 # round-robin h2 config in the results scratch area and rewrites it in place
 # (cp over the same inode, never a rename) to drop backend4 at T+30s, then
 # SIGHUPs. The committed configs are never modified. It passes only if the
 # no-op criteria hold and backend4's own arrival counter does not move between
 # "reload applied" and the end of the run — the "zero drops while draining /
-# never selected again" claim, verified from the backend's side (spec §35, §39,
-# §40, §41). The counter is sampled just before the signal, once the LB logs
+# never selected again" claim, verified from the backend's side. The counter is sampled just before the signal, once the LB logs
 # config_reloaded, and at the end; the first interval is recorded, only the
 # second is judged. After the run the LB is recreated on the committed config.
 #
-# The smoke slice (S5.T5.3) is the preflight gate: for every (protocol,
+# The smoke slice is the preflight gate: for every (protocol,
 # algorithm, competitor) combination the matrix uses, it runs a short low-rate
 # attack on the 10 KiB endpoint and requires 100% success, failing with a
 # nonzero exit naming the combination otherwise. It catches broken configs in
 # about a minute (the class of routing bug that once had TLS upstreams return
 # 400) instead of hours into a run. It is deliberately not part of `all`.
 #
-# Hot key (S5.T8.1): the load generator has one address, so every consistent-hash
+# Hot key: the load generator has one address, so every consistent-hash
 # run is a hot-key scenario — one hash key. A result therefore records where the
 # traffic actually went: the per-backend arrival-counter deltas as counts and
 # shares, the plurality owner and whether spill occurred. The snapshots bracket
 # each measured attack, so they add no load during measurement; the reads go
-# straight to the backends and /stats is not counted (S5.T5.5.2).
+# straight to the backends and /stats is not counted.
 #
-# Degraded (S5.T8.2): backend3 is recreated 50 ms slow for the whole slice and
+# Degraded: backend3 is recreated 50 ms slow for the whole slice and
 # restored on exit, including on failure. Every one of the eight runs (four
 # algorithms × two competitors, h2, 10 KiB) is bracketed by arrival snapshots,
 # so the headline result is the per-backend share — which algorithms route around
@@ -105,7 +104,7 @@
 set -euo pipefail
 
 # ---------------------------------------------------------------------------
-# Parameters — constants, deliberately not flags (spec §28).
+# Parameters — constants, deliberately not flags.
 # ---------------------------------------------------------------------------
 
 # Per-size peak-search bounds (ADR-0022). The generator's ceiling is
@@ -124,28 +123,28 @@ GRANULARITY_SMALL=500        # 200 B / 10 KB bisection granularity, req/s
 SEED_RATE_1MB=100            # 1 MB starting rate, req/s
 MAX_RATE_1MB=500             # 1 MB safety cap, req/s
 GRANULARITY_1MB=25           # 1 MB bisection granularity, req/s
-P99_CEILING_MS=100        # a rate fails when p99 exceeds this (spec §28)
+P99_CEILING_MS=100        # a rate fails when p99 exceeds this
 ERROR_CEILING_PCT=1       # a rate fails when error rate exceeds this percent
 DELIVERY_MIN_RATIO_PCT=95 # a step must deliver >= this % of the target rate (ADR-0022)
 VEGETA_MAX_WORKERS=1024   # cap generator workers → bounds in-flight requests (ADR-0022)
 VEGETA_MAX_CONNECTIONS=1024 # cap generator connections per target host (ADR-0022)
 WARMUP_SECS=5             # first seconds of every measured attack, discarded
 STEP_SECS=10              # measurement window per throughput-search step (10–15s)
-LATENCY_RATES_PCT=(30 50 70 90)  # latency-profile rates, as % of discovered peak (spec §21)
+LATENCY_RATES_PCT=(30 50 70 90)  # latency-profile rates, as % of discovered peak
 FAILURE_RATE_PCT=50       # failure-mode steady state as a percent of peak
-FAILURE_SECS=60           # failure-mode total duration (spec §29)
+FAILURE_SECS=60           # failure-mode total duration
 FAILURE_EVENT_AT=30       # seconds into the failure run when the event fires
 SETTLE_SECS=10            # settle time after restarting backend3 (two probe intervals)
-RELOAD_P99_FACTOR=2       # no-op reload: post-event p99 must be <= factor x pre-event p99 (S5.T9.1)
+RELOAD_P99_FACTOR=2       # no-op reload: post-event p99 must be <= factor x pre-event p99
 
-# Drain reload (S5.T9.2): backend4 is removed under load; its own arrival counter
+# Drain reload: backend4 is removed under load; its own arrival counter
 # must not move once the reload is applied. The applied signal is the LB's
 # config_reloaded log line, polled after the SIGHUP until it is seen.
 DRAIN_BACKEND=backend4    # the backend the drain reload removes
 DRAIN_POLL_TRIES=100      # config_reloaded polls after SIGHUP
 DRAIN_POLL_SLEEP=0.2      # seconds between polls
 
-# Hot-key spill (S5.T8.1). The active health checker's probes are counted
+# Hot-key spill. The active health checker's probes are counted
 # arrivals — the probe target is the backend's own URL — and they land on every
 # backend, so a bare "more than one backend received traffic" would read yes on
 # every run and show nothing. A non-owner backend counts as spill only above
@@ -153,7 +152,7 @@ DRAIN_POLL_SLEEP=0.2      # seconds between polls
 # below it at benchmark rates, while a real bounded-loads spill is far above.
 SPILL_MIN_SHARE_PCT=1
 
-# Degraded slice (S5.T8.2): one backend is 50 ms slow for the whole slice and
+# Degraded slice: one backend is 50 ms slow for the whole slice and
 # the headline result is where the traffic went, not only the aggregate latency.
 # All eight runs use one absolute rate — half the h2/round-robin/10 KiB LB peak —
 # so their distributions and latencies are directly comparable.
@@ -163,12 +162,12 @@ DEGRADED_SECS=30           # measured window per run (plus the standard warmup)
 DEGRADED_RATE_PCT=50       # absolute rate, as % of the h2/roundrobin/10kb LB peak
 DEGRADED_SIZE=10kb         # the one size the degraded slice measures
 
-# Smoke slice (S5.T5.3) — a preflight, not part of `all`. Every (protocol,
+# Smoke slice — a preflight, not part of `all`. Every (protocol,
 # algorithm, competitor) combination the matrix uses must serve 100% in a
 # short, low-rate attack on one size.
-SMOKE_RATE=50             # req/s per smoke attack (S5.T5.3)
-SMOKE_SECS=2              # seconds per smoke attack (S5.T5.3)
-SMOKE_SIZE=10kb           # endpoint size for smoke attacks (S5.T5.3)
+SMOKE_RATE=50             # req/s per smoke attack
+SMOKE_SECS=2              # seconds per smoke attack
+SMOKE_SIZE=10kb           # endpoint size for smoke attacks
 SMOKE_READY_TRIES=5       # readiness polls before a smoke attack is judged
 
 # Detection time is dominated by the active health checker's cadence. None of
@@ -180,13 +179,13 @@ SMOKE_READY_TRIES=5       # readiness polls before a smoke attack is judged
 SIZES=(200b 10kb 1mb)
 ALGOS=(roundrobin leastconn consistent-hash p2c-ewma)
 
-# The dummy backends expose a per-process arrival counter at /stats (S5.T5.5.2).
-# The harness reads them directly for the hot-key distribution (S5.T8.1); the
+# The dummy backends expose a per-process arrival counter at /stats.
+# The harness reads them directly for the hot-key distribution; the
 # names must match the compose service/`-name` values in bench/docker-compose.yml.
 BACKENDS=(backend1 backend2 backend3 backend4)
 BACKEND_PORT=8080
 
-# Runs per slice, for the progress line's total (S5.T5.7.2). One "run" is one
+# Runs per slice, for the progress line's total. One "run" is one
 # result set: a scenario emits a peak-search run (peak discovery plus the
 # throughput measurement at peak) and a latency run (the whole rate sweep).
 # Keep these in step with the slice functions — a run added there is a run
@@ -215,19 +214,19 @@ export BACKEND_TLS_CERT_FILE=""
 # shellcheck disable=SC2034
 export BACKEND_TLS_KEY_FILE=""
 # The degraded slice raises SLEEP_MS to 50 before force-recreating backend3 only
-# (S5.T8.2); the compose anchor reads it. Reset to 0 everywhere else.
+#; the compose anchor reads it. Reset to 0 everywhere else.
 # shellcheck disable=SC2034
 export SLEEP_MS=0
 
 # The h2/round-robin/10 KiB LB peak, captured by the core slice so the degraded
-# slice can reuse the same invocation's measurement (S5.T8.2). Empty when the
+# slice can reuse the same invocation's measurement. Empty when the
 # core slice did not run, which makes the degraded slice discover its own.
 CORE_RR_10KB_LB_PEAK=""
 DEGRADED_BACKEND_SLOW=0
 
 usage() {
   cat <<'EOF'
-bench/run.sh — the benchmark execution harness (S5.T4-harness).
+bench/run.sh — the benchmark execution harness.
 
 Usage: bench/run.sh [core|protocol|failure|degraded|smoke|all]   (default: all)
 
@@ -249,7 +248,7 @@ EOF
 log() { printf '%s\n' "$*"; }
 warn() { printf 'WARN: %s\n' "$*" >&2; }
 
-# Progress (S5.T5.7.2): one stderr line before every run, so a multi-hour run is
+# Progress: one stderr line before every run, so a multi-hour run is
 # not mistaken for a hang. stdout stays clean for piping (the summary tables).
 # The total is the sum of the selected slices, so it is right for a single
 # slice, smoke, and all. The ETA is deliberately naive — elapsed × total /
@@ -323,13 +322,13 @@ vegeta_run() {
 }
 
 # ---------------------------------------------------------------------------
-# CPU-pinning verification (S5.T5.7.1). The compose cpusets are the pinning;
+# CPU-pinning verification. The compose cpusets are the pinning;
 # these checks prove at run time that they took effect, so a throughput
 # difference between the LB and Nginx cannot be "one of them was starved or
 # over-provisioned". Each aborts the slice, naming the check and the value seen.
 # ---------------------------------------------------------------------------
 
-# verify_lb_gomaxprocs reads `gomaxprocs` from the LB's startup line (S5.T5.6)
+# verify_lb_gomaxprocs reads `gomaxprocs` from the LB's startup line
 # and aborts unless it is 2 — the LB's cpuset is cores 0–1. The startup line is
 # JSON, so the value is a plain integer field.
 verify_lb_gomaxprocs() {
@@ -347,7 +346,7 @@ verify_lb_gomaxprocs() {
 # see zero), then counts worker processes and aborts unless there are 2 — the
 # Nginx cpuset is cores 0–1. wait_target leaves its last response in
 # $TMP/ready.json; the extra smoke_ok_200 rejects a 3xx, which wait_target's
-# readiness signal (vegeta `success`) would accept but the ticket's "200" would
+# readiness signal (vegeta `success`) would accept but a plain "200" check would
 # not. `[n]ginx` keeps grep from matching its own argv.
 verify_nginx_workers() { # <proto>
   local proto="$1" url count
@@ -406,7 +405,7 @@ target_url() { # <proto> <competitor> <size>
 
 # nginx_conf_for <proto> <algorithm> maps a scenario to its Nginx competitor by
 # path join: the competitor configs mirror the LB's `<proto>/<algo>` layout
-# (S5.T5.1–S5.T5.2). Every algorithm in the matrix now has a competitor, so the
+#. Every algorithm in the matrix now has a competitor, so the
 # old solo path is gone.
 nginx_conf_for() {
   printf '%s/%s.conf' "$1" "$2"
@@ -434,8 +433,8 @@ set_nginx_conf() {
 }
 
 # ---------------------------------------------------------------------------
-# Arrival-counter distribution (S5.T8.1). The dummy backends expose a
-# per-process arrival counter at /stats (S5.T5.5.2). A single-address load
+# Arrival-counter distribution. The dummy backends expose a
+# per-process arrival counter at /stats. A single-address load
 # generator is one hash key, so every consistent-hash run is a hot-key
 # scenario: an unbounded ring pins all traffic to one backend, while bounded
 # loads spills the excess (CONTEXT.md Hot key). Bracketing each measured attack
@@ -445,7 +444,7 @@ set_nginx_conf() {
 # ---------------------------------------------------------------------------
 
 # backend_scheme <proto> prints the scheme the backends serve on for a slice:
-# the h2 slice runs TLS backends, everything else plain (S5.T4-infra).
+# the h2 slice runs TLS backends, everything else plain.
 backend_scheme() {
   case "$1" in
     h2) printf 'https' ;;
@@ -469,8 +468,8 @@ read_arrivals() {
 
 # arrival_deltas <before> <after> prints "<name>\t<delta>\t<share_pct>" per
 # backend: arrivals during the run and each backend's share of the total. This
-# is the reusable differ: the degraded slice (S5.T8.2) and the drain reload
-# (S5.T9.2) feed it their own snapshots.
+# is the reusable differ: the degraded slice and the drain reload
+# feed it their own snapshots.
 arrival_deltas() {
   awk -F'\t' '
     FNR == NR { before[$1] = $2 + 0; next }
@@ -616,12 +615,12 @@ passes() { # <target_rate>
 }
 
 # ---------------------------------------------------------------------------
-# Provenance record (S5.T5.7.3). Every invocation writes
+# Provenance record. Every invocation writes
 # bench/results/provenance.json when it starts and updates it when it finishes
 # (an EXIT trap, so a slice that aborts still leaves a record). It is a
 # development tool: it *records* a dirty tree or running containers, it never
 # refuses them — enforcement lives at the publication boundary (the reproducer
-# S5.T12 and the results generator S5.T10), which refuse a dirty `git_dirty`.
+# and the results generator), which refuse a dirty `git_dirty`.
 # ---------------------------------------------------------------------------
 
 PROVENANCE="$RESULTS/provenance.json"
@@ -858,7 +857,7 @@ save_result() { # <outdir> <basename> <metadata-line>
   { printf '# %s\n' "$meta"; cat "$TMP/report.txt"; } > "$dir/$base.txt"
   cp "$TMP/report.hdr" "$dir/$base.hdr"
   # The JSON report is the machine-readable source for the percentiles in the
-  # published tables (S5.T10.1); the text report above is its human-readable
+  # published tables; the text report above is its human-readable
   # sibling and the `.hdr` carries the p99.9 the JSON report does not.
   cp "$TMP/metrics.json" "$dir/$base.json"
 }
@@ -876,10 +875,9 @@ add_summary() { # <algorithm> <size> <competitor> <load> [throughput-override]
 
 # run_scenario discovers peak, writes the throughput result at peak, then a
 # latency result sweeping LATENCY_RATES_PCT of peak. proto is a filename token
-# ("http11" in the protocol slice, empty in core — spec §30). Consistent-hash
+# ("http11" in the protocol slice, empty in core). Consistent-hash
 # runs are hot-key scenarios: every measured attack is bracketed by
-# arrival-counter snapshots and the distribution rides in the result file
-# (S5.T8.1).
+# arrival-counter snapshots and the distribution rides in the result file.
 run_scenario() { # <outdir> <proto> <algorithm> <size> <competitor> <url>
   local outdir="$1" proto="$2" algo="$3" size="$4" comp="$5" url="$6"
   local peak base latrate pct cmp proto_label="${proto:-h2}" dist_scheme="" meta
@@ -949,7 +947,7 @@ run_core() {
   done
   # Capture the h2/round-robin/10 KiB LB peak for the degraded slice. Set here,
   # from the result just written, so it is only non-empty when the core slice ran
-  # in this invocation (S5.T8.2); a stale file from a previous run is ignored.
+  # in this invocation; a stale file from a previous run is ignored.
   CORE_RR_10KB_LB_PEAK=$(result_peak "$RESULTS/core/roundrobin-10kb-lb-throughput.txt")
 }
 
@@ -1004,14 +1002,14 @@ max_p99_ms() { # <timeseries>
     END { printf "%.3f", m / 1e6 }' "$1"
 }
 
-# Reload runs (S5.T9.1). The no-op reload re-reads an unchanged config, so it
+# Reload runs. The no-op reload re-reads an unchanged config, so it
 # measures the reload path's own cost. Its verdict is computed here from fixed
 # thresholds, never left to the writeup.
 
 # inode_of <file> prints the file's inode. The drain reload must rewrite the
 # mounted config in place (cp over the same inode); a rename would swap the inode
 # under the bind mount and the LB would keep reading the old file, so the run
-# would pass while testing nothing (S5.T9.2). Darwin and Linux stat differ.
+# would pass while testing nothing. Darwin and Linux stat differ.
 inode_of() { # <file>
   case "$(uname -s)" in
     Darwin) stat -f %i "$1" ;;
@@ -1049,9 +1047,9 @@ vegeta encode -to gob /results/.tmp/post.csv | vegeta report -type=json > /resul
 
 # reload_verdict <errors> <transport-errors> <pre-p99-ms> <post-p99-ms>
 # [extra-failed] prints PASS, or FAIL naming each unmet criterion. The criteria
-# and the p99 factor are the constants fixed before any run (S5.T9.1): zero
+# and the p99 factor are the constants fixed before any run: zero
 # non-2xx responses, zero transport errors, and post-event p99 within
-# RELOAD_P99_FACTOR of the pre-event p99. The drain reload (S5.T9.2) passes its
+# RELOAD_P99_FACTOR of the pre-event p99. The drain reload passes its
 # own extra criterion name here so one verdict line names every failure.
 reload_verdict() { # <errors> <transport-errors> <pre-p99-ms> <post-p99-ms> [extra-failed]
   local errors="$1" transport="$2" pre="$3" post="$4" extra="${5:-}" failed=""
@@ -1068,8 +1066,7 @@ reload_verdict() { # <errors> <transport-errors> <pre-p99-ms> <post-p99-ms> [ext
 # failure_event <mode> <url> <rate> fires the event at T+FAILURE_EVENT_AT while
 # the attack runs, then writes the failure result and its measurements. `kill`
 # is unchanged; `sighup` is the no-op reload (`sighup-noop`) and `drain` is the
-# drain reload (`sighup-drain`), each judged against the fixed reload criteria
-# (S5.T9.1, S5.T9.2).
+# drain reload (`sighup-drain`), each judged against the fixed reload criteria.
 failure_event() { # <kill|sighup|drain> <url> <rate>
   local mode="$1" url="$2" rate="$3" scheduler label
   case "$mode" in
@@ -1091,7 +1088,7 @@ failure_event() { # <kill|sighup|drain> <url> <rate>
     drain)
       # In-place rewrite then SIGHUP, with the three arrival snapshots. A rename
       # would leave the bind mount on the old inode, so the inode is asserted
-      # unchanged and the run aborts otherwise (spec §41).
+      # unchanged and the run aborts otherwise.
       ( sleep "$FAILURE_EVENT_AT"; date +%s > "$TMP/event_epoch"
         before=$(inode_of "$TMP/reload-config.yaml")
         cp "$TMP/drain-config.yaml" "$TMP/reload-config.yaml"
@@ -1166,7 +1163,7 @@ failure_event() { # <kill|sighup|drain> <url> <rate>
       drops=$errors
       # `errors` counts every failed request, transport errors included (they are
       # status 0). The two judged criteria are disjoint status classes, so peel
-      # transport out: non-2xx are real HTTP responses outside 2xx (spec §37).
+      # transport out: non-2xx are real HTTP responses outside 2xx.
       non_2xx=$(( errors - transport ))
       maxp=$(max_p99_ms "$TMP/timeseries.jsonl")
       reload_window_reports "$WARMUP_SECS" "$FAILURE_EVENT_AT"
@@ -1225,7 +1222,7 @@ run_failure() {
   up_h2
   # The reload runs mount a working copy in the results scratch area so the
   # committed configs are never modified. The drain config (backend4 dropped) is
-  # derived here at run time, not committed as a ninth config (S5.T9.2).
+  # derived here at run time, not committed as a ninth config.
   cp "$ROOT/bench/configs/h2/roundrobin.yaml" "$TMP/reload-config.yaml"
   grep -v "$DRAIN_BACKEND" "$TMP/reload-config.yaml" > "$TMP/drain-config.yaml"
 
@@ -1247,7 +1244,7 @@ run_failure() {
   sleep "$SETTLE_SECS"
 
   # Mount the working copy for both reload runs; the drain run rewrites it in
-  # place so the bind mount really changes (S5.T9.2).
+  # place so the bind mount really changes.
   set_lb "./results/.tmp/reload-config.yaml"
   failure_event sighup "$url" "$rate"
   failure_event drain "$url" "$rate"
@@ -1257,7 +1254,7 @@ run_failure() {
 }
 
 # ---------------------------------------------------------------------------
-# Degraded slice (S5.T8.2). backend3 is recreated 50 ms slow for the whole
+# Degraded slice. backend3 is recreated 50 ms slow for the whole
 # slice; every other backend stays fast. All eight runs (four algorithms × two
 # competitors, h2, 10 KiB) use one absolute rate — half the h2/round-robin/
 # 10 KiB LB peak — so their distributions and latencies are comparable, and
@@ -1367,7 +1364,7 @@ print_degraded_summary() {
 }
 
 # ---------------------------------------------------------------------------
-# Smoke slice (S5.T5.3).
+# Smoke slice.
 # ---------------------------------------------------------------------------
 
 # smoke_fail <combination> <reason> records a failed combination, naming it.
@@ -1425,7 +1422,7 @@ smoke_attack() { # <combination> <url>
 # up and checks both competitors for each algorithm. A set_lb that fails to
 # start (compose error) is allowed to fail so the combination is still probed
 # and named by smoke_attack; a CPU-pinning mismatch is not — that aborts the
-# slice from inside set_lb/up_h2 (S5.T5.7.1).
+# slice from inside set_lb/up_h2.
 smoke_proto() { # <proto> <algorithm...>
   local proto="$1"
   shift

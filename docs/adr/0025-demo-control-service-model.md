@@ -1,272 +1,61 @@
-# ADR-0025: Demo control service — stateless read-through, honest fan-out
+# ADR-0025: Demo control service: stateless read-through, honest fan-out
 
-- **Status**: Accepted
-- **Date**: 2026-10-02
-- **Deciders**: Darshan Jain (project owner) + OpenCode (deepseek-v4.1-flash) (S5.T16.4.1)
+**Status:** Accepted
 
 ## Context
 
-The local live demo (ADR-0023) needs a single page from which the owner drives
-the demonstration without a terminal: switch the active LB, set the total load
-rate, set each backend's latency/jitter/failure, and watch the existing Grafana
-panels react. ADR-0023 decision 8 commits the service to the demo stack and to
-acting only on the demo's own peers; decision 9 commits the charts to embedded
-panels of the single dashboard; the bundle spec
-(`.scratch/s5-t16-t17-local-demo/spec.md`, *Control service and page (S5.T16.4)*)
-fixes the actions, the `net/http`-only / no-framework constraint, and that a
-partial fan-out must be reported, never hidden.
+The local demo (ADR-0023) needs one page from which the owner drives the demo without a terminal. The page sets the total load rate, sets each backend's latency, jitter and failure rate, stops and starts backends, triggers a rejected reload, and shows the Grafana dashboard. The service uses `net/http` only, with no framework, and a partial fan-out must be reported, never hidden.
 
-What the spec leaves to the implementation is the service's **state model**: does
-it remember the desired configuration, or read it back from the peers that
-actually hold it? Two facts constrain the answer:
+The main open question is the state model. Does the service remember the desired settings, or read them back from the peers that hold them? Two facts decide it:
 
-- The generators already hold the authoritative runtime settings. Each
-  generator's `(total_rate, target)` is its own `atomic.Pointer` (ADR-0024
-  decision 4); the eight are independent and can disagree if a fan-out is
-  partial. A control service that also stored a desired value would be a second
-  source of truth that could silently drift from what the generators are doing.
-- The control service can be restarted independently of the stack. Any state it
-  held in memory would be lost while the generators kept their settings, so the
-  page would show a value the demo is not running.
+- The generators already hold the real runtime settings. Each generator keeps its `(total_rate, target)` behind its own `atomic.Pointer` (ADR-0024). The eight are independent and can disagree after a partial fan-out. A second copy in the control service could drift from them.
+- The control service can restart on its own. Any state in its memory would be lost while the generators kept theirs.
 
 ## Decision
 
-A new stdlib-only Go program, `demo/control-service`, shipped as its own small
-image in the repository's single module (the dummy-backend and traffic-generator
-precedent). It serves one embedded static page plus a small JSON API.
+`demo/control-service` is a stdlib-only Go program with its own small image, in the repository's single module. It serves one embedded page and a small JSON API. Decision numbers are stable because code comments cite them.
 
-1. **The service is stateless.** It stores no desired configuration. `GET
-   /api/state` reads every peer live — the eight generators' status and the four
-   admin listeners' profiles — and assembles a snapshot. The active LB and the
-   total rate are *derived*: reported only when every generator's `target`
-   (respectively `total_rate`) agrees, and `null`/empty otherwise, so a partial
-   fan-out is visible as "mixed", not papered over with the last value the owner
-   asked for.
+1. **The service is stateless.** It stores no desired settings. `GET /api/state` reads every peer live and builds a snapshot. The total rate (and the generators' target) is reported only when every generator agrees. Otherwise it is empty, so a partial fan-out shows as "mixed" and is not hidden.
+2. **Peers come from the environment, with the demo topology as defaults.** `GENERATORS`, `BACKENDS`, `LBS` and `LB_ADMINS` are comma-separated base URLs. `GRAFANA_URL` is the Grafana address the browser can reach. An LB's identity is the hostname in its URL.
+3. **Each action is validated before any outbound call.** `POST /api/rate` (`{"total_rate": <n>}`) and `POST /api/lb` (`{"lb": <name>}`) fan out to all eight generators at the same time. `POST /api/backend` (`{"backend": <name>, ...profile}`) goes to that backend's admin listener. Unknown fields are rejected. The LB and backend must be in the configured set. Profile values must be in range: `sleep_ms ≥ 0`, `jitter_ms ≥ 0`, `fail_rate` in `[0,1]`. A rejected request makes no outbound call.
+4. **The fan-out contacts every peer and names every failure.** The response is `200` with `{"ok": bool, "results": [...], "failed": [<names>]}`. A peer failure is data that the page shows, not a transport error. Validation failures return `400` with a plain message.
+5. **The page is one embedded HTML file with plain JavaScript `fetch` calls.** There is no framework, build step or charting code. The page polls `/api/state` and shows each backend's profile and container state, the total rate, the generators' offered, sent and dropped counters, the LB's algorithm and its last reload. A failed action shows as failed. The page embeds the `l7lb-demo` dashboard whole in one kiosk-mode iframe (ADR-0023).
+6. *Superseded by decisions 7–11.*
+7. **The Docker Engine client is the standard library over the unix socket, with no Docker SDK.** `DOCKER_HOST` (default `unix:///var/run/docker.sock`) selects the endpoint. A `unix://` host uses an `http.Transport` that dials the socket, with base URL `http://docker`. An `http` or `https` host points the same client at a TCP endpoint, which tests use with `httptest`.
+8. **Only the configured backends can be addressed, and the container name is derived.** A request names a backend (`backend1` to `backend4`). The service rejects any name not in `BACKENDS` before it calls the Engine. It then uses the container `CONTAINER_PREFIX + name` (default prefix `l7loadbalancer-demo-`). The demo compose pins each `container_name` to that string. The Engine never gets a name from the caller.
+9. **Stop is the Engine's kill, and Start is the Engine's start.** `POST /api/backend/kill` calls `POST /containers/{name}/kill` (SIGKILL, like the chaos tests). `POST /api/backend/revive` calls `POST /containers/{name}/start`. A failed Engine call returns `200` with `{"ok":false,"error":…}`. The page labels the buttons Stop and Start. A per-backend Clear sets the profile to `0/0/0`.
+10. **Container state is in `/api/state`.** Each backend's `GET /containers/{name}/json` `State.Status` is shown beside its profile. A failed read is reported as an error.
+11. **The control container runs as root only to open the socket.** The socket is root-equivalent (ADR-0023), and a non-root user cannot open it. The demo compose sets `user: "0:0"` on this service only. This is acceptable only because the stack binds to loopback (ADR-0023 decision 2).
+12. **The LBs' metrics listeners are a peer set.** `LB_ADMINS` (default `http://lb:9090`) pairs one to one with `LBS`, and startup fails if the counts differ. `/api/state` reads each LB's `GET /admin/reload/last` (ADR-0015) and reports it on that LB. A failed read is reported, not fatal. The listeners stay on the internal network.
+13. **The invalid-reload action sends one fixed body.** `POST /api/reload-invalid` takes no input. It posts a constant YAML config to the LB's `POST /admin/reload` and returns the LB's answer. The config is valid except for `algorithm: "p3c_ewma"`, so validation rejects that field and the running config does not change. If the generators disagree on the target, the action returns `409` and calls no LB. No caller input can reach the LB's reload path, so the page cannot change a backend list.
+14. *Withdrawn by decision 17.*
+15. *Withdrawn by decision 17, except the Stop/Start and Clear labels now in decision 9.*
+16. **The page shows the algorithm the LB reports.** `/api/state` reads each LB's `/metrics` from `LB_ADMINS` and reports the label of the `lb_algorithm_info` series whose value is 1 (ADR-0013). A failed read is reported, not fatal.
+17. **The page has no algorithm control.** The algorithm changes only by reload (ADR-0023 decision 14). There is no `demo_active_lb` metric. `POST /api/lb` stays as a generic endpoint, but the page does not call it.
+18. **`GET /metrics` serves container CPU and memory.** The service reads Docker's read-only stats for an allowlist: the four backend containers (decision 8) and each LB's container, `CONTAINER_PREFIX + <LB name>` (the demo pins `l7loadbalancer-demo-lb`). Names come from configuration, never from a request. Each scrape calls `GET /containers/{name}/stats?stream=false&one-shot=true` for every allowlisted container at the same time. It exposes, in hand-written Prometheus text format:
+    - `demo_container_cpu_seconds_total{container}`: cumulative CPU time, so `rate()` gives cores in use.
+    - `demo_container_memory_bytes{container}`: memory usage minus inactive file cache, the figure `docker stats` shows.
+    - `demo_container_stats_up{container}`: 1 or 0, so a failed read is visible and not a silent gap.
 
-2. **Peers and identity come from the environment, with the demo's topology as
-   defaults.** `GENERATORS`, `BACKENDS` and `LBS` are comma-separated base URLs;
-   `GRAFANA_URL` is the browser-reachable Grafana base. An LB's identity is the
-   hostname of its URL — the compose service name, which is also its Prometheus
-   `job` and therefore its dashboard `$lb` value (ADR-0023 decision 4). No
-   separate name/URL/job mapping is introduced; the one string carries all three.
-
-3. **Three action endpoints, each validated before any outbound call.** `POST
-   /api/lb` (`{"lb": <name>}`) and `POST /api/rate` (`{"total_rate": <n>}`) fan
-   out to all eight generators concurrently; `POST /api/backend` (`{"backend":
-   <name>, ...profile}`) forwards to that one backend's admin listener. Unknown
-   fields are rejected, the LB and backend must be in the configured set, and
-   profile values must be in range (the admin listener's own contract:
-   `sleep_ms ≥ 0`, `jitter_ms ≥ 0`, `fail_rate ∈ [0,1]`). A rejected request
-   makes no outbound call.
-
-4. **Fan-out is total and its response names every failure.** Every generator is
-   contacted even when one is down; the response is `200` with `{"ok": bool,
-   "results": [...], "failed": [<names>]}`. A dependency failure is a `200` with
-   `ok:false` and the failed peers named — it is data the page renders, not a
-   transport error to swallow. Validation failures are `400` with a plain
-   message and no outbound call.
-
-5. **The page is one embedded static HTML file with plain JavaScript `fetch`
-   calls.** No framework, no build step, no charting code. It polls
-   `/api/state`, renders the active LB, each backend's profile, the total rate
-   and the generators' offered/sent/dropped counters, and shows a failed action
-   as failed. Charts are iframes of the existing dashboard's panels against
-   `GRAFANA_URL`, each with `var-window=15s&refresh=5s` and `var-lb=<active>`
-   (ADR-0023 decision 9).
-
-6. **No Docker socket in this ticket.** Kill/revive over the Docker Engine API
-   is S5.T16.4.2; this service neither mounts the socket nor imports anything
-   that talks to it.
+    Nothing is cached between scrapes (decision 1).
 
 ## Consequences
 
-- Positive: one source of truth (the generators and backends themselves), so a
-  restart or a partial fan-out cannot make the page claim a state the demo is
-  not in.
-- Positive: the API is exercised entirely through HTTP against `httptest`
-  stand-ins — the same seam the generator uses — with no reach into unexported
-  state.
-- Positive: no new dependency, no frontend toolchain, and the demo's existing
-  images and ports are untouched.
-- Negative: `/api/state` makes twelve outbound requests per poll, so a peer that
-  is down adds its timeout to every state refresh; the client timeout bounds
-  this and the page shows the unreachable peers.
-- Negative: "active LB" is undefined while the generators disagree (mid-fan-out
-  or after a partial failure). That is deliberate — the page shows mixed rather
-  than guessing.
-- Neutral: the control service is demo-only; no LB, bench, or root-stack code
-  changes.
-
-## Alternatives considered
-
-- **Server-held desired state (write-through cache).** Rejected: a second source
-  of truth that drifts from the generators on restart or partial failure, and
-  it would let the page show a setting the demo is not running.
-- **A single `POST /api/config` carrying LB, rate and profiles at once.**
-  Rejected: the spec names the actions separately, and one endpoint would make a
-  partial fan-out harder to attribute to an action.
-- **`502` on a partial fan-out.** Rejected: the page must render which peers
-  failed, so the failure is returned as a `200` body field; a non-2xx would make
-  every client treat it as a generic error and discard the detail.
-- **An explicit name/URL/job mapping in config.** Rejected: the compose service
-  name is all three (host, `job`, `$lb`), so deriving identity from the URL
-  removes a field that could disagree with itself.
-- **Embedding the whole dashboard in one iframe.** Rejected by the ticket's
-  wording ("panels") and because panel-scoped iframes let the page place the
-  latency and share charts beside the controls; the dashboard URL remains the
-  fallback.
-
-## Amendment (2026-10-02, S5.T16.4.2) — Docker Engine access for kill and revive
-
-Decision 6 deferred the Docker socket to S5.T16.4.2; this amendment records how
-the service now uses it. Nothing above changes: the service stays stateless, the
-page stays one embedded file, and the API keeps validating before any outbound
-call.
-
-7. **The Engine client is the standard library over the unix socket; no Docker
-   SDK.** `DOCKER_HOST` (default `unix:///var/run/docker.sock`, Docker's own
-   convention) selects the endpoint. A `unix://` host builds an
-   `http.Transport` whose `DialContext` dials the socket, with the base URL
-   `http://docker`; an `http`/`https` host points the same client straight at a
-   TCP endpoint. This keeps AGENTS.md's no-heavyweight-dependency rule and makes
-   the engine an `httptest` stand-in in tests, the same seam the peers use.
-
-8. **Only the four configured backends are addressable, and the container name
-   is derived, never taken from the request.** A request names a *backend*
-   (`backend1`…`backend4`); the service rejects any name not in `BACKENDS`
-   before touching the Engine, then addresses `CONTAINER_PREFIX + name`
-   (default prefix `l7loadbalancer-demo-`). The demo compose pins each backend's
-   `container_name` to exactly that string, so the mapping is explicit and the
-   allowlist is auditable. The Engine is never handed a caller-supplied name.
-
-9. **Kill is the Engine's abrupt kill; revive is start.** `POST
-   /api/backend/kill` calls `POST /containers/{name}/kill` (SIGKILL, matching
-   the Sprint 3/4 chaos tests), and `POST /api/backend/revive` calls
-   `POST /containers/{name}/start` on the same container. A failed Engine call
-   is a `200` body `{"ok":false,"error":…}` (decision 4), so the page renders it
-   as a failed action rather than a swallowed transport error.
-
-10. **Container state is read into `/api/state` and shown on the page.** Each
-    backend's `GET /containers/{name}/json` `State.Status` is reported beside
-    its profile, and a failed read is reported as an error, so the page shows
-    running/exited live.
-
-11. **The control container runs as root only to reach the socket.** The socket
-    is root-equivalent (ADR-0023 decision 8); a non-root scratch user cannot
-    open it, so the demo compose sets `user: "0:0"` on the control service
-    alone. That is acceptable only under ADR-0023 decision 2's loopback-only
-    bound; no other compose file mounts the socket or changes user.
-
-## Alternatives considered (amendment)
-
-- **Docker SDK for Go.** Rejected: a heavyweight dependency for three Engine
-  calls, against AGENTS.md.
-- **`docker stop` instead of `docker kill`.** Rejected by the ticket: kill is
-  abrupt, matching the chaos tests, and drops in-flight connections to show the
-  clean 502.
-- **Compose-generated container names (`<project>-<service>-<index>`).**
-  Rejected: they depend on the project name and instance index; an explicit
-  `container_name` makes the allowlist a stated string rather than a computed
-  one.
-- **A second source of truth for which backends are up.** Rejected: state is
-  read from the Engine on each `/api/state`, consistent with decision 1.
-- **A non-root container with `group_add` for the host socket group.** Rejected:
-  the group id is host-specific and the socket is root-equivalent regardless;
-  running the demo-only control container as root is the honest, portable
-  choice.
-
-## Amendment (2026-10-07, S5.T20.2) — LB admin listeners, the invalid-reload action, and `/metrics`
-
-The recorded demo needs the page to show which algorithm is active and the
-result of the last reload attempt, to trigger a reload that is rejected on
-purpose, and to give the dashboard a time series of LB switches for its
-markers (`.scratch/s5-t20-demo-dashboard/spec.md`). The service stays
-stateless (decision 1). Every new value is read live from a peer or derived
-from the generators, as before.
-
-12. **A fourth peer set: the four LBs' metrics listeners.** `LB_ADMINS` (default
-    `http://lb-roundrobin:9090,…`, the same order as `LBS`) lists them. A
-    startup check rejects a count that differs from `LBS`. `/api/state` reads
-    each LB's `GET /admin/reload/last` (ADR-0015 decision 16) concurrently and
-    reports it on that LB's entry. A failed read is reported, not fatal. The
-    listeners stay on the internal network.
-
-13. **The invalid-reload action sends one fixed body, never a caller-supplied
-    one.** `POST /api/reload-invalid` takes no input. It posts a constant YAML
-    config to the *active* LB's `POST /admin/reload`, and returns that LB's
-    answer. The config is valid in every field except `algorithm: "p3c_ewma"`,
-    so validation rejects exactly that field, and the LB's running config never
-    changes. When the generators disagree there is no active LB, and the action
-    answers `409` without calling any LB. Fixing the body keeps the same
-    property as decision 8's allowlist: nothing a caller sends can reach the
-    LB's reload path, so the page cannot be used to change a backend list.
-
-14. **`GET /metrics` serves `demo_active_lb{lb="…"}`, 1 for the active LB and 0
-    for the others** (all 0 when the generators disagree), in the Prometheus
-    text format written by hand (no client library). It is derived from the
-    generators on each scrape, like `/api/state`. The demo Prometheus scrapes
-    it, and the demo dashboard draws a marker each time the active LB changes.
-
-15. **Labels follow the demo script.** The LB dropdown becomes four buttons
-    named by algorithm, and they never say "reload": a switch is a traffic
-    switch (ADR-0015 decision 4). Kill/Revive are labelled Stop/Start, with
-    decision 9's kill semantics unchanged. A per-backend Clear sets `0/0/0`.
-
-### Alternatives considered (amendment, 2026-10-07)
-
-- **Derive each admin URL from the LB's hostname and a fixed port.** Rejected:
-  tests point every peer at an `httptest` server on an arbitrary port. An
-  explicit list is the seam every other peer set already uses.
-- **Let the page send its own invalid YAML.** Rejected (decision 13): it would
-  turn the control service into a proxy for arbitrary reloads.
-- **Keep the active-LB history in the control service.** Rejected: decision 1.
-  Prometheus already stores the series.
-
-## Amendment (2026-10-07, S5.T20.8) — one LB, algorithm read from the LB
-
-ADR-0023's amendment of the same date reduces the demo to one LB whose
-algorithm changes by reload. Decisions 14 and 15 assumed the previous shape.
-
-16. **The page shows the algorithm the LB reports, not one derived from an LB
-    name.** `/api/state` reads each LB's `/metrics` from `LB_ADMINS` and
-    reports the label of `lb_algorithm_info` whose value is 1 (ADR-0013
-    amendment, S5.T20.7). A failed read is reported, not fatal (decision 12).
-
-17. **Decision 14 (`demo_active_lb` on `/metrics`) is withdrawn**, along with
-    the four algorithm buttons in decision 15. With one LB there is no active
-    LB to track, and the algorithm changes by reload, so the page offers no
-    algorithm control at all. `POST /api/lb` stays as a generic endpoint, but
-    the page no longer calls it. Stop/Start, Clear and the fixed
-    invalid-reload action (decision 13) stay.
-
-## Amendment (2026-10-08, S5.T20.9) — container CPU and memory
-
-The owner asked to see how hard the load balancer and each backend are
-working. The dashboard needs per-container CPU and memory.
-
-18. **The control service reads Docker's read-only stats for an allowlist and
-    serves them on `GET /metrics`.** The allowlist is the four backends'
-    containers (decision 8) plus each LB's container, `CONTAINER_PREFIX +
-    <LB name>` (the demo pins `container_name: l7loadbalancer-demo-lb`).
-    Names are derived from configuration and never taken from a request. Each
-    scrape calls `GET /containers/{name}/stats?stream=false&one-shot=true`
-    for every allowlisted container concurrently, and exposes:
-    - `demo_container_cpu_seconds_total{container}`, the cumulative CPU time,
-      so Prometheus's `rate()` gives cores in use;
-    - `demo_container_memory_bytes{container}`, the memory usage minus
-      inactive file cache, which is the figure `docker stats` shows;
-    - `demo_container_stats_up{container}`, 1 or 0, so a failed read is
-      visible instead of a silent gap.
-
-    The service stays stateless (decision 1): nothing is cached between
-    scrapes.
-
-### Alternatives considered (amendment, 2026-10-08)
-
-- **cAdvisor.** Tried and dropped. On Docker Desktop it needs a privileged
-  container with the VM's root filesystem, `/sys` and `/var/lib/docker`
-  mounted. That is broader access than the socket this service already holds,
-  for five containers' figures.
-- **Go process metrics in the LB** (`process_cpu_seconds_total`). This covers
-  the LB only, since the dummy backends export no metrics, and it changes
-  `internal/metrics` for a demo-only need.
+- There is one source of truth: the generators, backends, LB and Engine. A restart or a partial fan-out cannot make the page show a state the demo is not in.
+- The API is tested through HTTP against `httptest` stand-ins, with no access to unexported state.
+- No new dependency and no frontend toolchain.
+- `/api/state` makes many outbound requests per poll. A down peer adds up to its 5 s timeout to each refresh, and the page shows which peers are unreachable.
+- The derived rate is undefined while the generators disagree. The page shows "mixed" and does not guess.
+- The service is demo-only. No LB, bench or root-stack code changes.
+- Rejected alternatives:
+  - Server-held desired state (drifts on restart or partial failure).
+  - One `POST /api/config` for everything (a partial failure is harder to attribute).
+  - `502` on partial fan-out (clients would drop the per-peer detail).
+  - A separate name/URL/job mapping (the hostname already serves).
+  - The Docker SDK (a heavy dependency for a few calls).
+  - `docker stop` instead of kill (kill matches the chaos tests).
+  - Compose-generated container names (depend on project name and index).
+  - A non-root user with `group_add` (the group id is host-specific and the socket is root-equivalent anyway).
+  - Letting the page send its own invalid YAML (turns the service into a reload proxy).
+  - cAdvisor (needs a privileged container with broad host mounts on Docker Desktop).
+  - Go process metrics in the LB (covers the LB only and changes `internal/metrics` for a demo need).

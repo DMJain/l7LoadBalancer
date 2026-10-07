@@ -8,7 +8,7 @@
 //	method        - HTTP method
 //	status_class  - "2xx" / "4xx" / "5xx" etc. (NOT status_code — cardinality)
 //	protocol      - client wire protocol: "http/1.1" / "h2" / "h2c"
-//	                (lb_requests_total only; added in S5.T3-main, closed at
+//	                (lb_requests_total only; closed at
 //	                three values so cardinality stays bounded)
 //	endpoint      - health-probe path (lb_health_probe_total only)
 //	status        - health-probe status class, "2xx"/"5xx" etc.
@@ -21,11 +21,10 @@
 //	lb_request_duration_seconds
 //	lb_backend_healthy
 //	lb_circuit_state
-//	lb_active_requests      - added in S3.T4 as lb_active_connections,
-//	                          renamed in S5.T3-prefactor (ADR-0013 decision 7)
-//	lb_health_probe_total   - added in S3.T12 (ADR-0014)
+//	lb_active_requests      - formerly lb_active_connections (ADR-0013 decision 7)
+//	lb_health_probe_total   - ADR-0014
 //
-// See docs/design/sprint-1-contracts.md "Metric name and label
-// reservations" for latency bucket boundaries. Implemented in Sprint 3;
-// the Collector is built in S3.T4 (ADR-0013).
+// See docs/architecture.md "Metric name and label
+// reservations" for latency bucket boundaries. The Collector is
+// described in ADR-0013.
 package metrics

@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 #
-# repro.sh — the one-command reproducer (S5.T12, issue 11).
+# repro.sh — the one-command reproducer.
 #
 # `make bench-repro` takes a stranger from a fresh clone to the full result set:
 # preflight, certificates, images, the smoke slice, then the full matrix. It
-# stops at the first failure. It is the Sprint 5 exit criterion in executable
-# form; the published run (issue 19) is produced by it. It is a benchmark tool,
+# stops at the first failure. It is the final exit criterion in executable
+# form; the published run is produced by it. It is a benchmark tool,
 # not a deployment, so ADR-0019 stands.
 #
 # The harness (bench/run.sh) is a development tool: it *records* a dirty tree or
 # running containers but never refuses them, so uncommitted work can be
-# smoke-tested (spec §52). Enforcement lives here, at the publication boundary:
+# smoke-tested. Enforcement lives here, at the publication boundary:
 # this script refuses a dirty tree (untracked files included), any running
 # container (listing each one, and never stopping any itself), and fewer than
 # MIN_VCPUS vCPUs.
@@ -25,8 +25,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 COMPOSE_FILE="$ROOT/bench/docker-compose.yml"
 COMPOSE=(docker compose -f "$COMPOSE_FILE")
 
-# Fixed 8-vCPU split. Raise this locally to exercise the refusal (the ticket's
-# "a vCPU threshold raised locally, uncommitted, to simulate too few").
+# Fixed 8-vCPU split. Raise this locally to exercise the refusal (a vCPU threshold raised locally, uncommitted, to simulate too few").
 MIN_VCPUS=8
 
 # fail <message> [fix] prints why the run is refused and how to fix it, then

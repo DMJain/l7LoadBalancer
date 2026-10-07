@@ -18,7 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// genStub stands in for one traffic generator's control endpoint (S5.T16.2):
+// genStub stands in for one traffic generator's control endpoint:
 // GET returns a status snapshot, POST records the target/total_rate it was sent.
 // It records every call so a test can prove an invalid request made none.
 type genStub struct {
@@ -89,7 +89,7 @@ func (g *genStub) snapshot() (target string, rate float64, gets, posts int) {
 	return g.target, g.rate, g.gets, g.posts
 }
 
-// backendStub stands in for one dummy backend's admin listener (S5.T16.1):
+// backendStub stands in for one dummy backend's admin listener:
 // POST only, omitted fields keep their value, the response is the full profile.
 // An empty `{}` body is therefore a read, exactly as the real listener treats it.
 type backendStub struct {
@@ -149,7 +149,7 @@ func (b *backendStub) snapshot() (sleepMS, jitterMS int, failRate float64, posts
 	return b.sleepMS, b.jitterMS, b.failRate, b.posts
 }
 
-// engineStub stands in for the Docker Engine API (S5.T16.4.2): it serves the
+// engineStub stands in for the Docker Engine API: it serves the
 // three endpoints the control service calls — kill, start and inspect — and
 // records every request, so a test can prove a disallowed target made no Engine
 // call and that kill/revive reached the right container.
@@ -160,7 +160,7 @@ type engineStub struct {
 	calls []string
 	fail  bool
 	state string
-	// queries records the raw query of each stats call (S5.T20.9).
+	// queries records the raw query of each stats call.
 	queries []string
 }
 
@@ -282,7 +282,7 @@ func (r *rig) do(t *testing.T, method, path, body string) *httptest.ResponseReco
 }
 
 // TestSwitchLBReachesAllEightGenerators proves the LB switch is a total fan-out
-// carrying the LB's target URL, and touches no admin listener (S5.T16.4.1).
+// carrying the LB's target URL, and touches no admin listener.
 func TestSwitchLBReachesAllEightGenerators(t *testing.T) {
 	r := newRig(t)
 	rec := r.do(t, http.MethodPost, "/api/lb", `{"lb":"lb-p2c-ewma"}`)
@@ -305,7 +305,7 @@ func TestSwitchLBReachesAllEightGenerators(t *testing.T) {
 }
 
 // TestSetRateReachesAllEightGenerators proves the rate fan-out carries the same
-// total to every generator (S5.T16.4.1).
+// total to every generator.
 func TestSetRateReachesAllEightGenerators(t *testing.T) {
 	r := newRig(t)
 	rec := r.do(t, http.MethodPost, "/api/rate", `{"total_rate":250}`)
@@ -323,7 +323,7 @@ func TestSetRateReachesAllEightGenerators(t *testing.T) {
 }
 
 // TestSetBackendProfileReachesOnlyThatBackend proves the profile action is a
-// single forward to the named admin listener and no fan-out (S5.T16.4.1).
+// single forward to the named admin listener and no fan-out.
 func TestSetBackendProfileReachesOnlyThatBackend(t *testing.T) {
 	r := newRig(t)
 	rec := r.do(t, http.MethodPost, "/api/backend", `{"backend":"backend3","sleep_ms":200,"jitter_ms":10,"fail_rate":0.5}`)
@@ -352,7 +352,7 @@ func TestSetBackendProfileReachesOnlyThatBackend(t *testing.T) {
 }
 
 // TestPartialFanOutNamesEveryFailedGenerator proves a down generator does not
-// stop the other seven, and that it is named in the response (S5.T16.4.1).
+// stop the other seven, and that it is named in the response.
 func TestPartialFanOutNamesEveryFailedGenerator(t *testing.T) {
 	r := newRig(t)
 	r.gens[4].mu.Lock()
@@ -378,7 +378,7 @@ func TestPartialFanOutNamesEveryFailedGenerator(t *testing.T) {
 }
 
 // TestInvalidInputsMakeNoOutboundCall proves validation happens before any peer
-// is contacted (S5.T16.4.1).
+// is contacted.
 func TestInvalidInputsMakeNoOutboundCall(t *testing.T) {
 	cases := []struct {
 		name string
@@ -418,7 +418,7 @@ func TestInvalidInputsMakeNoOutboundCall(t *testing.T) {
 
 // TestStateReadsEveryPeerAndDerivesAgreement proves GET /api/state reads the
 // eight generators and four admin listeners live and reports the active LB only
-// when the generators agree (S5.T16.4.1).
+// when the generators agree.
 func TestStateReadsEveryPeerAndDerivesAgreement(t *testing.T) {
 	r := newRig(t)
 
@@ -447,7 +447,7 @@ func TestStateReadsEveryPeerAndDerivesAgreement(t *testing.T) {
 }
 
 // TestStateReportsMixedWhenGeneratorsDisagree proves the derived active LB is
-// withheld, not guessed, when the generators' targets differ (S5.T16.4.1).
+// withheld, not guessed, when the generators' targets differ.
 func TestStateReportsMixedWhenGeneratorsDisagree(t *testing.T) {
 	r := newRig(t)
 	r.gens[2].mu.Lock()
@@ -464,7 +464,7 @@ func TestStateReportsMixedWhenGeneratorsDisagree(t *testing.T) {
 
 // TestServesEmbeddedPage proves the page is served with the embedded markers the
 // browser needs: the dashboard iframe query, the API endpoints and the
-// kill/revive controls (S5.T16.4.1, S5.T16.4.2).
+// kill/revive controls.
 func TestServesEmbeddedPage(t *testing.T) {
 	r := newRig(t)
 	rec := r.do(t, http.MethodGet, "/", "")
@@ -479,7 +479,7 @@ func TestServesEmbeddedPage(t *testing.T) {
 }
 
 // TestKillReachesTheRightContainer proves kill is the Engine's abrupt kill on
-// the named backend's container and nothing else (S5.T16.4.2).
+// the named backend's container and nothing else.
 func TestKillReachesTheRightContainer(t *testing.T) {
 	r := newRig(t)
 	rec := r.do(t, http.MethodPost, "/api/backend/kill", `{"backend":"backend3"}`)
@@ -502,7 +502,7 @@ func TestKillReachesTheRightContainer(t *testing.T) {
 }
 
 // TestReviveStartsTheSameContainer proves revive starts the named backend's
-// container again (S5.T16.4.2).
+// container again.
 func TestReviveStartsTheSameContainer(t *testing.T) {
 	r := newRig(t)
 	rec := r.do(t, http.MethodPost, "/api/backend/revive", `{"backend":"backend2"}`)
@@ -516,7 +516,7 @@ func TestReviveStartsTheSameContainer(t *testing.T) {
 
 // TestKillReviveInvalidInputsMakeNoEngineCall proves the allowlist is enforced
 // before any Engine call: a name outside the four backends, a missing name and
-// an unknown field are all rejected with 400 (S5.T16.4.2).
+// an unknown field are all rejected with 400.
 func TestKillReviveInvalidInputsMakeNoEngineCall(t *testing.T) {
 	cases := []struct {
 		name string
@@ -541,7 +541,7 @@ func TestKillReviveInvalidInputsMakeNoEngineCall(t *testing.T) {
 }
 
 // TestEngineErrorIsPropagated proves a failed Engine call is returned to the
-// page as a failed action, naming the error, never swallowed (S5.T16.4.2).
+// page as a failed action, naming the error, never swallowed.
 func TestEngineErrorIsPropagated(t *testing.T) {
 	r := newRig(t)
 	r.engine.setFail(true)
@@ -557,7 +557,7 @@ func TestEngineErrorIsPropagated(t *testing.T) {
 }
 
 // TestStateIncludesContainerState proves GET /api/state reports each backend's
-// Engine container state beside its profile (S5.T16.4.2).
+// Engine container state beside its profile.
 func TestStateIncludesContainerState(t *testing.T) {
 	r := newRig(t)
 	r.engine.setState("exited")
@@ -575,7 +575,7 @@ func TestStateIncludesContainerState(t *testing.T) {
 }
 
 // TestStateReportsContainerError proves a failed Engine read is reported on the
-// page as a failed container state, not swallowed (S5.T16.4.2).
+// page as a failed container state, not swallowed.
 func TestStateReportsContainerError(t *testing.T) {
 	r := newRig(t)
 	r.engine.setFail(true)

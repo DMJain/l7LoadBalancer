@@ -25,7 +25,7 @@ func (s nthSelector) Select(context.Context, *http.Request) (*backend.Backend, e
 }
 
 // TestSetSelectorRoutesNextRequest proves SetSelector changes which selector
-// the next request asks (S5.T20.7, ADR-0015 decision 18).
+// the next request asks (ADR-0015 decision 18).
 func TestSetSelectorRoutesNextRequest(t *testing.T) {
 	reg := registryFrom(t,
 		backendEntry{"backend-a", startBackend(t, "backend-a").URL},

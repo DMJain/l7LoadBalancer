@@ -16,7 +16,7 @@ import (
 // per call — and never read externally. A single increment needs no mutual
 // exclusion: racing increments each get a distinct value, so every call
 // receives a distinct round-robin turn, and selection can never deadlock or
-// block. See docs/design/sprint-1-contracts.md "Concurrency ownership
+// block. See docs/architecture.md "Concurrency ownership
 // table".
 type RoundRobin struct {
 	reg     *backend.Registry

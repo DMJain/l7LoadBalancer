@@ -12,7 +12,7 @@ import (
 )
 
 // TestBuildTransportHTTP2Settings pins the scheme-driven HTTP/2 transport
-// construction (S5.T3-main): ForceAttemptHTTP2 follows force_http2, and
+// construction: ForceAttemptHTTP2 follows force_http2, and
 // tls_skip_verify installs a TLSClientConfig whose InsecureSkipVerify is set.
 // The explicit ForceAttemptHTTP2 is the point of the test: Go silently drops
 // automatic HTTP/2 the moment TLSClientConfig is customized, so leaving it
@@ -71,8 +71,7 @@ func h2Backend(t *testing.T) (*httptest.Server, func() string) {
 	return srv, func() string { return <-seen }
 }
 
-// TestTransportNegotiatesHTTP2ToHTTPSBackend proves the end-to-end promise of
-// the ticket: an https:// backend URL reaches the backend over HTTP/2 via ALPN
+// TestTransportNegotiatesHTTP2ToHTTPSBackend proves the end-to-end promise: an https:// backend URL reaches the backend over HTTP/2 via ALPN
 // when tls_skip_verify permits the self-signed test certificate.
 func TestTransportNegotiatesHTTP2ToHTTPSBackend(t *testing.T) {
 	silenceDefault(t)
@@ -95,7 +94,7 @@ func TestTransportNegotiatesHTTP2ToHTTPSBackend(t *testing.T) {
 
 // TestTransportHandlesMixedSchemes proves one shared transport serves both an
 // http:// (HTTP/1.1) and an https:// (HTTP/2) backend in the same config, so a
-// fleet can migrate to HTTP/2 one backend at a time (spec §15, S5.T3-main).
+// fleet can migrate to HTTP/2 one backend at a time.
 func TestTransportHandlesMixedSchemes(t *testing.T) {
 	silenceDefault(t)
 

@@ -1,4 +1,4 @@
-# Local live demo stack (S5.T16.3.2, ADR-0023).
+# Local live demo stack (ADR-0023).
 #
 # One command brings the whole demo up:
 #   docker compose -f demo/docker-compose.yml up -d --build
@@ -9,8 +9,8 @@
 # Topology:
 #   * one LB, `lb`, built from the repo-root image, in front of four backends.
 #     Its algorithm changes by hot reload: edit demo/configs/lb.yaml and send
-#     `docker compose -f demo/docker-compose.yml kill -s HUP lb` (S5.T20.8,
-#     ADR-0023 decision 14, ADR-0015 decisions 18–21). The whole demo/configs
+#     `docker compose -f demo/docker-compose.yml kill -s HUP lb` (ADR-0023
+#     decision 14, ADR-0015 decisions 18–21). The whole demo/configs
 #     directory is mounted, so an editor that saves by rename is still seen
 #     (ADR-0023 decision 15);
 #   * four dummy backends with the runtime admin listener enabled (only this
@@ -26,7 +26,7 @@
 #     sets backend profiles, tries an invalid reload, and stops/starts backends,
 #     reaching
 #     generators and admin listeners over the internal network only, and the
-#     Docker Engine over the mounted socket (S5.T16.4.1–T16.4.2, ADR-0025).
+#     Docker Engine over the mounted socket (ADR-0025).
 #
 # Ports: only Grafana, the control page and the LB client port are published,
 # every one on 127.0.0.1. Generator control ports, backend admin
@@ -42,7 +42,7 @@ name: l7loadbalancer-demo
 # without recreating a container (ADR-0023 decision 7); the bench rig and root
 # stack leave ADMIN_ENABLED unset. LOG_REQUESTS is off so per-request backend
 # logging cannot become the demo's resource ceiling. No restart policy: a killed
-# backend must stay down until the control service revives it (S5.T16.4.2) —
+# backend must stay down until the control service revives it —
 # `restart: unless-stopped` would undo the kill. Each service pins container_name
 # to `l7loadbalancer-demo-<name>`; that is the control service's
 # CONTAINER_PREFIX+name allowlist (ADR-0025 amendment decision 8), so the Engine
@@ -71,7 +71,7 @@ x-generator-env: &generator-env
   # every LB keeps in-flight counts above zero.
   TOTAL_RATE: "400"
   TARGET_LB: "http://lb:8080"
-  # The one LB is the only target the generator will accept (S5.T16.2).
+  # The one LB is the only target the generator will accept.
   TARGET_ALLOWLIST: "http://lb:8080"
   MAX_INFLIGHT: "64"
   # Bound the generator heap as ADR-0021/0022 require (ADR-0024 decision 3).
@@ -99,7 +99,7 @@ services:
     container_name: l7loadbalancer-demo-backend4
     command: ["-name", "backend4"]
 
-  # The one load balancer (S5.T20.8). Its algorithm is hot-reloaded from
+  # The one load balancer. Its algorithm is hot-reloaded from
   # demo/configs/lb.yaml; the directory is mounted so any editor's save is
   # seen, and the entrypoint points at it (the image's default config path is
   # /etc/l7lb/config.yaml).
@@ -182,7 +182,7 @@ services:
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
 
-  # Control page and JSON API (S5.T16.4.1–T16.4.2, ADR-0025 and its amendment).
+  # Control page and JSON API (ADR-0025 and its amendment).
   # It reads the generators and admin listeners live and fans out to them over
   # the internal network; only its own page port is published, on 127.0.0.1.
   # GRAFANA_URL is the browser-reachable Grafana (host loopback) because the
@@ -233,7 +233,7 @@ services:
       # datasource points at the `prometheus` service on this network.
       - ../deployments/docker/observability/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
       - ../deployments/docker/observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
-      # Demo-only (S5.T20.4, ADR-0023 amendment decision 11): a provider file
+      # Demo-only (ADR-0023 amendment decision 11): a provider file
       # listing both dashboard directories, and the demo dashboard (uid
       # l7lb-demo) the control page embeds. The shared files above are
       # unchanged.

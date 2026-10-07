@@ -9,7 +9,7 @@ import (
 )
 
 // TestParse covers Parse, the reader-based decode that Load wraps and the
-// reload admin endpoint calls with a request body (S5.T20.1, ADR-0015
+// reload admin endpoint calls with a request body (ADR-0015
 // decision 13). It must be exactly as strict as Load: unknown fields are
 // rejected, ${VAR} references in backend URLs are expanded, and errors name the
 // source the caller passed rather than a file path.

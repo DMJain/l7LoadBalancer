@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# generate-results_test.sh — fixture test for the results generator (S5.T10.1).
+# generate-results_test.sh — fixture test for the results generator.
 #
 # Runs bench/generate-results.sh against a small committed fixture result set
 # (core + protocol .txt/.json/.hdr files, failure + degraded + hot-key .txt/.json
@@ -28,7 +28,7 @@
 #   - a provenance record with git_dirty true is refused.
 #
 # The generator is shell-only, so it is TDD-exempt (AGENTS.md); this committed
-# script is the test the tickets require. Run it directly:
+# script is the test. Run it directly:
 #   ./bench/generate-results_test.sh
 
 set -euo pipefail
@@ -242,7 +242,7 @@ assert_not_contains "$DOC" "STALE-DEGRADED" "stale degraded content replaced"
 assert_not_contains "$DOC" "STALE-HOTKEY" "stale hot-key content replaced"
 
 # ---------------------------------------------------------------------------
-# Narrative number check (S5.T10.3): a latency/throughput figure quoted outside
+# Narrative number check: a latency/throughput figure quoted outside
 # the markers must match a generated cell. Matching figures, figures marked
 # approximate with ≈ or ~, and exempt tokens (percentages, core counts, sizes,
 # ADR numbers, percentile names) pass; a figure with no matching cell fails and

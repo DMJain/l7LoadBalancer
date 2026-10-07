@@ -1,21 +1,10 @@
 # Architecture
 
-_This document describes the as-built architecture, sprint by sprint. See
-`MILESTONES.md` for the plan, `PROGRESS.md` for live task state,
-`docs/sprint-3-retro.md` and `docs/sprint-4-retro.md` for the sprint
-close-outs, and `docs/design/sprint-1-contracts.md` for the frozen Sprint 1
-contracts. Sprints 1–4 are complete. This document is the Sprint 1–4
-reference._
+l7LoadBalancer is a Layer 7 HTTP load balancer in Go. It reads each HTTP request before it chooses a backend. The request path uses only the standard library (`net/http`, `net/http/httputil`), with one exception: cleartext HTTP/2 (h2c) uses `golang.org/x/net/http2/h2c`.
 
-## At a glance
+The project puts a pluggable backend-selection policy on top of `httputil.ReverseProxy`, which already handles hop-by-hop headers, `X-Forwarded-For`, buffering and flushing. The project code is the selection layer, the concurrency model, the resilience patterns and the lifecycle. These patterns are defensible, but the project is not hardened against hostile traffic ([ADR-0005](adr/0005-scope-of-production-grade.md)).
 
-This section shows the two pictures a reader needs first: how one request travels, and which packages depend on which. The sections below give the detail.
-
-A **Layer 7** load balancer works at the application layer. It reads each HTTP request (method, path, headers) before it decides where to send it. A **backend** is one of the servers that do the real work. A **reverse proxy** receives a client's request, forwards it to a backend, and returns the backend's response. This project builds its reverse proxy on Go's standard `httputil.ReverseProxy`. A **selector** picks which backend gets a request. The project has four. Round-robin takes the backends in turn. Least-connections picks the backend with the fewest requests in flight. Consistent hashing sends the same key to the same backend. Power of two choices compares two random backends and takes the better one.
-
-A **health check** is a periodic request that tests whether a backend answers. An **active** check is sent by the load balancer on a timer. A **passive** check judges real client traffic as it passes. A backend that fails is marked unhealthy. A **circuit** is a per-backend switch that stops traffic to a backend that keeps failing. A circuit is open when it blocks traffic.
-
-### How one request travels
+## Request path
 
 ```mermaid
 sequenceDiagram
@@ -47,24 +36,47 @@ sequenceDiagram
     end
 ```
 
-Each number below matches the arrow with the same number.
+The path is the same for every algorithm.
 
-1. The client sends an HTTP request. The proxy handler, this project's code, receives it.
-2. The handler asks the selector for a backend. The selector considers only backends that are healthy and whose circuit is not open.
-3. The selector returns one backend. If none is selectable, the next step answers 503 (service unavailable). Any other selection error answers 502 (bad gateway).
-4. The handler also asks the circuit gate whether this backend may take a request. The selector filters the list. The gate checks the one chosen backend at the moment of use, because its circuit may have opened since. If the circuit denies the request, or no backend was selectable, the handler answers 503. The backend is never contacted and the active count is untouched.
-5. The handler raises the backend's **active-connection count**. This is the number of requests in flight to that backend. Least-connections reads it, so it must stay correct.
-6. The handler passes the request to the reverse proxy.
-7. The reverse proxy points the request at the chosen backend and forwards it.
-8. The backend sends its response.
-9. When the response headers arrive, the reverse proxy records the status code and the round-trip time. The latency estimate, outlier detection and the circuit all use these results later. It also wraps the response body, so the handler learns when the body is done.
-10. The handler copies the response body to the client.
-11. When the body is closed, the handler lowers the active-connection count. The client has then finished reading or given up. This happens exactly once per request. [ADR-0007](adr/0007-proxy-request-lifecycle-and-exactly-once-decrement.md) explains why.
-12. If the backend call fails instead, the reverse proxy reports a transport error.
-13. The handler answers 502. If the client had already left, it records the request as 499 instead. That non-standard code means "client closed the request".
-14. The handler lowers the active-connection count on this path too, once. Without that, each failed call would leave the count too high.
+1. `proxy.Proxy.ServeHTTP` loads the current selector (one atomic load) and calls `Select`. `Director` cannot do this, because it has no `ResponseWriter` and cannot answer 503.
+2. `ErrNoHealthyBackends` gives a 503. Any other selection error gives a 502.
+3. `Registry.Allow(b)` asks the circuit gate again at the moment of use, because the circuit can open after `Select`. A denial gives a 503 and a WARN line `request denied by circuit breaker`, with no `IncActive`.
+4. The proxy calls `IncActive()`. It makes an outbound context with `context.WithCancelCause` and joins it to the backend's retired context with `context.AfterFunc`, so a drain can cancel the request ([ADR-0016](adr/0016-drain-lifecycle.md)).
+5. A per-request `reqState` in the context holds the backend, the status, a `sync.Once`, the dispatch start time and the client's own context (`clientCtx`).
+6. `Director` sets only `req.URL.Scheme` and `req.URL.Host`, and stamps the dispatch start.
+7. `ModifyResponse` records `resp.StatusCode`, sends the outcome (`success = status < 500`) to every `RoundTripObserver`, and wraps `resp.Body`.
+8. When the body wrapper closes, `reqState.release()` calls `DecActive()` exactly once. `ErrorHandler` also calls it on a failure.
+9. A deferred hook writes one `request complete` line and the request metrics on every exit path.
 
-### Which package depends on which
+The decrement is on the body wrapper because a response can stream. "Done" means that the client finished reading the body or gave up. The proxy reads the status from `resp.StatusCode` and does not wrap the `ResponseWriter`, so the flush and hijack behavior of `ReverseProxy` stays ([ADR-0007](adr/0007-proxy-request-lifecycle-and-exactly-once-decrement.md)).
+
+### Observers
+
+Three observers get every round-trip outcome, in this order:
+
+1. `proxy.NewLatencyObserver()` updates the backend's EWMA latency.
+2. `health.OutlierDetector` does passive outlier detection.
+3. `circuit.Breaker` drives the circuit state.
+
+Recording is unconditional, also for a half-open trial. A request that `Allow` denies makes no round trip, so it records nothing. If a reload removed the backend, the proxy skips all observers for it ([ADR-0011](adr/0011-health-passive-outlier-and-circuit-breaker-composition.md) decision 9, [ADR-0015](adr/0015-reload-architecture.md) decision 8).
+
+### Failed round trips
+
+`ErrorHandler` puts each failure into exactly one tier, in this order. The discriminator is `reqState.clientCtx` ([ADR-0017](adr/0017-client-gone-classification-and-trial-rearm.md)).
+
+| Tier | Test | Result |
+|---|---|---|
+| Drain cancellation | The cause is `backend.ErrDrainWindowExpired` | WARN, reason `window_expired`, 502, no observer |
+| Client gone | `clientCtx.Err() != nil` | INFO, reason `client_canceled`, recorded as 499 (`status_class="4xx"`), no observer, no EWMA sample, `Backend.RearmTrial()` |
+| Transport failure | All other errors | WARN, 502, observers get a failure with the fixed 2s penalty duration |
+
+The 499 tier keeps client churn out of the 5xx class. A response-header timeout is a transport failure. `RearmTrial()` frees a half-open trial that a client cancelled, so a live backend cannot stay stuck behind it.
+
+If a backend dies after it sends the headers, the body wrapper sees a non-EOF read error. It logs WARN `backend died mid-response` with `bytes_copied`. The success recorded at header time stays, and no observer gets a second event, because that would corrupt the outlier window. A mid-body death does not eject the backend by itself.
+
+The load balancer never retries a request ([ADR-0018](adr/0018-no-retry-ever.md)).
+
+## Packages and dependency graph
 
 ```mermaid
 flowchart TD
@@ -94,796 +106,400 @@ flowchart TD
     backend --> config
 ```
 
-An arrow from A to B means package A imports package B. Every name except the first is a package under `internal/`. The entry point `cmd/l7LoadBalancer` reads flags, loads the config and starts `app`. The package `app` builds every other piece and wires them together. `config`, `logger` and `metrics` import no other package of this project.
-
-The edges come from the compiler's own view of the code, not from a written list. Reproduce them with this command:
+An arrow from A to B means that A imports B. The graph has no cycles. `config`, `logger` and `metrics` import no other project package. To show the real edges, run:
 
 ```
 go list -f '{{.ImportPath}} {{join .Imports " "}}' ./cmd/... ./internal/...
 ```
 
-The diagram leaves out test files and the standard library, and it leaves out the packages outside `internal/` (the demo programs, the dummy backend and the chaos harness).
+**Rule: `backend` does not import `balancer`.** A `Backend` holds identity and live state and does not know how a policy selects it. Otherwise a policy change could force a change to the data that the policy reads.
 
-**Dependency rule: `backend` does not import `balancer`.** A backend record holds one server's identity and live state: health, active count and latency estimate. It has no notion of how a selection policy chooses it. Suppose `backend` imported `balancer`. A change to a policy could then force a change to the data the policy reads. The two could no longer be read or tested apart. The compiler already blocks the direct reverse import, because `balancer` imports `backend` and Go rejects import cycles. A change that worked around that block would show the boundary had started to leak.
+| Package | Responsibility |
+|---|---|
+| `cmd/l7LoadBalancer` | Entry point. Parses `-config`, calls `config.Load` and `Validate`, then `app.Build` and `app.Run` on a `signal.NotifyContext` for SIGINT and SIGTERM. Runs the SIGHUP `reloadLoop` on a separate channel. Owns the `probe` subcommand and the startup line. Any startup failure is fatal (exit 1). |
+| `internal/app` | The whole wiring graph behind `Build` and `Run`. Production, the chaos harness and the tests all build the system through it. Owns the loaded config, `Reload`/`ReloadFrom`, the admin endpoint and the drain goroutines. |
+| `internal/proxy` | Wraps `httputil.ReverseProxy`. Owns the request lifecycle, the 503/502/499 paths, active-connection accounting, the request log line and request metrics. |
+| `internal/balancer` | The `Selector` interface, `ErrNoHealthyBackends`, the four selectors and the `NewFromConfig` factory. |
+| `internal/backend` | `Backend` (identity plus atomic state, accessed only through methods) and `Registry` (an ordered, versioned snapshot behind one atomic pointer). |
+| `internal/health` | The active `Checker`, the passive `OutlierDetector`, and the `/livez`, `/readyz`, `/startupz` handler. |
+| `internal/circuit` | `Breaker`, the circuit policy. It is the registry's `CircuitGate` and an observer. |
+| `internal/config` | Strict YAML loading, validation, defaults, `${VAR}` interpolation, and the pure reload diff. |
+| `internal/metrics` | The Prometheus `Collector` on a private registry. Push-only. |
+| `internal/logger` | `log/slog` JSON setup and the closed log field vocabulary. |
 
-## Overview
+## Interface contracts
 
-l7LoadBalancer is a Layer 7 HTTP load balancer built on Go's standard library
-(`net/http`, `net/http/httputil`) for the request path, with one exception:
-cleartext HTTP/2 (h2c) uses `golang.org/x/net/http2/h2c`, the only request-path
-dependency outside the standard library (S5.T2; see `docs/adr/INDEX.md`). It
-layers a pluggable backend-selection policy (`balancer.Selector`) over
-`httputil.ReverseProxy`:
+### Selector
 
-- the **proxy** owns the request lifecycle and active-connection accounting,
-- the **selector** owns "which backend",
-- the **registry** owns backend identity and shared mutable state,
-- **config** owns strict YAML loading and validation.
+```go
+// internal/balancer/selector.go
+type Selector interface {
+    Select(ctx context.Context, r *http.Request) (*backend.Backend, error)
+}
 
-`httputil.ReverseProxy` is used rather than a hand-rolled proxy because it
-already handles hop-by-hop header stripping, `X-Forwarded-For`, buffering,
-and flushing. The interesting work is the selection layer and the
-concurrency/resilience/lifecycle code wrapped around it. Resilience (health
-checking, circuit breaking) and observability (Prometheus metrics) arrived in
-Sprint 3; Sprint 4 adds the `internal/app` wiring seam, zero-downtime SIGHUP
-reload with draining, connection-lifecycle hardening, backend transport
-tuning, and config env interpolation. All non-trivial decisions are tracked as
-ADRs — see the [decision index](#decision-index).
+var ErrNoHealthyBackends = errors.New("balancer: no healthy backends")
 
-Scope claims are deliberately bounded; "production-grade" here means the
-patterns are demonstrated and defensible, not that the project is hardened
-for adversarial traffic. See [ADR-0005](adr/0005-scope-of-production-grade.md).
-
-## Request path
-
-The following is the request lifecycle as built through Sprint 4. It is the
-same path for every algorithm; only the `selector.Select` call differs.
-
-```
-Client
-  │
-  ▼
-http.Server  (listen address from cfg.Listen; ReadTimeout = server.read_timeout,
-  │           S4.T7 — the slow-loris body bound; WriteTimeout deliberately unset)
-  │
-  ▼
-proxy.Proxy.ServeHTTP                              internal/proxy/proxy.go
-  │
-  ├─ selector.Select(ctx, r) ──────────────► balancer.RoundRobin
-  │                                            or balancer.LeastConnections
-  │                                               │ snapshots
-  │                                               ▼
-  │                                          backend.Registry.Selectable()
-  │                                          (healthy AND circuit-not-open)
-  │
-  ├─ ErrNoHealthyBackends ─────────────────► 503 short-circuit
-  │                                            (ReverseProxy never runs)
-  ├─ other select error ───────────────────► 502
-  │
-  ├─ Registry.Allow(b) ────────────────────► 503 short-circuit when the
-  │   (circuit gate: circuit.Breaker)         circuit denies (ADR-0012);
-  │                                            no dispatch, no IncActive
-  │
-  ├─ backend.IncActive()
-  ├─ derive outbound ctx  context.WithCancelCause; context.AfterFunc joins the
-  │                      backend's retired context, cancelling the outbound
-  │                      request with its cause on drain (S4.T4.0, ADR-0016)
-  ├─ attach reqState{backend, status, once, dispatchStart, clientCtx}
-  ▼
-httputil.ReverseProxy.ServeHTTP
-  │
-  ├─ Director            reads state from context; sets req.URL.Scheme/Host
-  │                      (scheme/host only — see ADR-0007); stamps
-  │                      state.dispatchStart — the backend round-trip
-  │                      window, distinct from latency_ms (ADR-0010)
-  ├─ Transport           the app-built tuned *http.Transport (S4.T8), replacing
-  │                      the stdlib default; dispatches to the backend
-  │
-  ├─ ModifyResponse      records resp.StatusCode; fans
-  │                      ObserveRoundTrip(since dispatchStart,
-  │                      success = status < 500) out to every registered
-  │                      RoundTripObserver (ADR-0011 decision 9) unless the
-  │                      backend is removed (ADR-0015 decision 8);
-  │                      wraps resp.Body in releaseBody
-  │                        ├─ releaseBody.Read() counts bytes; a non-EOF read
-  │                        │    error logs WARN backend_died_mid_response and
-  │                        │    does not un-ring the recorded success (S4.T6)
-  │                        └─ releaseBody.Close()
-  │                             └─ reqState.release()   (sync.Once)
-  │                                  └─ backend.DecActive()
-  │
-  ├─ ErrorHandler        three-tier failed-round-trip classification (S4.T5,
-  │                      ADR-0017): drain cancellation → WARN window_expired,
-  │                      no observer; client-gone (clientCtx.Err() != nil) →
-  │                      INFO client_canceled, 499, no observer, no EWMA,
-  │                      RearmTrial(); else genuine transport failure → WARN,
-  │                      observers get the 2s penalty, 502. Calls
-  │                      reqState.release() on every tier.
-  │
-  └─ deferred logRequest emits one "request complete" slog line
-                         (canonical fields) on every path
-  ▼
-Client
+func NewFromConfig(cfg *config.Config, reg *backend.Registry) (Selector, error)
 ```
 
-Lifecycle notes (full rationale in
-[ADR-0007](adr/0007-proxy-request-lifecycle-and-exactly-once-decrement.md)):
+`Selector` lives in `balancer`, not in its consumer `proxy`, because all four implementations live there and the proxy only calls `Select`. A consumer-side interface would force `balancer` to import from `proxy` or copy the interface. This is the one exception to "define interfaces at the consumer" ([ADR-0002](adr/0002-interface-placement-and-schema-freeze.md)).
 
-1. `ServeHTTP` calls `selector.Select` itself, **not** `Director` — `Director`
-   has no `ResponseWriter` and cannot short-circuit a 503. On success it calls
-   `IncActive()` and carries a per-request `reqState` in the request context.
-2. `DecActive` runs through `reqState.release()`, guarded by `sync.Once`, so it
-   fires **exactly once** whether the response body's `Close()` or
-   `ErrorHandler` reaches it first. `LeastConnections` depends on this
-   invariant: a leak or double-decrement corrupts its view of load.
-3. The decrement lives on the response-body wrapper, not in `ModifyResponse`
-   directly — a response may be streamed, and "request done" must mean the
-   client has finished consuming (or abandoned) the body.
-4. Status is captured from `resp.StatusCode` rather than wrapping the
-   `ResponseWriter`, preserving `ReverseProxy`'s `ResponseController` flushing
-   and hijacking behavior.
-5. Every request emits exactly one `msg:"request complete"` line with the
-   canonical field vocabulary (`backend`, `method`, `status`, `latency_ms`,
-   `remote_addr`, `path`) on the success, 503, 502, 499, and abort paths. The
-   502 and 499 paths additionally log a cause at WARN and INFO respectively
-   (the vocabulary has no `err` field).
-6. Both terminal hooks (`ModifyResponse`, `ErrorHandler`) fan every round
-   trip's outcome out to every registered `RoundTripObserver`, unconditionally
-   with respect to observer and circuit state — success and failure alike,
-   including a half-open circuit trial's result. The one exception is a
-   reload-removed backend: the whole fan-out is skipped for it (ADR-0015
-   decision 8), so no observer learns a backend left the fleet. Recording is
-   unconditional;
-   gating is conditional: a request denied by the breaker's `Allow()` gate is
-   answered before dispatch, so it never produces a round trip to record.
-   Registration is additive (`Proxy.RegisterObserver`), so `New(reg, sel)`'s
-   signature stays frozen; latency recording is the first observer
-   (`NewLatencyObserver`), passive outlier detection the second
-   (`health.NewOutlierDetector`), and the circuit breaker the third
-   (`circuit.Breaker`, also the registry's `CircuitGate`). See
-   [ADR-0011](adr/0011-health-passive-outlier-and-circuit-breaker-composition.md)
-   decision 9 and
-   [ADR-0012](adr/0012-circuit-gate-interface-and-backend-state-methods.md).
-7. A failed round trip is classified into exactly one of three tiers, in
-   order — drain cancellation, client-gone, genuine transport failure — and
-   the client's own request context (`reqState.clientCtx`) is the
-   discriminator. Client-gone feeds no observer, records no EWMA latency,
-   releases its slot, and is recorded as 499 / `status_class="4xx"`, so
-   client churn never reads as a backend failure; a response-header timeout
-   still reaches the observers as a failure. A cancelled half-open trial is
-   re-armed via `Backend.RearmTrial()` so a live backend cannot be wedged
-   behind a taken trial. See
-   [ADR-0017](adr/0017-client-gone-classification-and-trial-rearm.md).
+`NewFromConfig` lives in `balancer` because the string-to-type mapping belongs there. It accepts exactly the identifiers that `config.Validate` accepts. An unknown or empty value returns an error, not a default. Every selector has a compile-time check `var _ Selector = (*X)(nil)`. A selector reads `ActiveConns()` but never changes it.
 
-## Component map
+### Backend
 
-Package dependency graph (acyclic — no cycles allowed):
+`Backend` has exported identity fields and unexported atomic state. Code outside the package uses only these methods:
 
-```
-cmd/l7LoadBalancer → app, config, logger
-internal/app       → proxy, health, circuit, metrics, balancer, backend, config, logger
-internal/proxy     → backend, balancer, logger, metrics
-internal/balancer  → backend, config
-internal/health    → backend, logger, metrics
-internal/circuit   → backend, logger, metrics
-internal/backend   → config
-internal/logger    — leaf, no internal deps
-internal/metrics   — leaf, no internal deps
+| Method | Purpose |
+|---|---|
+| `IsHealthy()`, `MarkHealthy()`, `MarkUnhealthy()` | Health flag |
+| `IncActive()`, `DecActive()`, `ActiveConns()` | Requests in flight |
+| `RecordLatency(d)`, `EWMALatency()` | EWMA round-trip latency |
+| `CircuitOpen(cooldown)`, `CircuitAllow(cooldown)`, `CircuitSuccess()`, `CircuitFailure(threshold)`, `RearmTrial()` | Circuit state. The mutators return a `CircuitTransition` (`NoChange`, `Opened`, `Reopened`, `Closed`, `HalfOpened`). |
+| `IsRemoved()` | Set once by `Registry.Apply` when a reload removes the backend |
+| `Retire()`, `RetiredContext()` | Drain cancellation |
+
+`Registry` methods: `NewRegistry`, `All()`, `Version()`, `Snapshot()`, `Selectable()`, `SetCircuitGate(g)`, `Allow(b)` and `Apply(diff, backends)`. `Selectable()` returns backends that are healthy and whose circuit is not open.
+
+```go
+// internal/backend/registry.go
+type CircuitGate interface {
+    Open(b *Backend) bool
+    Allow(b *Backend) bool
+}
 ```
 
-As-built package status:
+`Selectable` calls only `Open`. It must never call `Allow`, because in half-open state `Allow` hands out the single trial ([ADR-0012](adr/0012-circuit-gate-interface-and-backend-state-methods.md)).
 
-| Package | Status | Responsibility |
+### Round-trip observer
+
+```go
+// internal/proxy/proxy.go
+type RoundTripObserver interface {
+    ObserveRoundTrip(b *backend.Backend, d time.Duration, success bool)
+}
+```
+
+`health.OutlierDetector` and `circuit.Breaker` satisfy this interface by method shape. They do not import `proxy`. `Proxy.RegisterObserver` adds an observer.
+
+### Errors
+
+Errors are wrapped with `fmt.Errorf("<pkg>: %w", err)`. `balancer.ErrNoHealthyBackends` is the only exported sentinel that a caller branches on: the proxy uses `errors.Is` to choose 503 over 502. `config` has no exported validation sentinels, because callers only print the message. `backend.ErrDrainWindowExpired` is also exported, but it is a comparison value for `context.Cause`, not a branch condition. It must cross from `backend` to `proxy` to be comparable ([ADR-0016](adr/0016-drain-lifecycle.md) decision 2).
+
+## Selection algorithms
+
+### Algorithm identifier table
+
+| Config string | Constant | Selector type |
 |---|---|---|
-| `cmd/l7LoadBalancer` | Sprint 1, extended Sprint 3–4 | Thin entry point: parse the `-config` flag, `config.Load`/`Validate`, hand the config to `app.Build`, `app.Run` on a `signal.NotifyContext` for SIGINT/SIGTERM. Owns the `probe` subcommand (`runProbe`) and the `version`/`commit` startup line, and installs SIGHUP on its own channel (separate from shutdown) driving `reloadLoop`. Fatal + exit 1 on any startup failure (no silent fallback). |
-| `internal/app` | Sprint 4 | Owns the whole wiring graph. `Build` assembles the collector, registry + seeded gauges, circuit breaker (registry gate and observer), selector, proxy with its transport/metrics/observers, active checker, and the health handler, and starts the three `http.Server`s — client traffic, `/metrics` + pprof (ADR-0013 decision 8; S4.T9), and the health endpoint (ADR-0014 decision 1). Holds the loaded config as one `atomic.Pointer` (the reload baseline) and exposes `Reload`, which diffs, rejects non-backend changes, applies the registry snapshot swap, hooks up checker/outlier/metrics, and starts one drain goroutine per removed backend. `Run` serves until its context is cancelled and shuts all three servers down in order. Production, the chaos harness, and tests assemble the same graph through it (S4.T0, ADR-0015, ADR-0016). |
-| `internal/proxy` | Sprint 1–4 | Wraps `httputil.ReverseProxy`; owns the request lifecycle, 503/502 short-circuits, active-connection accounting, the per-request log line, and Sprint 4's connection-lifecycle hardening: the three-tier failed-round-trip classification and 499 client-gone tier (ADR-0017), mid-body death reporting, and the per-backend retired-context join (ADR-0016). |
-| `internal/balancer` | Sprint 1–2 | `Selector` interface + `ErrNoHealthyBackends` (the only exported sentinel), `RoundRobin`, `LeastConnections`, `ConsistentHashBoundedLoads` over an unexported ring, and `PowerOfTwoChoicesEWMA` over per-backend EWMA latency, plus the `NewFromConfig` factory. In Sprint 4 the consistent-hash selector rebuilds its ring on demand, keyed on the registry snapshot version (ADR-0015 decision 9). |
-| `internal/backend` | Sprint 1–4 | `Backend` (identity + unexported `atomic` health/active/EWMA-latency state, a CAS-guarded circuit snapshot, a removed flag, and a retired context, methods-only access) and `Registry` (ordered; Sprint 4 replaces its backend set through an immutable versioned snapshot behind one atomic pointer, with `Selectable()` and the `CircuitGate`/`Allow` admission seam). |
-| `internal/config` | Sprint 1, extended Sprint 3–4 | Strict YAML loading (`KnownFields(true)`) and fail-fast validation; algorithm identifier constants. Sprint 3 adds optional global `health:`/`circuit:` duration sections and always-on `metrics:`/`health_endpoint:` listen blocks. Sprint 4 adds `reload.drain_window` (ADR-0016 decision 1), `server.read_timeout` (S4.T7), the four-knob `transport:` section (S4.T8), `${VAR}` interpolation of backend URLs after decode (S4.T16), and the pure `DiffBackends`/`NonBackendChanges` reload comparison (ADR-0015 decisions 2–4). |
-| `internal/logger` | Sprint 1 | `log/slog` JSON setup and the frozen canonical field vocabulary. Leaf. |
-| `internal/metrics` | Sprint 3 | The `Collector` over a private `prometheus.Registry`: request counter and whole-request latency histogram (`backend`/`method`/`status_class`), backend-healthy and active-requests gauges, a `lb_circuit_state` label-enum gauge whose setter unconditionally zeroes the non-target states, and the `lb_health_probe_total{endpoint,status}` probe counter. Push-only and leaf — it imports no other internal package (ADR-0013, ADR-0014). Sprint 4 adds series deletion for removed backends and seeding for added ones. |
-| `internal/health` | Sprint 3–4 | Active health checking: `Checker` owns one probe goroutine per backend (started by `app.Run` on the shared context), probes each backend's configured URL with a dedicated `http.Client` (its own timeout, no redirect following), drives `Backend.MarkHealthy`/`MarkUnhealthy` through an N-consecutive-failure / M-consecutive-success state machine whose thresholds are Go constants, and exposes `ProbeRoundComplete()` (ADR-0011 decisions 2, 10, 11, 13; ADR-0014 decision 10). Sprint 4 adds `Add`/`Remove` so reload starts and stops a backend's prober (ADR-0015 decision 10). Passive outlier detection: `OutlierDetector` implements `proxy.RoundTripObserver` (structurally, without importing `proxy`), keeps a count-based sliding window of recent outcomes per backend, and ejects via `MarkUnhealthy` after N failures within the window — recovering only when a later active probe is observed to have reinstated the backend; Sprint 4 adds `Forget` for a removed backend (ADR-0015). Health endpoint: `NewHandler` serves `/livez`, `/readyz`, `/startupz` (ADR-0014). |
-| `internal/circuit` | Sprint 3 | `Breaker`: the circuit policy (consecutive-failure-to-open constant, config cooldown). Drives `Backend`'s circuit-state methods, implements `backend.CircuitGate` and `proxy.RoundTripObserver` structurally, and is installed by `app.Build` as both the registry gate and an observer. Logs and writes `lb_circuit_state` from the shared `CircuitTransition` (ADR-0013 decision 10). |
-
-**Dependency rule**: `internal/backend` does **not** import `internal/balancer`.
-A `Backend` has no notion of how it is selected; adding that import is a sign
-the abstraction is leaking.
-
-The full concurrency-ownership table (which field is written by whom, under
-which sync primitive) lives in
-[`docs/design/sprint-1-contracts.md`](design/sprint-1-contracts.md#concurrency-ownership-table).
-
-### Where new selection algorithms plug in
-
-- The seam is `balancer.Selector` (`internal/balancer/selector.go`):
-  `Select(ctx context.Context, r *http.Request) (*backend.Backend, error)`.
-  It is defined in `balancer`, not `proxy`, because all implementations live
-  there — see [ADR-0002](adr/0002-interface-placement-and-schema-freeze.md).
-- `balancer.NewFromConfig(cfg, reg)` maps a config algorithm string to a
-  selector type; `main.go` only calls it.
-- The config-string → constant → selector-type mapping is the **algorithm
-  identifier table** in
-  [`docs/design/sprint-1-contracts.md`](design/sprint-1-contracts.md#algorithm-identifier-table).
-  `config.Validate` accepts only the implemented set (all four Sprint
-  1–2 identifiers: `round_robin`, `least_conn`, `consistent_hash`,
-  `p2c_ewma`) — see
-  [ADR-0004](adr/0004-reject-unimplemented-algorithms-in-validate.md).
-- Every selector carries a compile-time assertion
-  `var _ Selector = (*X)(nil)`.
-
-The consistent-hash selectors (Sprint 2) share an unexported `ring`
-primitive in `internal/balancer`: a placement-only, immutable mapping from a
-hash key to a backend via 150 virtual nodes per backend, exposed as an
-ordered `iter.Seq[*backend.Backend]` candidate walk that each selector
-filters with its own inline condition. Its hash pipeline, vnode key format,
-and vnode count are recorded in
-[ADR-0008](adr/0008-consistent-hash-ring-pipeline-and-vnode-layout.md).
-
-`consistent_hash` maps to `ConsistentHashBoundedLoads`: the walk from the
-client-IP hash key admits the first candidate that is both healthy and within
-`max(1, ceil(avg_active * 1.25))` (`avg_active` over healthy backends), so a
-hot key is rehashed past a backend that has reached its share of the load.
-The deliberately unwired `naiveConsistentHash` comparator exists only to
-prove that property in the checked-in hot-key test; ε, the load metric,
-capacity formula, and the evidence are recorded in
-[ADR-0009](adr/0009-consistent-hash-bounded-loads-capacity-and-evidence.md).
-
-`p2c_ewma` maps to `PowerOfTwoChoicesEWMA`: it snapshots the healthy set,
-draws two distinct backends, and returns the one with the lower
-`Backend.EWMALatency()`. The proxy records that latency on every request's
-backend round trip — `director()` to `modifyResponse` — unconditionally and
-regardless of the configured selector, with failures recording a fixed 2s
-penalty. The latency state, cold-start rule, and penalty are recorded in
-[ADR-0010](adr/0010-p2c-ewma-backend-latency-state-cold-start-and-failure-penalty.md).
-
-### Active health checking (Sprint 3)
-
-`health.New(reg, interval, timeout)` builds a `Checker`; `main` calls
-`Checker.Start(sigCtx)`, which launches one goroutine per backend. Each
-goroutine owns a ticker and a per-backend prober holding consecutive-success /
-consecutive-failure counters; the probe-cycle logic is a method
-(`prober.probeOnce`) separate from the `for { select }` loop, so tests drive
-cycles directly with no ticker. A probe is a plain GET to the backend's
-already-configured URL — no separate health path — and only a 2xx response
-counts as success: the dedicated client returns `http.ErrUseLastResponse` on
-`CheckRedirect`, because `httputil.ReverseProxy` forwards redirects to clients
-verbatim, so a redirecting backend is unusable even though it answered.
-`probeFailuresBeforeUnhealthy` (3) consecutive failures call `MarkUnhealthy`;
-`probeSuccessesBeforeHealthy` (2) consecutive successes call `MarkHealthy`
-(the recovery path, by convention, for passive detection too). Both thresholds
-are Go constants, not config. `internal/health` depends only on
-`internal/backend` and shares no transport with `internal/proxy` — see
-[ADR-0011](adr/0011-health-passive-outlier-and-circuit-breaker-composition.md)
-decisions 2, 10, 11, and 13.
-
-The reinstatement gate compares `successes >= probeSuccessesBeforeHealthy`
-(not `==`), because passive outlier detection can eject a backend whose
-accumulator has already crossed M — an `==` gate then never fires again and
-the gauge stays pinned at `0` while `IsHealthy()` reads `true`. This was a
-shipped-code drift fixed in S3.T6.5 and recorded as the
-[ADR-0011 2026-09-22 amendment](adr/0011-health-passive-outlier-and-circuit-breaker-composition.md#amendment-2026-09-22-reinstatement-gate-uses--not-).
-
-The checker's transitions are observable: an equality-gated
-(`counter == threshold`) genuine-state guard emits exactly one
-`event=health_ejected`/`reason=probe_failures` (WARN) or
-`event=health_reinstated`/`reason=probe_recovered` (INFO) `slog` line and
-writes `lb_backend_healthy` to `0`/`1` from the same signal, so the log line
-and the gauge cannot disagree (ADR-0013 decisions 11 and 15). `Checker`
-also exposes `ProbeRoundComplete() bool` — a one-shot `atomic.Bool` latch
-flipped after the first sweep in which every configured backend has answered
-at least one probe — which the health endpoint's startup/readiness gates
-consume (ADR-0014 decision 10).
-
-### Passive outlier detection (Sprint 3)
-
-`health.NewOutlierDetector(log, collector)` builds an `OutlierDetector` that
-implements `proxy.RoundTripObserver` structurally — `internal/health` never
-imports `internal/proxy`; the interface is satisfied by method shape. It
-keeps a count-based (not time-based) sliding window of the last
-`outlierWindowSize` (10) round-trip outcomes per backend under a single
-mutex, and ejects via `MarkUnhealthy()` when `outlierFailuresBeforeEject`
-(5) failures fall within the window — both unexported Go constants. The
-failure signal is the union of 5xx responses and `errorHandler` transport
-failures, and the two mix freely in one window. Ejection fires exactly once
-per episode (an `ejected` guard), emitting one
-`event=health_ejected`/`reason=outlier_window` (WARN) line and one
-`lb_backend_healthy=0` write from that same guard.
-
-Recovery has no timer of its own: the detector never calls `MarkHealthy`.
-An ejected backend observed healthy again (by the next successful active
-probe) resets the episode, keeping the state machine single-path — one way
-in via either subsystem, one way out via active checks only. `main`
-registers the detector as a second `RoundTripObserver` alongside
-`NewLatencyObserver` and the circuit breaker. See
-[ADR-0011](adr/0011-health-passive-outlier-and-circuit-breaker-composition.md)
-decisions 3, 8, 9, and 12, and
-[ADR-0013](adr/0013-observability-metrics-logging-and-integration.md)
-decision 15.
-
-### Circuit breaker (Sprint 3)
-
-`circuit.New(cooldown, log, collector)` builds a `Breaker` holding only
-policy: the unexported `circuitFailuresBeforeOpen` (3) constant and the
-configured cooldown. Circuit *state* — the closed/open/half-open enum,
-consecutive-failure count, half-open trial flag, and opened-at timestamp —
-lives on `Backend` as one immutable `atomic.Pointer[circuitSnapshot]`
-replaced by `CompareAndSwap`, so every compound transition is a single
-atomic step and `internal/backend` needs no import from `internal/circuit`
-(ADR-0012 decisions 3–4).
-
-`Breaker` plays two roles, both wired in `main`: it is the registry's
-`CircuitGate` (ADR-0012 decision 1) and a registered `RoundTripObserver`.
-`Registry.Selectable()` filters on `IsHealthy() && !gate.Open(b)`, and
-`ServeHTTP` calls `Registry.Allow(b)` after `Select()` and before
-`IncActive()`; a denial is a 503 with a distinct WARN line and no
-active-connection accounting (ADR-0011 decision 7). A half-open backend stays
-`Selectable()` — only `Allow`'s CAS on the trial flag admits the single
-in-flight trial. Outcomes while a circuit is `Open` are ignored, so a stale
-in-flight response cannot bypass the cooldown; a single half-open success
-closes the circuit and a single failure reopens it, with no inner threshold.
-The consecutive-failure counter is reset by any success, distinct from passive
-detection's sliding window (ADR-0011 decision 8). See ADR-0011 and ADR-0012.
-
-Every genuine transition is reported once by `Backend.CircuitFailure`,
-`CircuitSuccess`, and `CircuitAllow`, which return a
-`backend.CircuitTransition` (`NoChange`/`Opened`/`Reopened`/`Closed`/
-`HalfOpened`). `circuit.Breaker` logs and writes `lb_circuit_state` from
-that same value at its `ObserveRoundTrip`/`Allow` call sites — a sustained
-failure run while already `Open` produces `NoChange` and neither logs nor
-re-writes — so the line and the gauge cannot disagree
-([ADR-0013](adr/0013-observability-metrics-logging-and-integration.md)
-decisions 10, 15, and its 2026-09-21 amendment). A promotion whose CAS is
-won by the `Registry.Selectable()` read path is never logged and leaves the
-gauge at `open`: the accepted, permanent gap ADR-0013 decision 13 records.
-
-### Observability pipeline (Sprint 3)
-
-`internal/metrics` is a leaf-only, push-only `Collector` over its own private
-`prometheus.NewRegistry()` (never the default registerer), so tests build
-independent instances and run `t.Parallel()`. It holds the whole-request
-counter and histogram (`backend`/`method`/`status_class`, never a raw
-`status_code`; provisional `doc.go` buckets), the `lb_backend_healthy` and
-`lb_active_requests` gauges, the label-enum `lb_circuit_state` gauge whose
-setter unconditionally zeroes the two non-target states, and the
-health-endpoint counter `lb_health_probe_total{endpoint,status}`. `main`
-serves `/metrics` via `promhttp.HandlerFor` on a dedicated `http.Server` on
-`metrics.listen` (default `:9090`, always-on), sharing `sigCtx`.
-
-Traffic and state push into the collector rather than it reading anything:
-the whole-request hook in `proxy.ServeHTTP` counts and times every exit path
-(no-healthy 503 with `backend=""`, circuit-denied 503 and `ErrorHandler` 502
-with the real backend label); the transition subsystems write their gauges
-at the exact edge-triggered sites their log lines fire from; and `main` seeds
-every backend's series (`healthy=1`, `circuit_state=closed`,
-`active_requests=0`) immediately after `backend.NewRegistry` succeeds, so
-a never-trafficked system renders a complete dashboard on first scrape. The
-two new canonical log fields, `event` and `reason`, are closed snake_case
-Go-constant vocabularies in `internal/logger`. `internal/balancer` is
-untouched and imports nothing new. See
-[ADR-0013](adr/0013-observability-metrics-logging-and-integration.md)
-decisions 1–16, and
-[`docs/sprint-3-retro.md`](sprint-3-retro.md).
-
-### Health endpoint (Sprint 3)
-
-A third always-on `http.Server` on `health_endpoint.listen` (default
-`:8081`) serves orchestrator-native probes, mirroring `metricsSrv`: started
-in `main` on the shared `sigCtx` and joined to the graceful-shutdown
-sequence. `health.NewHandler(checker, reg, configLoaded, collector)` returns
-a `ServeMux` with three paths, all structured JSON and all recorded via
-`lb_health_probe_total`:
-
-- `/livez` — unconditional 200 `{"status":"alive"}`; a deadlock shows up as
-  a probe timeout, not a special response.
-- `/readyz` — 200 only while `config_loaded` ∧
-  `Checker.ProbeRoundComplete()` ∧ live `Registry.Selectable() >= 1`; else
-  503 with the failing check visible. Served live per request, so a
-  full-fleet eviction reports not-ready and an upstream LB or K8s Service
-  can route around the instance.
-- `/startupz` — 503 until the first two hold, then permanently 200
-  (one-way; it does not gate on the selectable set).
-
-Because the endpoint is a distinct listener, probes never enter the proxy
-path and never touch `lb_requests_total` or the latency histogram. The
-orchestrator mapping: Docker `HEALTHCHECK` → `/livez`, Fly.io HTTP check →
-`/readyz`, Kubernetes → all three. See
-[ADR-0014](adr/0014-health-endpoint-contract-and-probe-semantics.md).
-
-### Container demo stack (Sprint 3)
-
-The demo stack is additive and does not settle the deployment target
-([ADR-0005](adr/0005-scope-of-production-grade.md) and its 2026-09-22
-amendment).
-
-- **`Dockerfile`** — multi-stage: `go build` with `CGO_ENABLED=0` in a
-  Debian Go image, the static binary copied into a digest-pinned
-  `gcr.io/distroless/static-debian12:nonroot`. It exposes `8080`, `8081`,
-  and `9090`, carries OCI labels, bakes `configs/docker.yaml` to
-  `/etc/l7lb/config.yaml`, and self-probes via a native
-  `HEALTHCHECK … CMD ["/l7lb", "probe", "http://127.0.0.1:8081/livez"]` —
-  no shell or `curl` in the runtime image, which is why the `probe`
-  subcommand exists ([ADR-0014](adr/0014-health-endpoint-contract-and-probe-semantics.md)
-  decision 2). A strict `.dockerignore` allowlist keeps the build context
-  minimal.
-- **Repo-root `docker-compose.yml`** — one command brings up the LB image,
-  the three dummy backends, Prometheus, and Grafana. It is additive: the two
-  composes under `deployments/docker/` (backends-only for the host-process
-  chaos flow; observability-only) remain canonical and untouched, and the
-  chaos scripts keep targeting the host-process LB. Scrape config lives in a
-  separate `prometheus-stack.yml` (`l7lb:9090`); Grafana provisioning is
-  bind-mounted from the existing observability tree so there is one source
-  of truth. Only `8080`, `8081`, and `3000` are published; the dependency
-  chain is mixed (backends started, LB healthy via its own `HEALTHCHECK`,
-  Prometheus waiting on `service_healthy`, Grafana on `service_started`).
-  See
-  [ADR-0013 decision 18](adr/0013-observability-metrics-logging-and-integration.md#repo-root-demo-stack-docker-composeyml).
-
-## Sprint 4 — Hard Subsystems
-
-Sprint 4's subsystems surround the request path built in Sprints 1–3 without
-changing its shape, and they are assembled only through `internal/app`
-(ADR-0015, ADR-0016, ADR-0017, ADR-0018, ADR-0019). The delivery record and the
-exit-criteria evidence are in
-[`docs/sprint-4-retro.md`](sprint-4-retro.md).
-
-### Application seam (Sprint 4)
-
-The whole wiring graph lives behind `app.Build(cfg, log)` and `app.Run(ctx)`.
-`Build` constructs the metrics collector; builds the registry and seeds every
-backend's gauge series; installs the circuit breaker as both the registry's
-`CircuitGate` and an observer; builds the selector; builds the proxy with the
-configured transport, the metrics collector, and the latency, outlier, and
-circuit observers; builds the active checker; and builds the health-endpoint
-handler. `Run` starts the checker and the three servers on the shared process
-context and shuts them down in order under one timeout.
-
-`App` also owns the one piece of mutable wiring state: the loaded config, held
-as `atomic.Pointer[config.Config]`, which is the baseline each reload diffs
-against (ADR-0015 decision 12). `main` keeps only flags, file I/O, and signals;
-`make run`, the chaos harness, and integration tests all build the same graph.
-This is why every Sprint 4 test could drive the real system without signals or
-temp files, and why the OS-boundary e2e (below) had a seam to observe.
-
-### Zero-downtime reload and drain (Sprint 4)
-
-An operator edits the backend list and sends SIGHUP. `main` installs SIGHUP on
-its own channel, separate from the SIGINT/SIGTERM shutdown context, and
-`reloadLoop` reads it: it drains any further queued SIGHUPs (so a burst
-collapses to one reload), then `config.Load` → `Validate` → `App.Reload`; a
-parse or validation failure is logged and the previous config keeps serving.
-`App.Reload` is called by one goroutine at a time (ADR-0015 decision 6).
-
-Since S5.T20.1 there is a second trigger for the demo and tests:
-`POST /admin/reload` on the unpublished metrics listener applies a YAML body,
-and `GET /admin/reload/last` reports the last attempt's outcome. Both triggers
-call one operation, `App.ReloadFrom` (load → `Validate` → apply → record, with
-the same log lines), under one mutex, so the single-writer rule now holds by
-lock rather than by having one caller. After a body-applied reload the file is
-not authoritative until the next SIGHUP (ADR-0015 decisions 13–17).
-
-- **The diff is pure and identity is `(name, URL)`.** `config.DiffBackends`
-  reports added/unchanged in the new file's order and removed in the old
-  file's; a name whose URL changed is one removed plus one added, never an
-  "updated" backend, so state learned about the old host is never applied to
-  the new one. `config.NonBackendChanges` names every changed non-backend
-  field — `listen`, `health`, `circuit`, `metrics`, `health_endpoint`,
-  `reload`, `server`, `transport` — and any one of them rejects the reload
-  whole, logged with the fields named (ADR-0015 decision 4).
-- **The algorithm is reloadable (S5.T20.7).** A reload that changes
-  `algorithm` builds the new selector first, applies the backend diff, then
-  swaps the selector into the proxy with one atomic store. The proxy loads the
-  selector once per request, so a request in flight keeps its backend and the
-  next request uses the new algorithm. The new selector starts warm, because
-  EWMA latency and active counts live on the backends.
-  `lb_algorithm_info{algorithm}` and the `config_reloaded` line
-  (`previous_algorithm`, `algorithm`) report the switch (ADR-0015 decisions
-  18–21).
-- **The registry swaps an immutable versioned snapshot behind one atomic
-  pointer.** `Registry.Apply` is the single writer: it reuses the existing
-  instance for each unchanged identity (keeping health, circuit, active
-  connections, and EWMA latency) and constructs a fresh one for each added
-  identity. Removed backends are marked removed *before* the swap, and the
-  proxy skips its whole observer fan-out for them, so no observer learns a
-  backend left the fleet; active-connection accounting is deliberately not
-  observer-driven and still releases (ADR-0015 decisions 5–8).
-- **Admission is asymmetric.** A backend added by reload starts unhealthy and
-  is admitted by one successful probe (a reinstatement with reason
-  `initial_probe`); a backend present at startup starts healthy. A blue/green
-  reload that replaces every backend therefore has a brief empty-selectable
-  window, logged at WARN because `unchanged=0` (ADR-0015 decisions 10–11).
-- **Draining bounds a removed backend's in-flight requests.** `App.Reload`
-  starts one goroutine per removed backend. Phase one waits — polling
-  `ActiveConns()` every 100ms — for the count to reach zero within
-  `reload.drain_window` (default 30s). On expiry, phase two calls
-  `Backend.Retire()`, which cancels the backend's retired context; the proxy
-  joined that context per request with `context.AfterFunc`, so the in-flight
-  requests are cancelled with cause `ErrDrainWindowExpired` and finish with a
-  502, and the drain waits for their slots to release before logging one
-  `backend drained` line. The join costs the request path no goroutine and no
-  lock. A drain is keyed to the removed instance, not its name, and runs
-  independently of later reloads (ADR-0016).
-- **The consistent-hash ring rebuilds on demand**, keyed on the snapshot
-  version, so no reload path has to know a ring exists (ADR-0015 decision 9).
-
-### Connection lifecycle (Sprint 4)
-
-The proxy's failed-round-trip handling classifies each failure into exactly
-one tier, in order, using the client's own request context
-(`reqState.clientCtx`) as the discriminator (ADR-0017):
-
-1. **Drain cancellation** — the outbound context was cancelled by a retired
-   backend: WARN with reason `window_expired`, no observer (the backend is
-   already removed).
-2. **Client-gone** — `clientCtx.Err() != nil`: INFO with reason
-   `client_canceled`, recorded as **499** (`status_class="4xx"`), no observer
-   and no EWMA latency, the active-connection slot released, and
-   `Backend.RearmTrial()` called so a cancelled half-open trial cannot wedge a
-   live backend.
-3. **Genuine transport failure** — the fallback: WARN, the 2s failure penalty
-   fanned out to every observer, **502**.
-
-A backend that dies after the response headers have arrived is handled
-separately: the body wrapper counts copied bytes and logs a non-EOF read error
-at WARN with reason `backend_died_mid_response`, the success recorded when the
-headers arrived stands, and no second observer outcome is fed (S4.T6). The
-known limitation — a mid-body death does not itself eject the backend — is
-recorded in the session log.
-
-Slow-loris clients are bounded by `server.read_timeout` (default 60s), wired to
-the client server's `ReadTimeout`; `WriteTimeout` is deliberately omitted
-because it would span the whole response copy and trip on a slow-but-healthy
-upstream (S4.T7).
-
-### Transport tuning (Sprint 4)
-
-A `transport:` section supplies four knobs — `dial_timeout` (default 5s),
-`response_header_timeout` (default 30s), `max_idle_conns_per_host` (default
-100), and `idle_conn_timeout` (default 90s) — and `app.Build` installs an
-`*http.Transport` built from them in place of `http.DefaultTransport`. The
-total `MaxIdleConns` is sized as `max_idle_conns_per_host × backend count`, so
-the per-host knob is not silently capped by the stdlib default of 100 (S4.T8).
-
-### Env interpolation (Sprint 4)
-
-`config.Load` is no longer pure deserialization: after YAML decode and before
-returning, it expands `${VAR}` references in every **backend URL** from the
-process environment, so the resolved URL is what `Validate` checks and a secret
-can live only in the environment. `VAR` must match `[A-Za-z_][A-Za-z0-9_]*`;
-there is deliberately no `${VAR:-default}` syntax and no escape hatch. An
-unset or empty variable, an unterminated `${`, an empty `${}`, or an invalid
-name fails the load naming the backend (and, for a reference that names one,
-the variable); the resolved value is never included in an error, and Sprint 4's
-redaction change made `validateBackendURL` name only the backend and the `url`
-field across all five of its branches (S4.T16, S4.T17). Non-backend fields pass
-through untouched.
-Interpolation re-runs on every `Load`, so an environment change between
-reloads resolves to the new value and — by the `(name, URL)` identity rule —
-diffs as one removed plus one added backend. `configs/example.yaml` documents
-the feature; `configs/docker.yaml` stays interpolation-free.
-
-### Soak, pprof, and the OS-boundary e2e (Sprint 4)
-
-- **pprof** is mounted on the metrics listener beside `/metrics` — no second
-  listener, no new config. A goroutine-leak audit (S4.T9) drives cancellations
-  and backend deaths through the app seam and asserts the goroutine count
-  settles back to its baseline within a delta of 10.
-- **Soak test.** `TestChaosSoakConnectionLifecycle`, run by `make soak`
-  (both tolerances) or `make soak-race` (goroutine tolerance only; `-race`
-  makes the heap assertion meaningless), cycles warmup, steady load, client
-  cancellations, backend deaths, reloads, and a quiet phase for a flag-gated
-  duration (default 1h, `-soak-duration` to shorten). Its reloads call
-  `App.Reload` directly — the operation `main`'s SIGHUP loop calls — so the
-  signal registration itself is exercised only by the e2e below. Committed
-  tolerances: goroutines ≤ warmup baseline + 10 and post-GC `HeapAlloc` ≤
-  baseline + 8 MB. The full one-hour pass (the source of truth is the
-  `PROGRESS.md` S4.T10 entry): **59.66M requests, 7,175 cancellations, 2,789
-  failures, 12 reloads; goroutines 35→30; post-GC heap 930 KB→804 KB** — the
-  production-resilience claim has numbers.
-- **OS-boundary e2e.** `TestChaosSighupReloadZeroDrop1000`, run by `make e2e`
-  (flag-gated by `-e2e`, skips cleanly without a Go toolchain), is the
-  **OS-boundary sibling** of the in-process
-  `TestChaosReloadDrainExitCriterion1000`. It builds the real binary, spawns
-  it with a temp config, holds 1000 concurrent requests in flight through
-  gated counting backends, rewrites the config file atomically, sends the
-  spawned process a real `SIGHUP`, proves live traffic shifts to the added
-  backend and never touches the removed one (whose counter stays frozen), then
-  asserts all 1000 return 200 and the process exits 0 on `SIGTERM`. The
-  division of labor is explicit: registry-view assertions (instance identity,
-  EWMA/circuit state survival) stay in-process; the e2e asserts externally
-  visible outcomes only (statuses, counts, exit status) (S4.T14).
-
-## Decision index
-
-All non-trivial decisions are recorded in `docs/adr/`, with their status:
-
-| ADR | Title | Status |
-|-----|-------|--------|
-| [0001](adr/0001-record-adrs.md) | Record architecture decisions | Accepted |
-| [0002](adr/0002-interface-placement-and-schema-freeze.md) | Interface placement and Sprint 1 schema freeze | Accepted |
-| [0003](adr/0003-pin-unused-deps-with-tools-go.md) | Pin not-yet-imported dependencies with a build-tagged tools.go | Superseded (tools.go deleted) |
-| [0004](adr/0004-reject-unimplemented-algorithms-in-validate.md) | Reject unimplemented algorithms in Validate | Accepted |
-| [0005](adr/0005-scope-of-production-grade.md) | Scope of "production-grade" | Accepted |
-| [0006](adr/0006-backend-sethealthy-amends-adr-0002.md) | Add Backend.SetHealthy, amending ADR-0002 decision 5 | Superseded by ADR-0011 d2 |
-| [0007](adr/0007-proxy-request-lifecycle-and-exactly-once-decrement.md) | Proxy request lifecycle and exactly-once active-connection decrement | Accepted |
-| [0008](adr/0008-consistent-hash-ring-pipeline-and-vnode-layout.md) | Consistent-hash ring hash pipeline, vnode key order, and vnode count | Accepted |
-| [0009](adr/0009-consistent-hash-bounded-loads-capacity-and-evidence.md) | Consistent-hash bounded loads: epsilon, load metric, capacity formula, and hot-key evidence | Accepted |
-| [0010](adr/0010-p2c-ewma-backend-latency-state-cold-start-and-failure-penalty.md) | P2C-EWMA: Backend-owned latency state, cold-start semantics, and the failure penalty | Accepted |
-| [0011](adr/0011-health-passive-outlier-and-circuit-breaker-composition.md) | Health, passive-outlier, and circuit-breaker composition | Accepted |
-| [0012](adr/0012-circuit-gate-interface-and-backend-state-methods.md) | Circuit breaker gate interface, Registry-mediated admission, and Backend state API | Accepted |
-| [0013](adr/0013-observability-metrics-logging-and-integration.md) | Observability: metrics collector, transition logging, and their integration | Accepted |
-| [0014](adr/0014-health-endpoint-contract-and-probe-semantics.md) | Health endpoint contract and probe semantics | Accepted |
-| [0015](adr/0015-reload-architecture.md) | Zero-downtime reload architecture: in-process snapshot swap, backend identity, and admission | Accepted |
-| [0016](adr/0016-drain-lifecycle.md) | Drain lifecycle: retired-context join, two-phase drain, and cancel-at-window | Accepted |
-| [0017](adr/0017-client-gone-classification-and-trial-rearm.md) | Client-gone classification and half-open trial re-arm | Accepted |
-| [0018](adr/0018-no-retry-ever.md) | No retry, ever: a failed round trip is classified and surfaced, never repeated | Accepted |
-| [0019](adr/0019-deployment-target.md) | Deployment target — the Docker container as the packaging artifact | Accepted |
-
-Every Sprint 4 decision that had a tracking row is now written: reload
-architecture (ADR-0015), the deployment target ADR-0005 deferred (ADR-0019,
-S4.T19), and the retry policy (ADR-0018, S4.T11). No decision remains "tracked
-but not yet written".
-
-## Deviations from plan
-
-Six items differ between the plan and the as-built state — two from
-Sprint 1, four from Sprint 2 (recorded by S2.T8, the sprint's ad-hoc
-closing task). None required a new ADR, and the reasoning for that is
-recorded with each.
-
-### 1. S1.T7 removed the scaffold's `-addr` CLI flag — owner signed off
-
-The initial scaffold exposed a `-addr` flag for the listen address. S1.T7
-removed it: `cfg.Listen`, part of the frozen YAML schema and checked by
-`config.Validate`, is the single validated source of truth, so a second,
-unvalidated address source was removed rather than reconciled.
-
-This was flagged during the S1.T7 code review as needing explicit owner
-sign-off (`docs/sessions/2026-09-18-opencode.md`, "S1.T7 — Code-review
-follow-up" → *Flagged for owner awareness*). It is recorded here as
-**signed off by the project owner during the S1.T10 retro**. No ADR: the
-change was evaluated against the project's three-part ADR bar (hard to
-reverse / surprising without context / real trade-off) and, while it is
-arguably surprising and is a real trade-off, it is trivially reversible — a
-contained one-flag change with no ripples — so it fails the bar on the
-reversibility leg. Original implementation reasoning:
-`docs/sessions/2026-09-18-opencode.md` (S1.T7 → Decisions).
-
-### 2. `MILESTONES.md`'s "custom `Transport` pattern" wording — pre-implementation scope clarification
-
-`MILESTONES.md:10` lists, as a Sprint 1 deliverable, an
-"`httputil.ReverseProxy` wrapper using `Director` + custom `Transport`
-pattern". No custom `http.Transport`/`RoundTripper` was ever built, or
-intended to be built, in Sprint 1. The Transport work was reassigned to
-Sprint 4 **before** S1.T6 was implemented:
-
-- `.scratch/s1-t3-t9-backend-selector-proxy/spec.md:115` states, for the
-  proxy phase: "No `http.Transport` tuning (`MaxIdleConnsPerHost`, timeouts,
-  etc.) in this phase — stock defaults; connection pool tuning is explicitly
-  Sprint 4 per AGENTS.md." See also `:171`.
-- `AGENTS.md:291` and `MILESTONES.md:63` both place connection-pool tuning
-  (`MaxIdleConnsPerHost`, `IdleConnTimeout`, `DialContext` timeout,
-  `ResponseHeaderTimeout`) in Sprint 4.
-- The frozen contracts doc never specifies a custom Transport for Sprint 1;
-  its proxy contract (`Director` sets only scheme/host) is consistent with
-  the stock transport.
-- "RoundTripper" appears nowhere in the project's source or git history prior
-  to this task.
-
-So this is a **pre-implementation scope clarification**, not a
-mid-implementation deviation: `MILESTONES.md`'s original scaffold wording
-(unchanged since the initial commit) simply was never edited to match the
-scope the frozen contract had already settled. No ADR — it is a wording
-mismatch in a planning document, not a design decision.
-
-### 3. Two planned Sprint 2 ADR topics became three per-task ADRs — scoped ahead of implementation
-
-`MILESTONES.md`'s Sprint 2 deliverables name two ADR topics
-(bounded-loads-over-naive; P2C-over-least-connections under skew). As built
-there are three ADRs: the bounded-loads topic split into
-[ADR-0008](adr/0008-consistent-hash-ring-pipeline-and-vnode-layout.md)
-(ring pipeline, vnode key order, vnode count — closing with S2.T1.1) and
-[ADR-0009](adr/0009-consistent-hash-bounded-loads-capacity-and-evidence.md)
-(ε, load metric, capacity formula, hot-key evidence — closing with S2.T2),
-and [ADR-0010](adr/0010-p2c-ewma-backend-latency-state-cold-start-and-failure-penalty.md)
-closes S2.T3. The split was decided before any Sprint 2 code, in the
-S2.T1/T2 spec (`.scratch/s2-t1-t2-consistent-hash-bounded-loads/spec.md`,
-"Two ADRs, not one"), following the per-task-ADR pattern ADR-0006/0007
-established so no task closes with an open decision waiting on another.
-No ADR for the split itself: a documentation-organization choice,
-trivially reversible.
-
-### 4. S2.T1 split into S2.T1.1 / S2.T1.2 — ticket-level tracking
-
-The Sprint 2 spec groups the work as S2.T1 (ring primitive + unexported
-`naiveConsistentHash` comparator) and S2.T2 (bounded-loads selector +
-config wiring), but `PROGRESS.md` tracks the finer-grained `.scratch`
-tickets (T1.1 = ring, T1.2 = comparator) so each closes independently.
-Documented in `PROGRESS.md`'s Sprint 2 intro at split time. No ADR: task
-granularity, not design.
-
-### 5. The MILESTONES evidence/ADR bullets were folded into S2.T2/S2.T3 — owner-ratified after the fact
-
-`MILESTONES.md`'s Sprint 2 deliverables list the two distribution-property
-tests and the two ADRs as separate bullets, which the project owner
-tracked mentally as "S2.T4–T7". Those IDs never existed in the repo: the
-hot-key comparative test shipped inside S2.T2, the load-skew convergence
-test inside S2.T3, and each ADR closed with its implementation task, per
-the specs' folding. The owner ratified the folded deliverables on
-2026-09-20 after a code-level review of the tests, selector
-implementations, and ADRs against their claims — all verified correct,
-with live runs reproducing the published evidence. No ADR: a
-tracking-shape choice plus verification, not a design decision.
-
-### 6. Sprint 2 planned no retro task; S2.T8 was added ad hoc — this entry is the record of why
-
-Sprint 1 closed with S1.T10 (retro / architecture doc) as a scoped task;
-Sprint 2's plan contained no equivalent, and the sprint was declared
-complete by S2.T3's session without one. S2.T8 closes the gap for
-consistency: the header and diagram updates above, this deviations audit,
-an ADR sweep (result stated explicitly in the session log), and the closing
-session log. It appears in `PROGRESS.md` without a `MILESTONES.md` bullet
-by design. No ADR: process, not design.
-
-## Later amendments to Sprint 1 contracts
-
-`docs/design/sprint-1-contracts.md` is **frozen** and is intentionally not
-edited. Seven ADRs accepted after the freeze amend rows of its
-concurrency-ownership table:
-
-- [ADR-0006](adr/0006-backend-sethealthy-amends-adr-0002.md) amended the
-  `Backend.healthy` row by adding `SetHealthy(bool)` alongside `IsHealthy()`,
-  the permanent contract the Sprint 3 health checker would call. The Sprint 3
-  health checker is the caller.
-- [ADR-0007](adr/0007-proxy-request-lifecycle-and-exactly-once-decrement.md)
-  amends the `Backend.active` row / proxy lifecycle: `DecActive` is driven
-  through a `sync.Once`-guarded `reqState.release()` so it runs exactly once
-  across the body-wrapper and `ErrorHandler` paths.
-- [ADR-0011](adr/0011-health-passive-outlier-and-circuit-breaker-composition.md)
-  amends two rows. Decision 2 splits `SetHealthy(bool)` into
-  `MarkHealthy()`/`MarkUnhealthy()` over the same `atomic.Bool`, making the
-  active-only-recovery asymmetry legible at the call site. Decision 1 renames
-  `Registry.Healthy()` to `Registry.Selectable()` (eligible = healthy AND
-  circuit-not-open) when circuit state first exists, in Sprint 3's
-  circuit-breaker task. **Landed in S3.T3.**
-- [ADR-0012](adr/0012-circuit-gate-interface-and-backend-state-methods.md)
-  adds the mechanism decision 1 needed: the `CircuitGate` interface and
-  `Registry.SetCircuitGate`/`Allow` admission path, plus the CAS-guarded
-  `Backend` circuit-state method API. The Sprint 1 contracts doc's circuit row
-  ("likely mutex; decide in the Sprint 3 ADR") is superseded by ADR-0011
-  decision 6 and ADR-0012 decision 3 — an immutable-snapshot
-  `CompareAndSwap`, not a mutex.
-- [ADR-0015](adr/0015-reload-architecture.md) amends ADR-0002 decision 5 once
-  more: `Backend` gains an unexported atomic removed flag with a methods-only
-  accessor, and the registry's backend set becomes an immutable versioned
-  snapshot behind one atomic pointer (ADR-0015 decisions 5 and 7).
-- [ADR-0016](adr/0016-drain-lifecycle.md) amends ADR-0002 decision 5 with
-  `Backend.Retire`/`RetiredContext`, and amends the frozen error-handling
-  convention by exporting a second value, `backend.ErrDrainWindowExpired` —
-  a cross-package `context.Cause` comparison value, not a branchable sentinel,
-  so `ErrNoHealthyBackends` remains the only one of those (ADR-0016 decision 2,
-  AGENTS.md key decision 7).
-- [ADR-0017](adr/0017-client-gone-classification-and-trial-rearm.md) amends
-  ADR-0002 decision 5 with `Backend.RearmTrial()`, amends ADR-0007 decisions
-  4–5 for the client-gone tier (499 at INFO instead of 502 at WARN), and
-  amends ADR-0012 to re-arm a half-open trial a client-gone request held.
-
-Read those seven ADRs alongside the contracts doc's
-[concurrency-ownership table](design/sprint-1-contracts.md#concurrency-ownership-table).
-
-## Deliberately not here yet
-
-A future agent should not assume any of the following exist. Each names its
-owning sprint:
-
-- **HTTP/2 (client-facing and to backends)** — Sprint 5.
-- **The benchmark rig and published numbers** — Sprint 5.
-- **SO_REUSEPORT socket handoff**, the mechanism that would make a *binary or
-  image* change zero-downtime by starting a replacement process on the same
-  port — Post-Sprint 5 (`MILESTONES.md` "Optional extensions"; ADR-0019 records
-  why the container target does not need it for backend-list changes).
-- **gRPC pass-through, rate limiting, request retries with an
-  idempotency-aware policy, WebSocket upgrade validation** — Post-Sprint 5
-  (`MILESTONES.md` "Optional extensions"). Request retry in particular is
-  deliberately absent by design — see
-  [ADR-0018](adr/0018-no-retry-ever.md).
+| `round_robin` | `config.AlgorithmRoundRobin` | `balancer.RoundRobin` |
+| `least_conn` | `config.AlgorithmLeastConn` | `balancer.LeastConnections` |
+| `consistent_hash` | `config.AlgorithmConsistentHash` | `balancer.ConsistentHashBoundedLoads` |
+| `p2c_ewma` | `config.AlgorithmP2CEWMA` | `balancer.PowerOfTwoChoicesEWMA` |
+
+An omitted `algorithm` becomes `round_robin` in `Validate`. `Validate` rejects all other strings ([ADR-0004](adr/0004-reject-unimplemented-algorithms-in-validate.md)).
+
+### Round-robin and least-connections
+
+`RoundRobin` rotates over `Selectable()` with an `atomic.Uint64` counter and no mutex. `LeastConnections` picks the backend with the lowest `ActiveConns()`. On a tie, the first backend in registry order wins.
+
+### Consistent hash with bounded loads
+
+The hash key is the client IP from `r.RemoteAddr`, without the port. Behind another proxy, this is that proxy's IP. The selector does not read `X-Forwarded-For`.
+
+An unexported, immutable `ring` puts 150 virtual nodes on the ring for each backend ([ADR-0008](adr/0008-consistent-hash-ring-pipeline-and-vnode-layout.md)). The ring gives an ordered walk of distinct backends from the key's position. The selector admits the first candidate that is healthy, not removed, and below the capacity:
+
+```
+capacity = max(1, ceil(avg_active * 1.25))
+```
+
+`avg_active` is the mean `ActiveConns()` over the selectable set. Thus a hot key moves past a backend that already has its share of the load. The unwired `naiveConsistentHash` comparator exists only for the hot-key test that proves this property ([ADR-0009](adr/0009-consistent-hash-bounded-loads-capacity-and-evidence.md)).
+
+The ring is cached with the registry snapshot version. When the version changes, the next `Select` builds a new ring and stores it with a CAS. Thus no reload code needs to know that a ring exists ([ADR-0015](adr/0015-reload-architecture.md) decision 9).
+
+### Power of two choices with EWMA
+
+`PowerOfTwoChoicesEWMA` takes two different random backends from the selectable set and returns the one with the lower `EWMALatency()`. The latency observer records every round trip, for every algorithm, from dispatch to response headers. A failure records a fixed 2s penalty. The EWMA uses alpha 0.1 and updates with a CAS loop. The first sample is stored directly. A backend with no sample reads zero, so it wins its next comparison, gets a real sample, and stops reading zero ([ADR-0010](adr/0010-p2c-ewma-backend-latency-state-cold-start-and-failure-penalty.md)).
+
+## Health checking
+
+### Active checks
+
+`health.Checker` runs one goroutine per backend on the process context. Each probe is a plain GET to the backend's configured URL, with its own `http.Client` and timeout. The client does not follow redirects (`CheckRedirect` returns `http.ErrUseLastResponse`), and only a 2xx is a success. `ReverseProxy` sends redirects to clients unchanged, so a backend that redirects is not usable.
+
+- 3 consecutive failures (`probeFailuresBeforeUnhealthy`) call `MarkUnhealthy`.
+- 2 consecutive successes (`probeSuccessesBeforeHealthy`) call `MarkHealthy`.
+
+The thresholds are Go constants, not config. `health.probe_interval` (default 5s) and `health.probe_timeout` (default 2s) are config. The reinstatement test is `successes >= 2`, not `==`. Passive detection can eject a backend whose success count is already past the threshold, and an `==` test would then never fire again.
+
+Each genuine transition writes one log line and one `lb_backend_healthy` value from the same guard, so the log and the gauge always agree. `Checker.ProbeRoundComplete()` is a one-way latch. It becomes true after the first round in which every backend answered at least one probe. `Add` and `Remove` start and stop the prober for a backend on reload ([ADR-0011](adr/0011-health-passive-outlier-and-circuit-breaker-composition.md), [ADR-0013](adr/0013-observability-metrics-logging-and-integration.md)).
+
+### Passive outlier detection
+
+`OutlierDetector` keeps a count-based sliding window of the last 10 outcomes for each backend, under one mutex. When 5 failures are in the window, it calls `MarkUnhealthy()` once for the episode and logs `reason=outlier_window`. A failure is a 5xx response or a transport failure. Both kinds count in the same window. Both numbers are unexported constants.
+
+The detector never calls `MarkHealthy`. Only an active probe can prove that a backend is healthy again. Thus there are two ways in (active or passive) and one way out (active). `Forget` removes the state of a backend that a reload removed.
+
+### Health endpoint
+
+A separate `http.Server` on `health_endpoint.listen` (default `:8081`) serves three JSON paths ([ADR-0014](adr/0014-health-endpoint-contract-and-probe-semantics.md)):
+
+| Path | 200 when | Else |
+|---|---|---|
+| `/livez` | Always | A deadlock shows as a timeout |
+| `/readyz` | Config loaded, first probe round complete, and at least one selectable backend (checked on each request) | 503 that names the failed check |
+| `/startupz` | Config loaded and first probe round complete. Stays 200 after that. | 503 |
+
+Probes never enter the proxy path, so they do not change `lb_requests_total`. The endpoint counts its own probes in `lb_health_probe_total`. Use `/livez` for a Docker `HEALTHCHECK`, `/readyz` for a Fly.io HTTP check, and all three for Kubernetes. The runtime image has no shell or `curl`, so the binary has a `probe` subcommand: `/l7lb probe http://127.0.0.1:8081/livez`.
+
+## Circuit breaker
+
+`circuit.New(cooldown, log, collector)` makes a `Breaker` that holds only policy: `circuitFailuresBeforeOpen` (3, a constant) and `circuit.cooldown` (default 30s). The state lives on `Backend` as one immutable `atomic.Pointer[circuitSnapshot]`, which the code replaces with `CompareAndSwap`. The snapshot holds the state (closed, open, half-open), the consecutive-failure count, the trial flag and the open time. Thus each compound transition is one atomic step, and `backend` does not import `circuit` ([ADR-0012](adr/0012-circuit-gate-interface-and-backend-state-methods.md)).
+
+- 3 consecutive failures open the circuit. Any success resets the count.
+- There is no timer. A read after the cooldown promotes the circuit from open to half-open.
+- A half-open backend stays in `Selectable()`. Only the CAS on the trial flag in `Allow` admits the single trial.
+- One trial success closes the circuit. One trial failure opens it again.
+- Outcomes that arrive while the circuit is open are ignored, so a late response cannot skip the cooldown.
+
+The `Breaker` logs and writes `lb_circuit_state` from the returned `CircuitTransition`. A failure while the circuit is already open gives `NoChange`, so it writes nothing. One gap is accepted: if a `Selectable()` read wins the half-open promotion CAS, nobody logs it and the gauge stays at `open` ([ADR-0013](adr/0013-observability-metrics-logging-and-integration.md) decision 13).
+
+## Observability
+
+`internal/metrics` is a leaf, push-only `Collector` on its own `prometheus.NewRegistry()`, so tests can make separate instances and run in parallel. Subsystems push values at the place where their log lines fire.
+
+The metrics server listens on `metrics.listen` (default `:9090`) and serves:
+
+- `/metrics` through `promhttp.HandlerFor`.
+- `/debug/pprof/` (index, `cmdline`, `profile`, `symbol`, `trace`).
+- `POST /admin/reload` and `GET /admin/reload/last` (see [Config and hot reload](#config-and-hot-reload)).
+
+`app.Build` seeds every backend's series (`lb_backend_healthy=1`, `lb_circuit_state=closed`, `lb_active_requests=0`) at start. Thus the first scrape shows a full dashboard. The request hook counts every exit path: a no-healthy 503 has `backend=""`, and a circuit-denied 503 or a 502 carries the real backend name.
+
+### Metric name and label
+
+| Metric | Type | Labels |
+|---|---|---|
+| `lb_requests_total` | counter | `backend`, `method`, `status_class`, `protocol` |
+| `lb_request_duration_seconds` | histogram | `backend`, `method`, `status_class` |
+| `lb_backend_healthy` | gauge | `backend` |
+| `lb_circuit_state` | gauge | `backend`, `state` |
+| `lb_active_requests` | gauge | `backend` |
+| `lb_health_probe_total` | counter | `endpoint`, `status` |
+| `lb_algorithm_info` | gauge | `algorithm` |
+
+Label rules:
+
+- `status_class` is `2xx`, `4xx`, `5xx` and so on. It is never `status_code`, because raw backend codes have no upper limit on cardinality.
+- `protocol` is the client-side wire protocol: `http/1.1`, `h2` (HTTP/2 over TLS) or `h2c`. A dashboard can use it to prove that HTTP/2 is in use and has not fallen back. The histogram keeps three labels.
+- `state` is `closed`, `open` or `half_open`. The setter always sets the two other states to 0.
+- `lb_health_probe_total` uses `endpoint` (`/livez`, `/readyz`, `/startupz`) and `status` (a status class). It has no `backend` or `method`, so the request and probe counters never share a label set.
+- `lb_algorithm_info` is 1 for the current algorithm. A reload that changes the algorithm moves the 1 from the old value to the new one.
+
+A reload deletes the series of a removed backend and seeds the series of an added one. The histogram buckets (seconds) are provisional:
+
+```
+.005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10
+```
+
+### Log field vocabulary
+
+All logs use `log/slog` JSON. Field names come from `internal/logger/doc.go`. The values of `event` and `reason` are closed sets of Go constants in `internal/logger/vocab.go`.
+
+| Scope | Fields |
+|---|---|
+| Request | `backend`, `method`, `status`, `latency_ms`, `remote_addr`, `path`, `backend_proto` |
+| Process (startup line) | `gomaxprocs`, `go_version` |
+| Transition | `backend`, `event`, `reason` |
+| Reload | `event`, `reason`, `added`, `removed`, `unchanged`, `algorithm`, `previous_algorithm`, `fields` |
+| Drain | `event`, `reason`, `cancelled` |
+| Mid-body death | `backend`, `path`, `bytes_copied`, `reason` |
+
+`backend_proto` is the protocol of the LB-to-backend leg (`resp.Proto`, for example `HTTP/2.0`). It is absent when no backend response arrived. The vocabulary has no `err` field on the request line. The 502 and 499 paths log the cause on a separate line.
+
+| `event` | `reason` values |
+|---|---|
+| `health_ejected` | `probe_failures`, `outlier_window` |
+| `health_reinstated` | `probe_recovered`, `initial_probe` |
+| `circuit_opened` | `consecutive_failures`, `trial_failure` |
+| `circuit_closed` | `trial_success` |
+| `circuit_half_opened` | `cooldown_elapsed` |
+| `config_reloaded` | none |
+| `config_reload_failed` | `parse_error`, `validation_error`, `non_backend_change`, `apply_error` (defensive) |
+| `backend_drained` | `idle`, `window_expired` |
+
+The `backend round-trip failed` line uses `reason` without an `event`: `window_expired` (WARN) or `client_canceled` (INFO). A mid-body death logs `backend_died_mid_response` (WARN).
+
+Example lines:
+
+```json
+{"level":"INFO","msg":"request complete","method":"GET","path":"/api/widgets","backend":"backend-a","status":200,"latency_ms":12.4,"backend_proto":"HTTP/1.1"}
+{"level":"INFO","msg":"config reloaded","event":"config_reloaded","added":1,"removed":1,"unchanged":2}
+{"level":"WARN","msg":"config reload failed","event":"config_reload_failed","reason":"non_backend_change","fields":["listen"]}
+{"level":"INFO","msg":"backend drained","event":"backend_drained","backend":"backend-b","reason":"idle","cancelled":0}
+{"level":"INFO","msg":"backend round-trip failed","backend":"backend-a","reason":"client_canceled","path":"/api/widgets"}
+{"level":"WARN","msg":"backend died mid-response","backend":"backend-a","path":"/api/widgets","bytes_copied":12,"reason":"backend_died_mid_response"}
+```
+
+`config reloaded` is WARN when `unchanged` is 0, because that reload has a short window with no selectable backend. A reload that changes the algorithm also carries `previous_algorithm` and `algorithm`. `backend drained` is WARN when the reason is `window_expired`.
+
+## Config and hot reload
+
+### Loading and validation
+
+`config.Load(path)` and `config.Parse(r, source)` decode YAML with `KnownFields(true)`, so an unknown field is an error. After the decode, they expand `${VAR}` in each backend URL from the process environment. `VAR` must match `[A-Za-z_][A-Za-z0-9_]*`. There is no `${VAR:-default}` syntax. An unset or empty variable, an unterminated `${`, an empty `${}` or a bad name fails the load. The error names the backend, and the variable if the reference has one. An error never contains the resolved value. Other fields are not interpolated.
+
+`Validate` stops at the first error. It sets every omitted value to its default, so later code never checks or defaults again. The order is: listen, listener mode, backend count, each backend name and URL, unique names, algorithm, durations, then the metrics and health listen addresses.
+
+### Reload triggers
+
+There are two triggers. Both call one operation, `App.ReloadFrom` (load, `Validate`, apply, record), under one mutex. Thus the registry has one writer at a time.
+
+- **SIGHUP.** `main` listens for SIGHUP on its own channel with a buffer of 1, separate from the shutdown context. `reloadLoop` empties the queued signals first, so a burst gives one reload. It then reads the config file again.
+- **`POST /admin/reload`** on the metrics listener applies a YAML body (max 1 MiB). It answers 200 on success, 422 on a rejection, 413 for a large body, and 503 before `Run` starts. `GET /admin/reload/last` returns the last result (`none`, `success` or `rejected`), its time and the error. The endpoint is for the demo and tests and has no authentication, so do not publish the metrics port. After a body reload, the file on disk is not the truth until the next SIGHUP.
+
+A parse or validation failure logs `config_reload_failed`. The old config keeps serving.
+
+### What a reload changes
+
+`config.NonBackendChanges` compares the resolved configs. A change to any of `listen`, `tls`, `h2c`, `health`, `circuit`, `metrics`, `health_endpoint`, `reload`, `server` or `transport` rejects the whole reload, and the log names the fields. Only `backends` and `algorithm` are reloadable.
+
+- **Backend identity is `(name, URL)`.** `config.DiffBackends` gives added, removed and unchanged backends. A name with a new URL is one removal plus one addition, so state from the old host never moves to a new host. A changed environment variable diffs the same way.
+- **The registry swaps a snapshot.** `Registry.Apply` keeps the same `Backend` instance for each unchanged identity, so health, circuit, active count and EWMA stay. It makes a new instance for each added identity and marks removed backends before the swap.
+- **Admission is asymmetric.** A backend present at startup starts healthy. A backend that a reload adds starts unhealthy until its first successful probe (reason `initial_probe`). Thus a blue/green reload has a short window with no selectable backend.
+- **The algorithm is reloadable.** The reload builds the new selector first, so a failure changes nothing. Then it applies the backend diff and stores the selector in the proxy with one atomic store. A request in flight keeps its backend, and the next request uses the new algorithm. The new selector starts warm, because EWMA and active counts live on the backends.
+
+The loaded config is one `atomic.Pointer[config.Config]` on `App`. The reload stores it last, after the apply succeeds, and the next reload diffs against it ([ADR-0015](adr/0015-reload-architecture.md)).
+
+## Drain and shutdown
+
+### Drain on reload
+
+`App.Reload` starts one goroutine per removed backend ([ADR-0016](adr/0016-drain-lifecycle.md)):
+
+1. It polls `ActiveConns()` every 100ms until the count is 0 or `reload.drain_window` (default 30s) ends.
+2. If the window ends first, it calls `Backend.Retire()`. That cancels the retired context with cause `ErrDrainWindowExpired`. Each in-flight request joined that context with `context.AfterFunc`, so it stops with a 502. The join costs no goroutine and no lock on the request path.
+3. It waits for the slots to release, then logs one `backend drained` line with `cancelled`.
+
+A drain belongs to the removed instance, not to its name. It runs independently of later reloads. Active-connection accounting is not an observer, so a removed backend still releases its slots. Process shutdown stops a drain early.
+
+### Shutdown
+
+`app.Run` starts the checker and three servers on the process context: client, metrics and health endpoint. When the context ends (SIGINT or SIGTERM), or a server fails, `Run` shuts down the client, metrics and health servers in that order. All three share one 10s timeout. The checker uses the same context, so probing also stops.
+
+## HTTP/2 and TLS
+
+### Client side
+
+The listener mode depends on the config:
+
+| Mode | Config | Protocols |
+|---|---|---|
+| Plain | no `tls`, `h2c: false` | HTTP/1.1 |
+| TLS | `tls: {cert_file, key_file}` | HTTP/1.1 and HTTP/2 through ALPN |
+| h2c | `h2c: true` | Cleartext HTTP/2 (prior knowledge and HTTP/1.1 `Upgrade`) and HTTP/1.1 |
+
+The presence of the `tls:` block is the TLS switch, so no separate mode field can disagree with it. `tls` and `h2c` together fail validation. The TLS block has no version or cipher knobs, because the `crypto/tls` defaults are secure.
+
+In h2c mode, `app.Build` wraps the proxy in `h2c.NewHandler`, outermost, because it must see the raw connection preface. The standard library's cleartext HTTP/2 detects only the prior-knowledge preface. The `Upgrade` handshake needs `x/net/http2/h2c`, which is deprecated but is the only implementation of both modes.
+
+Server timeouts:
+
+- `ReadHeaderTimeout` is 5s on all three servers.
+- `server.idle_timeout` (default 90s) applies in every mode.
+- `server.read_timeout` (default 60s) applies in plain mode only. It limits slow-loris clients.
+- In TLS and h2c mode, `ReadTimeout` is 0. It covers the whole connection and would stop every multiplexed stream. `IdleTimeout` is the connection limit there.
+- `WriteTimeout` is not set in any mode. It covers the whole response copy, so a slow but healthy backend would trip it.
+
+The metrics and health servers are always plain HTTP.
+
+### Backend side
+
+`app.Build` makes one `*http.Transport` from the `transport:` section and uses it in place of `http.DefaultTransport`:
+
+| Key | Default | Effect |
+|---|---|---|
+| `dial_timeout` | 5s | Dial limit. An address that does not accept fails fast. |
+| `response_header_timeout` | 30s | A backend that sends no headers in time is a failure. |
+| `max_idle_conns_per_host` | 100 | Per-host idle pool. `MaxIdleConns` is this value times the backend count, so the stdlib total of 100 does not cap it. |
+| `idle_conn_timeout` | 90s | Closes idle keep-alive connections. |
+| `force_http2` | true | Sets `ForceAttemptHTTP2`. |
+| `tls_skip_verify` | false | Skips backend certificate checks. Use only for self-signed certificates in test or staging. |
+
+The URL scheme sets the backend protocol. An `https://` backend negotiates HTTP/2 through ALPN. An `http://` backend uses HTTP/1.1. One backend list can mix both. A custom `TLSClientConfig` turns off Go's automatic HTTP/2, so the explicit `ForceAttemptHTTP2` keeps HTTP/2 on when `tls_skip_verify` is set. Set `force_http2: false` to force HTTP/1.1 for debugging. The `backend_proto` log field shows the result.
+
+## YAML schema
+
+Field names are lowercase snake_case. All sections except `listen` and `backends` are optional.
+
+```yaml
+listen: ":8080"              # required
+algorithm: "round_robin"     # round_robin | least_conn | consistent_hash | p2c_ewma
+# tls:                       # TLS mode; mutually exclusive with h2c
+#   cert_file: "/path/cert.pem"
+#   key_file: "/path/key.pem"
+h2c: false                   # cleartext HTTP/2 mode
+
+health:
+  probe_interval: "5s"
+  probe_timeout: "2s"
+circuit:
+  cooldown: "30s"
+metrics:
+  listen: ":9090"            # /metrics, pprof, admin reload
+health_endpoint:
+  listen: ":8081"            # /livez, /readyz, /startupz
+reload:
+  drain_window: "30s"
+server:
+  read_timeout: "60s"        # plain HTTP mode only
+  idle_timeout: "90s"
+transport:
+  force_http2: true
+  tls_skip_verify: false
+  dial_timeout: "5s"
+  response_header_timeout: "30s"
+  max_idle_conns_per_host: 100
+  idle_conn_timeout: "90s"
+
+backends:                    # at least one; names unique
+  - name: "backend-a"
+    url: "http://127.0.0.1:9001"
+  - name: "backend-b"
+    url: "https://${BACKEND_B_HOST}:9443"   # ${VAR} only in backend URLs
+```
+
+Durations must be positive. Duration and listen fields are pointers in Go, so `Validate` can tell an omitted key (use the default) from an explicit zero (an error). `configs/example.yaml` documents every key. `configs/docker.yaml` is the config in the container image and uses no interpolation.
+
+## Concurrency ownership
+
+| State | Writer | Readers | Mechanism |
+|---|---|---|---|
+| `Backend.healthy` | `NewRegistry` (initial), `Checker` and `OutlierDetector` through `MarkHealthy`/`MarkUnhealthy` | Selectors, registry, health endpoint | `atomic.Bool`, only through methods |
+| `Backend.active` | Proxy: `IncActive` before dispatch, `DecActive` once through `reqState.release()` | `LeastConnections`, `ConsistentHashBoundedLoads`, drain goroutines | `atomic.Int64`, only through methods |
+| `Backend` EWMA latency | Latency observer through `RecordLatency` | `PowerOfTwoChoicesEWMA` through `EWMALatency()` | `atomic.Int64` with a CAS loop |
+| `Backend` circuit state | `Breaker` through `CircuitSuccess`/`CircuitFailure`; `Registry.Allow` through `CircuitAllow`; proxy through `RearmTrial` | `Registry.Selectable()` through `CircuitOpen`, proxy through `Registry.Allow` | `atomic.Pointer[circuitSnapshot]`, replaced by CAS. Policy (threshold, cooldown) is passed per call. |
+| `Backend.removed` | `Registry.Apply`, before the snapshot swap | Proxy observer fan-out, `ConsistentHashBoundedLoads` | `atomic.Bool`, set once, never reset. A re-added identity is a new `Backend`. |
+| `Backend.retiredCtx` | `Backend.Retire()` at drain-window expiry | Proxy (one `context.AfterFunc` per request) | `context.WithCancelCause` made at construction. Cause `ErrDrainWindowExpired`. |
+| `Registry` backend set | `NewRegistry`; `Registry.Apply` (single writer, under the reload mutex) | `All`, `Selectable`, `Version`, `Snapshot`, all selectors | One `atomic.Pointer` to an immutable `(version, []*Backend)` snapshot. Readers never lock. |
+| `RoundRobin` counter | `RoundRobin.Select` | none | `atomic.Uint64` |
+| Consistent-hash ring cache | `ConsistentHashBoundedLoads.Select` on a version change | Same | Atomic pointer to `(version, ring)`, replaced by CAS. The ring is immutable. |
+| Proxy selector | `Proxy.SetSelector` (construction, algorithm reload) | `ServeHTTP`, one load per request | `atomic.Pointer` |
+| Proxy `reqState` | `ServeHTTP`, on the request goroutine | `Director`, `ModifyResponse`, `ErrorHandler`, body wrapper, on the same goroutine | No lock. `ReverseProxy` runs a request synchronously. `sync.Once` guards the release. |
+| Outlier windows | `OutlierDetector.ObserveRoundTrip` | Same | One `sync.Mutex`, held only for the window update |
+| `App` loaded config | `Build`; reload stores it last | `LoadedConfig()`, reload | `atomic.Pointer[config.Config]` |
+| Reload operation | SIGHUP loop, `POST /admin/reload` | none | `App.reloadMu` mutex. Last result in one atomic pointer, read without a lock. |
+| Drain goroutines | `Reload`, one per removed backend | none | No shared state of their own. They use the atomics, collector and logger above, which are safe for concurrent use. They stop on the process context. |
+| `Checker` probers | One goroutine per backend | `ProbeRoundComplete()` | Counters are owned by one goroutine. The round-complete latch is an `atomic.Bool`. |
+
+## Packaging, tests and benchmarks
+
+- **Container.** A multi-stage `Dockerfile` builds a static binary (`CGO_ENABLED=0`) into a digest-pinned `gcr.io/distroless/static-debian12:nonroot` image. It exposes 8080, 8081 and 9090, bakes `configs/docker.yaml` to `/etc/l7lb/config.yaml`, and uses `probe` for its `HEALTHCHECK` ([ADR-0019](adr/0019-deployment-target.md)). The root `docker-compose.yml` starts the load balancer, three dummy backends, Prometheus and Grafana.
+- **Soak.** `make soak` runs `TestChaosSoakConnectionLifecycle` (default 1h, `-soak-duration` to shorten) with load, cancellations, backend deaths and reloads. Limits: goroutines at most baseline + 10, post-GC `HeapAlloc` at most baseline + 8 MB. `make soak-race` checks only goroutines. The one-hour run: 59.66M requests, 7,175 cancellations, 2,789 failures, 12 reloads. Goroutines went from 35 to 30, and heap from 930 KB to 804 KB.
+- **OS-boundary e2e.** `make e2e` runs `TestChaosSighupReloadZeroDrop1000`. It builds the binary, holds 1000 concurrent requests, rewrites the config and sends a real SIGHUP. All 1000 requests must return 200, the removed backend must get no new requests, and the process must exit 0 on SIGTERM.
+- **Benchmarks.** See [bench/README.md](../bench/README.md) and [RESULTS.md](../RESULTS.md).
+- **Demo.** See [demo/README.md](../demo/README.md).
+
+## Decisions
+
+The [ADR index](adr/INDEX.md) lists every decision with a summary. These features are not built: SO_REUSEPORT handoff for zero-downtime binary upgrades, gRPC pass-through, rate limiting, and WebSocket upgrade checks. Request retry is absent by design ([ADR-0018](adr/0018-no-retry-ever.md)).

@@ -1,247 +1,123 @@
-# l7LoadBalancer
+# l7LoadBalancer glossary
 
-A Layer 7 HTTP load balancer. This glossary covers domain vocabulary — algorithm
-and routing concepts — not implementation structure (see `AGENTS.md` and
-`docs/design/` for that).
+Domain terms for this Layer 7 HTTP load balancer. Use these words with these meanings in code, comments and docs. For structure, see `docs/architecture.md`.
 
-## Language
+## Routing
 
 **Backend**:
-An upstream server the load balancer can route requests to, tracked by the
-registry for identity, health, and active-connection count.
-_Avoid_: server, upstream, node (reserve "node" for hash-ring positions)
-
-**Backend identity** (reload context):
-The (name, URL) pair. Two configs describe the *same* backend only when both
-match; a name kept with a new URL is a different backend — the old one is
-removed (and drains) and a new one is added with fresh state. Names are unique
-within one config file, so for a short while during a reload two backends of
-the same name can coexist: one draining, one fresh.
-_Avoid_: same backend (when only the name matches)
-
-**Reload**:
-Replacing the running backend set, and the selection algorithm, with the ones
-in a re-read config file (SIGHUP) or a posted one (`POST /admin/reload`),
-without restarting the process or dropping in-flight requests. Only the
-backend list and the algorithm may differ (the algorithm since S5.T20.7); a
-reload that changes any other field is rejected whole and the previous config
-keeps serving. A reload
-that fails to parse or validate is likewise rejected. Reloads never overlap,
-and each one is diffed against the currently loaded config.
-_Avoid_: restart, hot-restart (process-replacement techniques this is not)
-
-**Unchanged / added / removed backend** (reload context):
-The three outcomes of diffing the loaded config against a reloaded one by
-backend identity. An unchanged backend keeps all its runtime state — health,
-circuit, active connections, EWMA latency — across the reload. An added one
-starts fresh and unhealthy, becoming selectable after its first successful
-probe (a single success — unlike recovery, which needs two). A removed one
-begins draining and from that moment reports nothing: its late round-trip
-outcomes and probes no longer touch any health, circuit, or metric state.
-_Avoid_: updated/modified backend (there is no such outcome: a URL change is a
-removal plus an addition)
-
-**Draining** (reload context):
-The state of a removed backend that still has in-flight requests. It is never
-selected again; its in-flight requests are allowed to finish until either they
-all have or the drain window elapses. A draining backend has its own lifecycle
-independent of later reloads: re-adding the same identity does not revive or
-end it — the re-added backend is a new one.
-_Avoid_: disabled, unhealthy (a draining backend may be perfectly healthy),
-ejection (passive detection's word)
-
-**Drain window** (reload context):
-The upper bound on how long a draining backend may keep in-flight requests.
-When it elapses, any still in flight are cancelled and their clients get a 502;
-the backend is then forgotten. A drain-cancelled request is not a backend
-failure and must not count as one.
-_Avoid_: grace period, timeout (overloaded with transport timeouts)
-
-**Client cancellation** (Sprint 4 context):
-A client disconnecting mid-request — the client's own request context is
-done before a response arrives. It is not a backend failure: the proxy
-classifies it as client-gone, reaches no observer, records no EWMA latency,
-releases the active-connection slot, and counts the request as 499 (status
-class `4xx`), so client churn never pollutes the 5xx class reserved for
-backend-caused failures. Distinct from Draining, which is voluntary and
-proxy-initiated. See S4.T5.
-_Avoid_: timeout, backend failure (a backend/transport timeout leaves the
-client context alive and remains a genuine failure)
+A server that the load balancer can send requests to. The registry keeps its identity, health and active-connection count.
+_Avoid_: server, upstream, node ("node" is for ring positions).
 
 **Selector**:
-The pluggable policy that chooses which backend handles a given request.
-_Avoid_: algorithm (an algorithm is what a Selector implements — the Selector
-is the seam; "algorithm" is fine in prose describing behavior)
+The pluggable policy that chooses the backend for a request. A Selector implements an algorithm. "Algorithm" is fine in prose about behavior.
+_Avoid_: algorithm (for the interface).
+
+**Selectable**:
+A backend that can get traffic now. It is healthy and its circuit is not open. `Registry.Selectable()` is the list that every selector uses. `IsHealthy()` shows only the health signal and ignores the circuit.
+_Avoid_: healthy (as a synonym), available.
 
 **Ring**:
-The sorted-by-hash-position structure of virtual nodes that consistent-hash
-selection walks to map a hash key to a backend. Internal to `balancer`; not
-itself a Selector.
-_Avoid_: hash ring (redundant once "ring" is established here), consistent
-hashing (that's the algorithm family; the ring is its data structure)
+The structure of virtual nodes, sorted by hash position, that consistent-hash selection walks to map a hash key to a backend. It is internal to `balancer` and is not a Selector.
+_Avoid_: hash ring, consistent hashing (that is the algorithm family).
 
 **Virtual node**:
-One of several ring positions a single backend occupies — 150 per backend,
-each hashed independently from `backend.Name` plus a replica index. Exists to
-smooth the distribution a single backend would get from occupying only one
-ring position.
-_Avoid_: replica, node alone (ambiguous with "backend")
+One of the 150 ring positions of one backend. Each position is the hash of `backend.Name` plus a replica index. Many positions give a more even distribution than one.
+_Avoid_: replica, node (alone).
 
 **Hash key**:
-The per-request string hashed to find a ring position — the client's IP
-(`r.RemoteAddr`, port stripped). Determines which backend a request's session
-sticks to under consistent-hash selection. Known limitation: behind another
-proxy, this is the upstream proxy's IP, not the original client's.
-_Avoid_: routing key, partition key
+The string that the balancer hashes to find a ring position. It is the client IP from `r.RemoteAddr`, without the port. Limitation: behind another proxy, it is the IP of that proxy.
+_Avoid_: routing key, partition key.
 
-**Load** (consistent-hash-bounded-loads context):
-A backend's current `ActiveConns()` — in-flight request count — not a
-cumulative/lifetime assignment counter. Bounded-loads' average is computed
-over healthy backends only.
-_Avoid_: weight, score, connections (use ActiveConns when referring to the
-method; "load" is the domain concept it backs)
+**Hot key**:
+A hash key with a very large share of requests. With one client address, an unbounded ring sends all traffic to one backend. Bounded loads moves the excess to the next backends on the ring.
+_Avoid_: hotspot, sticky client.
 
-**Capacity** (consistent-hash-bounded-loads context):
-The ceiling a candidate backend's load must not exceed to be selected:
-`max(1, ceil(avg_load * (1 + ε)))`, where `avg_load` is mean `ActiveConns()`
-across healthy backends and ε = 0.25 (Mirrokni-Thorup-Zadimoghaddam's cited
-production value). The floor of 1 exists because an idle system has
-`avg_load = 0`, which would otherwise fail every backend's very first request.
-_Avoid_: cap used without the floor, threshold
+**Load** (bounded loads):
+The current `ActiveConns()` of a backend, which is its in-flight request count. It is not a total count over time. The average load uses healthy backends only.
+_Avoid_: weight, score, connections.
 
-**EWMA latency** (p2c-ewma context):
-A backend's exponentially weighted moving average of recent round-trip
-durations, `latency_new = α·observed + (1-α)·latency_old` with α = 0.1,
-maintained by `Backend.RecordLatency` and read by `PowerOfTwoChoicesEWMA`. It
-measures the backend round trip only — from just before dispatch to the
-response headers — deliberately not the client-facing request duration the
-`latency_ms` log field measures. A failed round trip records a fixed 2s
-penalty rather than the real time-to-failure, so a fast failure cannot look
-attractively fast. The first-ever sample is stored directly rather than blended
-from a zero baseline. See ADR-0010.
-_Avoid_: latency (unqualified), response time, EWMA alone
+**Capacity** (bounded loads):
+The maximum load a candidate backend can have and still get the request: `max(1, ceil(avg_load * (1 + ε)))`, with ε = 0.25. The floor of 1 is necessary because an idle system has `avg_load = 0`. Without it, every first request would fail.
+_Avoid_: cap without the floor, threshold.
 
-**Probe** (active health check context):
-A single out-of-band GET issued by the health checker to a backend's
-configured URL (not the request-serving path — no separate health endpoint
-is configured). Only a 2xx response counts as success; 3xx is treated as a
-failure because `httputil.ReverseProxy` forwards redirects verbatim to
-clients rather than following them, so a redirecting backend is unusable
-even though it is "up." Consecutive probes drive the health state machine:
-3 consecutive failed probes eject a backend, 2 consecutive successful ones
-reinstate it — and active probes are the *only* path that reinstates a
-backend ejected by passive detection. The one exception is a backend a
-reload adds: it starts unhealthy and is admitted by a *single* successful
-probe, logged with reason `initial_probe` (ADR-0015 decision 10). The
-thresholds are Go constants, not config. See ADR-0011 decisions 2 and 10.
-_Avoid_: health check (the subsystem), ping
+**EWMA latency** (p2c-ewma):
+The exponentially weighted moving average of the backend round trip: `latency_new = α·observed + (1-α)·latency_old`, with α = 0.1. `Backend.RecordLatency` writes it and `PowerOfTwoChoicesEWMA` reads it. It measures from just before dispatch to the response headers. It is not the client-facing duration in the `latency_ms` log field. A failed round trip records a fixed 2s penalty, so a fast failure does not look fast. The first sample is stored directly. See ADR-0010.
+_Avoid_: latency (alone), response time, EWMA (alone).
 
-**Outlier** (passive health check context):
-A backend whose recent live request outcomes are disproportionately
-failures — a 5xx response or a transport failure (connection refused,
-timeout). Detected in-band by `health.OutlierDetector` from the proxy's
-round-trip observer fan-out, over a count-based sliding window of the last
-10 outcomes per backend (not a time window, and not a consecutive streak).
-Distinct from an unhealthy-by-probe backend: an outlier may still be
-answering, just badly. See ADR-0011 decisions 8 and 12.
-_Avoid_: unhealthy (that is the state it may lead to, not the concept)
+## Health and circuit breaking
 
-**Ejection** (passive health check context):
-Marking a backend unhealthy (`MarkUnhealthy`) because enough failures
-appeared within its outlier window — 5 of the last 10. Ejection excludes the
-backend from selection immediately, without waiting for the next scheduled
-probe. Only a successful active probe reinstates it, so passive detection has
-no independent timer and never calls `MarkHealthy`; it resets its own episode
-once it observes the backend healthy again. See ADR-0011 decisions 2, 3, and 9.
-_Avoid_: circuit-open (a separate gate), removal
+**Probe** (active health check):
+One out-of-band GET from the health checker to the backend URL. There is no separate health endpoint. Only 2xx is success. 3xx is a failure, because `httputil.ReverseProxy` sends redirects to clients and does not follow them. 3 failed probes in a row eject a backend, and 2 successful probes in a row reinstate it. A backend that a reload adds is the exception: one successful probe admits it, with reason `initial_probe`. Only probes reinstate a backend that passive detection ejected. The thresholds are Go constants, not config. See ADR-0011 and ADR-0015.
+_Avoid_: health check (the subsystem), ping.
 
-**Selectable** (Sprint 3 context):
-A backend eligible for routing right now: healthy (per active/passive
-detection) *and* its circuit is not open. Distinct from `IsHealthy()`,
-which reflects only the active/passive signal and says nothing about
-circuit state. `Registry.Selectable()` is what every selector iterates;
-`IsHealthy()` stays the narrower, honest name for the raw signal. See
-ADR-0011.
-_Avoid_: healthy (as a synonym once circuit state exists), available
+**Outlier** (passive health check):
+A backend whose recent live requests fail too often. A failure is a 5xx response or a transport failure, such as connection refused or a timeout. `health.OutlierDetector` counts the last 10 outcomes for each backend. This is a count window, not a time window and not a streak. An outlier can still answer, but badly. See ADR-0011.
+_Avoid_: unhealthy (the result, not the concept).
 
-**Trial** (circuit-breaker context):
-The single request a half-open circuit admits to decide whether it
-returns to Closed (trial succeeds) or back to Open (trial fails). Not a
-synthetic probe — it is whatever real request the selector happens to
-route to the backend next while half-open. Admission is enforced by the
-breaker's own `Allow()` gate, not by pool membership: a half-open backend
-stays fully `Selectable()`. See ADR-0011.
-_Avoid_: probe (reserved for the active health-check context), health check
+**Ejection** (passive health check):
+`MarkUnhealthy` on a backend that has 5 failures in its last 10 outcomes. Selection stops at once, before the next probe. Passive detection has no timer and never calls `MarkHealthy`. Only a successful probe reinstates the backend. See ADR-0011.
+_Avoid_: circuit-open, removal.
 
-**Circuit breaker** (Sprint 3 context):
-The per-backend closed/open/half-open gate that stops routing to a backend
-whose round trips are failing. Separate from `healthy`: the breaker never
-writes `MarkHealthy`/`MarkUnhealthy`, so selection eligibility is the two
-facts ANDed (`Selectable`), not one bit fought over. Closed tracks a
-*consecutive* failure count (any success resets it) and opens at 3; Open
-denies every request until the `cooldown` elapses; Half-Open admits one
-`Trial`. State lives on `Backend` as one CAS-guarded snapshot; the policy
-(threshold, cooldown) lives in `circuit.Breaker`. See ADR-0011 and ADR-0012.
-_Avoid_: unhealthy (that is the health signal, a different gate), ejection
-(passive detection's word), outage
+**Circuit breaker**:
+A per-backend gate with three states: Closed, Open and Half-Open. It stops traffic to a backend whose round trips fail. It never calls `MarkHealthy` or `MarkUnhealthy`. Selectable is health AND circuit, two separate facts. Closed counts consecutive failures, and any success resets the count. It opens at 3. Open denies all requests until the cooldown ends. Half-Open admits one trial. `Backend` keeps the state as one CAS-guarded snapshot. `circuit.Breaker` keeps the policy. See ADR-0011 and ADR-0012.
+_Avoid_: unhealthy, ejection, outage.
 
-**Cooldown** (circuit-breaker context):
-How long a tripped circuit stays Open before a read may lazily promote it to
-Half-Open. A global `circuit.cooldown` YAML field defaulting to 30s, not a
-per-backend setting. There is no timer: the promotion is evaluated (and
-CAS-transitioned) inside whichever request or selection read next observes
-that the cooldown has elapsed, so a backend nothing is routing to simply is
-not observed to recover yet. See ADR-0011 decision 6 and ADR-0012.
-_Avoid_: timeout (that is probe/transport concern), retry delay
+**Cooldown**:
+The time a circuit stays Open before it can go to Half-Open. It is the global `circuit.cooldown` YAML field, default 30s. There is no timer. The next request or selection that reads the state after the cooldown does the change with a CAS. If no traffic goes to the backend, nothing sees it recover. See ADR-0011 and ADR-0012.
+_Avoid_: timeout, retry delay.
 
-**No-op reload** (reload context):
-A reload whose re-read config yields only unchanged backends: nothing is added,
-removed, or drained. It measures the bare cost of the reload path. Contrast a
-**drain reload**, in which at least one backend is removed and drains.
-_Avoid_: empty reload, dry reload
+**Trial**:
+The one request that a Half-Open circuit admits. If it succeeds, the circuit closes. If it fails, the circuit opens again. It is a real request, not a probe. The breaker's `Allow()` controls admission, so a Half-Open backend stays `Selectable()`. See ADR-0011.
+_Avoid_: probe, health check.
 
-**Competitor** (benchmark context):
-The proxy under measurement in one benchmark run — the load balancer or Nginx.
-Both front the same backends with the same load generator.
-_Avoid_: target (vegeta's word for a request line), baseline
+**Client cancellation**:
+The client disconnects before a response arrives, so its request context is done. This is not a backend failure. The proxy tells no observer, records no EWMA latency, releases the active-connection slot and records status 499 (class `4xx`). The 5xx class stays for backend failures. A backend or transport timeout is different: the client context is still live, so it is a real failure.
+_Avoid_: timeout, backend failure.
 
-**Nearest-equivalent** (benchmark context):
-An Nginx configuration compared against an algorithm Nginx does not implement
-exactly: `hash $remote_addr consistent` for consistent-hash (no bounded loads)
-and `random two least_conn` for p2c-ewma (no latency signal). Results from a
-nearest-equivalent comparison always state the gap. Contrast a **matched**
-comparison (round-robin, least-connections), where the algorithms are the same.
-_Avoid_: equivalent (unqualified), Nginx version of
+## Reload
 
-**Hot key** (consistent-hash-bounded-loads context):
-A hash key that carries a disproportionate share of requests. A single-address
-load generator is the extreme case: every request has one hash key, so an
-unbounded ring sends all traffic to one backend, while bounded loads spills
-the excess to the backends that follow it on the ring.
-_Avoid_: hotspot, sticky client
+**Reload**:
+The process replaces its backend set and selection algorithm from a config file, without a restart and without dropping in-flight requests. A reload starts on SIGHUP (re-read the file) or on `POST /admin/reload`. Only the backend list and the algorithm can change. If any other field changes, or the config does not parse or validate, the reload is rejected and the old config continues. Reloads never overlap. Each one is compared with the current config.
+_Avoid_: restart, hot-restart.
 
-**Matched** (benchmark context):
-A comparison in which the load balancer and Nginx run the same algorithm, so
-a difference in the numbers points at the implementation and the setup, not at
-the choice of policy. Round-robin and least-connections are matched. Contrast
-**nearest-equivalent**, where Nginx has no identical algorithm.
-_Avoid_: like-for-like (unqualified), apples-to-apples
+**Backend identity**:
+The (name, URL) pair. Two configs have the same backend only when both match. A name with a new URL is a different backend: the old one is removed and drains, and a new one starts with new state. For a short time, two backends with the same name can exist: one draining and one new.
+_Avoid_: same backend (when only the name matches).
 
-**Peak** (benchmark context):
-The highest request rate, in requests per second, that a proxy sustained in
-one benchmark. A rate counts as sustained when three things hold: the 99th
-percentile latency stays under 100 ms (99 of every 100 requests finish within
-that time), fewer than 1% of requests fail, and the load generator, the
-program that sends the test requests, actually delivers at least 95% of the
-requested rate. The benchmark raises the rate until a test fails, then
-narrows in on the last rate that passed. The result is accurate only to the
-search's step size: 500 req/s for small responses, 25 req/s for 1 MiB ones.
-_Avoid_: max throughput, capacity (a different term, see **Capacity**)
+**Unchanged / added / removed backend**:
+The three results of a reload diff by backend identity. An unchanged backend keeps all runtime state: health, circuit, active connections and EWMA latency. An added backend starts unhealthy and becomes selectable after one successful probe. A removed backend starts to drain. After that, its late results and probes change no health, circuit or metric state. There is no "updated" result.
+_Avoid_: updated, modified.
 
-**Rig-limited** (benchmark context):
-A measured peak that reflects the limits of the load generator or the test
-machine, not of the proxy. The generator has two CPU cores, so for large
-responses it cannot send requests fast enough to reach the proxy's real
-ceiling. A rig-limited number is a lower bound on what the proxy can do and
-is never presented as its ceiling.
-_Avoid_: bottlenecked, saturated (unqualified)
+**Draining**:
+The state of a removed backend that still has in-flight requests. It is never selected again. Its requests can finish until none remain or the drain window ends. Later reloads do not change it. If the same identity comes back, that is a new backend.
+_Avoid_: disabled, unhealthy, ejection.
+
+**Drain window**:
+The maximum time a draining backend can keep in-flight requests. Set it with `reload.drain_window` (default 30s). When it ends, the proxy cancels the remaining requests, the clients get 502, and the registry forgets the backend. A drain cancellation is not a backend failure.
+_Avoid_: grace period, timeout.
+
+**No-op reload**:
+A reload where all backends are unchanged. It measures the bare cost of the reload path. A **drain reload** removes at least one backend.
+_Avoid_: empty reload, dry reload.
+
+## Benchmarks
+
+**Competitor**:
+The proxy under test in one benchmark run: the load balancer or Nginx. Both use the same backends and the same load generator.
+_Avoid_: target, baseline.
+
+**Matched**:
+A comparison where both proxies use the same algorithm, so differences come from implementation and setup. Round-robin and least-connections are matched.
+_Avoid_: like-for-like, apples-to-apples.
+
+**Nearest-equivalent**:
+A comparison against an Nginx config that is close but not the same: `hash $remote_addr consistent` for consistent-hash (no bounded loads) and `random two least_conn` for p2c-ewma (no latency signal). These results always state the gap.
+_Avoid_: equivalent (alone).
+
+**Peak**:
+The highest sustained request rate, in req/s, of a proxy in one benchmark. A rate is sustained when p99 latency is below 100 ms, fewer than 1% of requests fail, and the load generator sends at least 95% of the requested rate. The benchmark increases the rate until a test fails, then searches for the last rate that passed. The step size is 500 req/s for small responses and 25 req/s for 1 MiB responses.
+_Avoid_: max throughput, capacity.
+
+**Rig-limited**:
+A peak that shows the limit of the load generator or test machine, not of the proxy. The generator has two CPU cores, so for large responses it cannot reach the proxy's limit. A rig-limited number is a lower bound, never the ceiling.
+_Avoid_: bottlenecked, saturated.

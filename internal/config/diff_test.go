@@ -136,7 +136,7 @@ func TestNonBackendChanges(t *testing.T) {
 			want: []string{"listen"},
 		},
 		{
-			// The algorithm is reloadable since S5.T20.7 (ADR-0015 decision
+			// The algorithm is reloadable (ADR-0015 decision
 			// 18): a change to it alone is not a non-backend change.
 			name: "algorithm differs",
 			old:  oneBackendConfigYAML(base),

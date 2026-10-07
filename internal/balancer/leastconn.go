@@ -10,7 +10,7 @@ import (
 // LeastConnections selects the selectable backend (healthy and
 // circuit-not-open) with the lowest current ActiveConns, reading it
 // atomically. It does not itself mutate ActiveConns — mutation is the proxy's
-// job (S1.T6). Ties are broken deterministically: the first tied backend in
+// job. Ties are broken deterministically: the first tied backend in
 // registry order.
 type LeastConnections struct {
 	reg *backend.Registry
@@ -26,7 +26,7 @@ func NewLeastConnections(reg *backend.Registry) *LeastConnections {
 // ErrNoHealthyBackends when that set is empty. Replacement happens only on a
 // strictly lower count, so the first backend in registry order wins ties —
 // deterministic and reproducible. ActiveConns is read, never mutated:
-// connection bookkeeping is the proxy's job (S1.T6).
+// connection bookkeeping is the proxy's job.
 func (s *LeastConnections) Select(ctx context.Context, r *http.Request) (*backend.Backend, error) {
 	selectable := s.reg.Selectable()
 	if len(selectable) == 0 {

@@ -13,7 +13,7 @@ import (
 	"github.com/DMJain/l7LoadBalancer/internal/config"
 )
 
-// TestMetricsListenerServesPprofAndMetrics is S4.T9's listener test: pprof is
+// TestMetricsListenerServesPprofAndMetrics is the listener test: pprof is
 // mounted on the metrics listener's handler alongside /metrics, so profiling
 // needs no separate port. The metrics listener is already always-on and
 // unauthenticated, so pprof adds no attack surface the project has not already

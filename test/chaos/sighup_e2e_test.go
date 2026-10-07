@@ -20,7 +20,7 @@ import (
 )
 
 var e2eEnabled = flag.Bool("e2e", false,
-	"run the S4.T14 SIGHUP e2e zero-drop test (skipped without this flag; see `make e2e`)")
+	"run the SIGHUP e2e zero-drop test (skipped without this flag; see `make e2e`)")
 
 const (
 	e2eInFlightDeadline = 30 * time.Second

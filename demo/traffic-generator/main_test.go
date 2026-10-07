@@ -20,7 +20,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// statusBody mirrors the control endpoint's status contract (S5.T16.2).
+// statusBody mirrors the control endpoint's status contract.
 type statusBody struct {
 	Rank        int     `json:"rank"`
 	Clients     int     `json:"clients"`
@@ -98,8 +98,7 @@ func postControl(t *testing.T, base, body string) *http.Response {
 }
 
 // TestShareByRank proves each client's own rate is its Zipf-weighted share of
-// the total, computed from RANK alone, for several ranks and exponents
-// (S5.T16.2).
+// the total, computed from RANK alone, for several ranks and exponents.
 func TestShareByRank(t *testing.T) {
 	const clients = 8
 	exponents := []float64{0.0, 0.5, 1.0, 1.5}
@@ -124,7 +123,7 @@ func TestShareByRank(t *testing.T) {
 }
 
 // TestControlUpdatesSettings proves a runtime POST changes the total rate and
-// the target, and that an omitted field keeps its value (S5.T16.2).
+// the target, and that an omitted field keeps its value.
 func TestControlUpdatesSettings(t *testing.T) {
 	_, base := controlServer(t, baseConfig("http://lb-a", "http://lb-a", "http://lb-b"))
 
@@ -148,8 +147,7 @@ func TestControlUpdatesSettings(t *testing.T) {
 }
 
 // TestControlRejectsBadInput proves an unknown field, a negative rate and a
-// target outside the allowlist are rejected with 400 and change nothing
-// (S5.T16.2).
+// target outside the allowlist are rejected with 400 and change nothing.
 func TestControlRejectsBadInput(t *testing.T) {
 	_, base := controlServer(t, baseConfig("http://lb-a", "http://lb-a", "http://lb-b"))
 
@@ -175,7 +173,7 @@ func TestControlRejectsBadInput(t *testing.T) {
 	assert.Equal(t, "http://lb-a", got.Target, "a rejected request leaves the target untouched")
 }
 
-// TestControlRejectsNonGetPost proves only GET and POST are served (S5.T16.2).
+// TestControlRejectsNonGetPost proves only GET and POST are served.
 func TestControlRejectsNonGetPost(t *testing.T) {
 	_, base := controlServer(t, baseConfig("http://lb-a"))
 
@@ -233,7 +231,7 @@ func (c *countServer) snapshot() (paths map[string]int, methods map[string]int, 
 }
 
 // TestReceivedRateWithinTolerance proves the stand-in receives roughly the
-// client's configured rate over a fixed window (S5.T16.2).
+// client's configured rate over a fixed window.
 func TestReceivedRateWithinTolerance(t *testing.T) {
 	c := newCountServer(t)
 	cfg := baseConfig(c.URL)
@@ -260,7 +258,7 @@ func TestReceivedRateWithinTolerance(t *testing.T) {
 }
 
 // TestRuntimeRateChangeTakesEffect proves a raised total rate actually reaches
-// the stand-in more often without a restart (S5.T16.2).
+// the stand-in more often without a restart.
 func TestRuntimeRateChangeTakesEffect(t *testing.T) {
 	c := newCountServer(t)
 	cfg := baseConfig(c.URL)
@@ -289,8 +287,7 @@ func TestRuntimeRateChangeTakesEffect(t *testing.T) {
 	assert.Positive(t, st.Completed, "response bodies were never drained and completed")
 }
 
-// TestArrivalsAreNotAFixedInterval proves arrivals are spread, not a metronome
-// (S5.T16.2).
+// TestArrivalsAreNotAFixedInterval proves arrivals are spread, not a metronome.
 func TestArrivalsAreNotAFixedInterval(t *testing.T) {
 	c := newCountServer(t)
 	cfg := baseConfig(c.URL)
@@ -323,7 +320,7 @@ func TestArrivalsAreNotAFixedInterval(t *testing.T) {
 }
 
 // TestSizeMixAppears proves the response-size and request-body mixes reach the
-// stand-in (S5.T16.2).
+// stand-in.
 func TestSizeMixAppears(t *testing.T) {
 	c := newCountServer(t)
 	cfg := baseConfig(c.URL)
@@ -345,7 +342,7 @@ func TestSizeMixAppears(t *testing.T) {
 }
 
 // TestRuntimeTargetChange proves a target change takes effect for subsequent
-// arrivals without a restart (S5.T16.2).
+// arrivals without a restart.
 func TestRuntimeTargetChange(t *testing.T) {
 	a := newCountServer(t)
 	b := newCountServer(t)
@@ -372,7 +369,7 @@ func TestRuntimeTargetChange(t *testing.T) {
 }
 
 // TestInflightCompletesOnTargetChange proves a request already in flight to the
-// old target completes normally after the target switches (S5.T16.2; ADR-0024
+// old target completes normally after the target switches (ADR-0024
 // decision 4).
 func TestInflightCompletesOnTargetChange(t *testing.T) {
 	release := make(chan struct{})
@@ -413,8 +410,8 @@ func TestInflightCompletesOnTargetChange(t *testing.T) {
 }
 
 // TestResponseBodiesAreDrained proves the client reads and discards the whole
-// response body rather than closing the connection early on it (S5.T16.2;
-// ADR-0024 decision 3).
+// response body rather than closing the connection early on it (ADR-0024
+// decision 3).
 func TestResponseBodiesAreDrained(t *testing.T) {
 	payload := make([]byte, 8<<20)
 	var writeErrs atomic.Int64
@@ -440,7 +437,7 @@ func TestResponseBodiesAreDrained(t *testing.T) {
 
 // TestInflightBoundAndDropped proves the in-flight bound holds against a slow
 // stand-in and that arrivals it cannot start are counted as dropped
-// (S5.T16.2; ADR-0021/ADR-0022).
+// (ADR-0021/ADR-0022).
 func TestInflightBoundAndDropped(t *testing.T) {
 	release := make(chan struct{})
 	var current, maxSeen int64
@@ -474,7 +471,7 @@ func TestInflightBoundAndDropped(t *testing.T) {
 }
 
 // TestStartupLogLine proves the startup line records rank, share, target and
-// bounds (S5.T16.2).
+// bounds.
 func TestStartupLogLine(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&buf, nil))
@@ -496,7 +493,7 @@ func TestStartupLogLine(t *testing.T) {
 }
 
 // TestConfigFromEnvStrict proves startup env parsing follows the dummy
-// backend's strictness and names the variable on failure (S5.T16.2).
+// backend's strictness and names the variable on failure.
 func TestConfigFromEnvStrict(t *testing.T) {
 	base := map[string]string{
 		"RANK":             "1",

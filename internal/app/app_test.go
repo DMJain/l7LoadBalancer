@@ -21,7 +21,7 @@ import (
 
 // testConfig builds a config ready for Build: the given backends, round-robin
 // selection, and every listener on :0 so a test never binds a fixed port. The
-// Sprint 3 durations are supplied so Validate's defaulting has nothing to do
+// health, circuit and metrics durations are supplied so Validate's defaulting has nothing to do
 // and the test config is explicit about the cadence Build reads.
 func testConfig(backends []config.BackendConfig) *config.Config {
 	probeInterval := time.Second
@@ -165,8 +165,8 @@ func TestBuildExposesRegistry(t *testing.T) {
 }
 
 // TestBuildExposesLoadedConfig proves Build records the config it wired, so
-// the reload operation (S4.T3) has the currently loaded config to diff
-// against; in T2 only tests read it.
+// the reload operation has the currently loaded config to diff
+// against.
 func TestBuildExposesLoadedConfig(t *testing.T) {
 	silenceDefault(t)
 

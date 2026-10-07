@@ -1,4 +1,4 @@
-# Benchmark config (S5.T4-harness): plain-HTTP client, consistent-hashing LB, four plain-HTTP backends. See bench/README.md.
+# Benchmark config: plain-HTTP client, consistent-hashing LB, four plain-HTTP backends. See bench/README.md.
 listen: ":8080"
 algorithm: "consistent_hash"
 metrics:

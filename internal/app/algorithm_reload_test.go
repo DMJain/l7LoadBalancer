@@ -53,7 +53,7 @@ func algorithmGauge(t *testing.T, application *App, want string) {
 		application.Collector().Registry(), strings.NewReader(expected), "lb_algorithm_info"))
 }
 
-// TestReloadSwapsAlgorithm is S5.T20.7's core property: a reload that changes
+// TestReloadSwapsAlgorithm is the core property: a reload that changes
 // only the algorithm is applied, not rejected. Routing changes observably
 // (round-robin spreads one client over both backends; consistent hashing pins
 // it to one), the reload logs both names, the gauge moves, and the last reload

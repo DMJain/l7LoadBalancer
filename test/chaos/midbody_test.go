@@ -13,7 +13,7 @@ import (
 
 // ServePartialThenClose installs a handler that sends 200 headers declaring
 // more body bytes than it writes, then abruptly closes the connection. The
-// proxy's body read then ends on a non-EOF error — S4.T6's mid-body-death
+// proxy's body read then ends on a non-EOF error — the mid-body-death
 // signal, distinct from a clean io.EOF.
 func (fb *flippableBackend) ServePartialThenClose(body string) {
 	h := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -34,7 +34,7 @@ func (fb *flippableBackend) ServePartialThenClose(body string) {
 	fb.handler.Store(&h)
 }
 
-// TestChaosBackendDiesMidBody is S4.T6 arc (i). A backend sends response headers
+// TestChaosBackendDiesMidBody is arc (i). A backend sends response headers
 // then dies before completing the body: the client keeps the bytes it received
 // under the 200 the headers established, and the death leaves one WARN line with
 // reason backend_died_mid_response carrying the backend, the path, and the bytes
@@ -78,7 +78,7 @@ func TestChaosBackendDiesMidBody(t *testing.T) {
 	require.Equal(t, 0.0, active, "the active-requests gauge must return to zero")
 }
 
-// TestChaosBackendKilledBeforeHeaders is S4.T6 arc (ii) and half of Sprint 4's
+// TestChaosBackendKilledBeforeHeaders is arc (ii) and half of the
 // exit criterion. A backend killed before it answers is a genuine transport
 // failure: the client gets a clean 502, the failure reaches the observers (the
 // fixed penalty is recorded), nothing crashes, and no active-connection slot or

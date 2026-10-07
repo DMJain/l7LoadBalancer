@@ -43,7 +43,7 @@ func assertCircuitState(t *testing.T, c *metrics.Collector, backendName string, 
 }
 
 // TestBreakerDrivesCircuitStateGaugeThroughFullCycle proves lb_circuit_state is
-// written from the same CircuitTransition signal the ticket-05 log lines fire
+// written from the same CircuitTransition signal the circuit log lines fire
 // from, tracking closed -> open -> half-open -> closed -> open with exactly one
 // series at 1 and the other two at 0 at every step (ADR-0013 decision 15).
 func TestBreakerDrivesCircuitStateGaugeThroughFullCycle(t *testing.T) {
@@ -76,7 +76,7 @@ func TestBreakerDrivesCircuitStateGaugeThroughFullCycle(t *testing.T) {
 
 // TestBreakerSetsCircuitStateOpenOnTrialFailure covers the CircuitReopened
 // path the full-cycle test does not: a failed half-open trial drives the gauge
-// from half_open back to open, the metric counterpart of the ticket-05
+// from half_open back to open, the metric counterpart of the
 // circuit_opened/trial_failure log line.
 func TestBreakerSetsCircuitStateOpenOnTrialFailure(t *testing.T) {
 	const cooldown = 50 * time.Millisecond

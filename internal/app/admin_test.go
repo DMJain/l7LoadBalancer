@@ -121,7 +121,7 @@ func getLast(t *testing.T, base string) lastReloadBody {
 }
 
 // TestAdminReloadRejectionsLeaveConfigUnchanged is the D2 end-to-end check from
-// the demo-dashboard gap report (S5.T20.1): each kind of invalid body is
+// the demo-dashboard gap report: each kind of invalid body is
 // rejected with 422 and a readable message, the rejection is recorded for
 // GET /admin/reload/last, it is logged like a SIGHUP rejection, and the running
 // config and registry are untouched (ADR-0015 decisions 13–16).

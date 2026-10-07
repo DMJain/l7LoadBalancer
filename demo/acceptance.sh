@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 #
-# Acceptance check for the local live demo (S5.T16.5, ADR-0023 decisions 10
-# and 16).
+# Acceptance check for the local live demo (ADR-0023 decisions 10 and
+# 16).
 #
 # Proves the demo rig is sound: latency injected on one backend stays on that
 # backend (phase 1, round robin), and a hot reload of the one LB's algorithm to
 # p2c_ewma, with no restart, moves traffic off it with zero client errors
-# (phase 2, S5.T20.8). Phase 1 is the guard against the failure mode that sank
+# (phase 2). Phase 1 is the guard against the failure mode that sank
 # the published `degraded` slice, where the injected delay reached every
 # backend.
 #
@@ -16,7 +16,7 @@
 #
 # It drives the generators' control endpoints, the backends' admin listeners and
 # the LB's reload admin endpoint directly, and reads Prometheus's HTTP API; it
-# does not depend on the control service (S5.T16.4). The reload goes through
+# does not depend on the control service. The reload goes through
 # POST /admin/reload, the same operation SIGHUP runs (ADR-0015 decision 14), so
 # the check never edits demo/configs/lb.yaml. Those ports stay on the demo's internal network, so the
 # check reaches them by exec'ing `wget` inside the running Prometheus container
@@ -26,7 +26,7 @@
 # Verification hook: INJECT_BACKENDS (default "backend3") selects which
 # backend(s) phase 1 injects 200 ms into, so the mandated negative run can put
 # latency on a second backend too. The assertion does not follow it — it stays
-# the spec's fixed shape (backend3 slow, backends 1/2/4 fast) — so
+# the fixed shape (backend3 slow, backends 1/2/4 fast) — so
 # `INJECT_BACKENDS="backend2 backend3" demo/acceptance.sh` makes phase 1 fail,
 # naming the backend whose latency is not isolated.
 #

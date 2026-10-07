@@ -1,281 +1,178 @@
 # Benchmarks
 
-The benchmark rig: the LB, Nginx (pinned 1.27.x), four dummy backends, and a
-vegeta load generator on a single flat bridge network, so container-to-container
-networking is identical for every service and the LB-vs-Nginx comparison is
-consistent across hosts. vegeta is the only load generator — wrk has no HTTP/2
-support ([ADR-0020](../docs/adr/0020-benchmark-tool-vegeta-over-wrk.md)).
+The benchmark compares the load balancer (LB) with Nginx 1.27.x. Both sit in front of four dummy backends, and vegeta generates the load. All containers share one flat bridge network, so the network path is the same for every service. The rig uses only vegeta, because wrk has no HTTP/2 support ([ADR-0020](../docs/adr/0020-benchmark-tool-vegeta-over-wrk.md)).
 
-`./bench/run.sh all` runs the full 71-run matrix and writes reproducible
-`.txt` summaries, `.json` reports and `.hdr` histograms under `bench/results/`.
-
-## Layout
-
-- `run.sh` — the execution harness and the single source of truth for the
-  matrix parameters (rates, durations, warmup, thresholds). Slices: `core`
-  (48 runs, HTTP/2), `protocol` (12 runs, HTTP/1.1), `failure` (3 runs),
-  `degraded` (8 runs, one backend slow), `all` (71 runs), and `smoke` (10 short
-  attacks, a preflight that is deliberately **not** part of `all`).
-- `docker-compose.yml` — the topology: `lb`, `nginx`, `backend1`–`backend4`, `vegeta`.
-- `nginx/http11/roundrobin.conf`, `nginx/h2/{roundrobin,leastconn,consistent-hash,p2c-ewma}.conf`
-  — Nginx plain HTTP/1.1 and TLS+HTTP/2 (`http2 on;`), four backends, keepalive
-  100, `worker_processes 2`. `roundrobin` and `leastconn` (`least_conn`) are
-  **matched**; `consistent-hash` (`hash $remote_addr consistent`, no bounded
-  loads) and `p2c-ewma` (`random two least_conn`, no latency signal) are
-  **nearest-equivalent** and their headers state the gap. Organised by protocol
-  then algorithm, mirroring `configs/`.
-- `configs/http11/`, `configs/h2/` — eight self-contained LB configs, one per
-  algorithm × client protocol (`roundrobin`, `leastconn`, `consistent-hash`,
-  `p2c-ewma`). No templating; each is readable in isolation.
-- `vegeta/Dockerfile` — pinned vegeta built for the host architecture (the
-  popular prebuilt image is amd64-only and would run under emulation on arm64).
-- `results/{core,protocol,failure,degraded}/` — the harness's output; `.txt` +
-  `.hdr` are committed for every result, plus a `.json` vegeta report beside each
-  `save_result` set (the core/protocol throughput results and every degraded
-  result). Raw `.gob`/`.csv` scratch lands in the gitignored `results/.tmp/`. The
-  `.json` is the machine-readable source the results generator reads its
-  percentiles from (S5.T10.1); the `.txt` carries the same report human-readable
-  plus the metadata header, and the `.hdr` the p99.9 the JSON report lacks. The
-  latency sweep and the failure summary files are read for their `.txt` metadata
-  only, so they carry no `.json`.
-- `results/provenance.json` — the machine-readable record of the invocation that
-  produced the results beside it (see *Provenance record*).
-
-## Running
-
-The whole matrix from the repo root:
+## Reproduce the published numbers
 
 ```sh
-./bench/run.sh all      # ~2h; use core|protocol|failure|degraded to run one slice
+make bench-repro      # about 2 to 2.5 h on Docker Desktop
 ```
 
-Before a full run, `./bench/run.sh smoke` is the preflight gate: it brings up
-every (protocol, algorithm, competitor) combination the matrix uses — h2 × all
-four algorithms and HTTP/1.1 × round-robin, each against both competitors (10
-attacks) — and runs a 2 s, 50 req/s attack on the 10 KiB endpoint. Any
-combination below 100% success fails the slice with a nonzero exit naming it.
-`smoke` is not part of `all`; its rate, duration and size are constants at the
-top of `run.sh`.
+You need:
 
-Each slice prints a summary table (algorithm, size, competitor, p50, p99,
-throughput) and writes per-run files named by their parameters, e.g.
-`results/core/roundrobin-10kb-nginx-throughput.txt` (with `.json` and `.hdr`
-siblings) and `results/failure/roundrobin-10kb-sighup-noop.txt`. Protocol-slice
-filenames carry an `http11` token (spec §30), e.g.
-`results/protocol/roundrobin-10kb-http11-lb-throughput.txt`; the latency `.txt`
-holds one report per rate, with a `-latency-<pct>.hdr` histogram beside it.
-
-Peak throughput is discovered automatically: seed at the size's starting rate,
-double until a step fails (p99 > 100 ms, error rate > 1%, or the generator
-delivered < 95% of the target rate), then bisect to the size's granularity.
-Latency is then profiled at 30/50/70/90% of that peak. The first 5 s of every
-measured step is discarded as warmup. These are constants at the top of
-`run.sh`, not flags. Starting rates differ by payload size — 200 B and 10 KB
-seed at 1000 req/s, 1 MB at 100 req/s — because the generator's ceiling is
-**bytes-per-second**-bounded, not requests-per-second-bounded (ADR-0022).
-
-Failure mode runs round-robin at 10 KB over TLS+HTTP/2 at 50% of discovered
-peak for 60 s. `backend-kill` stops `backend3` at T+30 s. The two **reload**
-runs send a SIGHUP to the LB at T+30 s and are judged against criteria fixed
-before the run: zero non-2xx responses and zero transport errors over the whole
-run, and post-event p99 within `RELOAD_P99_FACTOR` (2×) of the same run's
-pre-event p99 (post-warmup to the event). Each result file carries both windows'
-p99, the error counts and a `verdict=PASS|FAIL` line naming any failed
-criterion, and the summary table shows the verdict. Both runs write a
-`-timeseries.txt` (per-second cumulative stats) beside the summary.
-
-- **no-op reload** (`sighup-noop`) re-reads an unchanged config, measuring the
-  bare cost of the reload path under load.
-- **drain reload** (`sighup-drain`) rewrites the mounted config in place — `cp`
-  over the same inode, never a rename — to drop `backend4`, then SIGHUPs. It
-  mounts a working copy of the committed round-robin h2 config in the results
-  scratch area, so the committed configs are never modified. It passes only if
-  the no-op criteria hold **and** `backend4`'s own arrival counter does not move
-  between "reload applied" (the LB's `config_reloaded` line) and the end of the
-  run. The counter is sampled just before the signal, once the reload is
-  applied, and at the end; all three snapshots and both deltas are recorded, but
-  only the second interval is judged — the first is legitimate pre-swap traffic.
-  After the run the LB is recreated on the committed config. A rename instead of
-  a `cp` trips an inode assertion and aborts the run, because the single-file
-  bind mount would keep pointing at the old file and the run would test nothing.
-
-Detection time is dominated by the active health checker's cadence: no bench
-config sets `health.probe_interval`, so runs use the default 5 s with 3
-consecutive failures before ejection (set it in a config to change it).
-
-Nginx and the LB are compared under a constrained match — same topology, same
-keepalive pool, and either the same algorithm (**matched**: round-robin,
-least-connections) or Nginx's nearest equivalent (**nearest-equivalent**:
-consistent-hash without bounded loads, p2c-ewma without a latency signal) — so a
-gap is attributable to implementation, not tuning. Each result header records
-which kind its comparison was, and every nearest-equivalent config states its
-gap ([ADR-0020](../docs/adr/0020-benchmark-tool-vegeta-over-wrk.md)).
-
-## Degraded slice
-
-`./bench/run.sh degraded` recreates `backend3` with a 50 ms injected delay for
-the whole slice, runs the four algorithms × both competitors over TLS+HTTP/2 on
-the 10 KiB endpoint (8 runs, 30 s each plus the standard 5 s warmup), and
-restores `backend3` to 0 ms when it ends — including on failure. All eight runs
-use one absolute rate, half the h2/round-robin/10 KiB **LB** peak, so their
-distributions and latencies are directly comparable; when `all` runs, that peak
-is reused from the core slice in the same invocation, and when `degraded` runs
-alone it is discovered first with the backends still fast.
-
-Unlike the core slice, every degraded result is bracketed by `/stats` reads, so
-the headline is the per-backend request share (counts and percentages), with the
-summary table showing p50, p99 and all four shares. Its files live under
-`results/degraded/`. The expected shape, which the numbers should show:
-
-- **p2c-ewma** and **leastconn** shift load away from the slow `backend3` (its
-  latency signal and its held connections make it the least attractive);
-- **round-robin** splits evenly, so roughly a quarter of the requests pay the
-  50 ms;
-- the LB's **consistent-hash** spills if `backend3` owns the hot key (bounded
-  loads cap its share), while Nginx's `hash $remote_addr consistent` does not.
-
-`/stats` reads bypass the injected delay (it is a control endpoint). The active
-health checker probes `backend3`'s own URL, so its probe also waits 50 ms, but
-that is far below the checker's 2 s probe timeout — `backend3` stays healthy and
-is not ejected for the whole run.
-
-## Reproducing the published numbers
-
-`make bench-repro` takes a stranger from a fresh clone to the full result set in
-one command:
-
-```sh
-make bench-repro      # ~2–2.5 h on Docker Desktop
-```
-
-Prerequisites:
-
-- Docker Desktop with **at least 8 vCPUs** assigned — the fixed 8-vCPU split is
-  never scaled from the host, so fewer cannot honour the cpusets;
-- `openssl` (for `scripts/generate-cert.sh`);
+- Docker Desktop with Compose v2 and **at least 8 vCPUs**. The CPU split is fixed and does not scale down.
+- `openssl`, for `scripts/generate-cert.sh`.
 - `make`.
 
-It runs these steps in order, stopping at the first failure:
+`make bench-repro` runs `bench/repro.sh`. It does these steps in order and stops at the first failure:
 
-1. **Preflight** — refuses to start unless Docker, Compose v2, `openssl` and
-   `make` are present, Docker reports at least 8 vCPUs, no container is running,
-   and the working tree is clean (untracked files included). Each refusal prints
-   what is wrong and how to fix it; running containers are listed by ID and
-   image, and the reproducer **never stops containers itself**.
+1. Check the prerequisites. It refuses to start if a tool is missing, Docker has fewer than 8 vCPUs, any container is running, or the working tree is not clean (untracked files count). Each refusal tells you how to fix it. The script never stops containers itself.
 2. Generate the certificates.
 3. Build the bench images.
-4. Run the smoke slice (`smoke`, the preflight gate — not part of `all`).
+4. Run the `smoke` slice.
 5. Run the full matrix (`all`).
 
-The published run is produced by this command from a fresh clone. The harness
-itself (`bench/run.sh`) is a development tool that only *records* a dirty tree or
-running containers; refusal lives here, at the publication boundary.
+Then run `bench/generate-results.sh` to write the tables into `RESULTS.md`.
 
-## CPU pinning and run-time checks
-
-The rig pins each role to a fixed slice of an 8-vCPU host so that a throughput
-difference cannot come from one competitor being starved or over-provisioned.
-The split, reused verbatim as the methodology statement: **LB and Nginx: cores 0–1; backends 1–4: cores 2–5, one each; vegeta: cores 6–7.** It is set with `cpuset` in `docker-compose.yml` and is never scaled from the available CPU count — scaled splits give incomparable numbers.
-
-The harness proves at run time that the pinning took effect, aborting the slice
-with the check name and the value it saw otherwise:
-
-- after every LB (re)create, it reads `gomaxprocs` from the LB's startup line in
-  the container logs and requires **2** (cores 0–1);
-- after every Nginx (re)create, it waits until Nginx serves a 200 through its
-  listener (workers fork slightly after the container starts), then counts
-  worker processes and requires **2** (cores 0–1, matching the
-  `worker_processes 2` in every competitor config).
-
-Tear the stack down when finished:
+When you finish, remove the stack:
 
 ```sh
 docker compose -f bench/docker-compose.yml down
 ```
 
-## Generator bounds and honest peak discovery
+## Run single slices
 
-The load generator is the one component that can fail without the load balancer
-being at fault, so the harness bounds it and refuses to publish a number it could
-not produce (ADR-0021, ADR-0022):
+```sh
+./bench/run.sh smoke      # quick check, not part of all
+./bench/run.sh core       # 48 runs, HTTP/2
+./bench/run.sh protocol   # 12 runs, HTTP/1.1
+./bench/run.sh failure    # 3 runs
+./bench/run.sh degraded   # 8 runs, one slow backend
+./bench/run.sh all        # 71 runs, about 2 h
+```
 
-- **Worker bound.** Every `vegeta attack` runs with `-max-workers` and
-  `-max-connections` — both **1024** (`VEGETA_MAX_WORKERS` /
-  `VEGETA_MAX_CONNECTIONS` in `run.sh`). Without it, vegeta's `-max-workers`
-  default is unbounded: at 1000 req/s against the slow 1 MB path it spawns
-  thousands of concurrent in-flight requests, the LB's per-stream buffers grow,
-  and vegeta + LB together OOM the Docker VM (both were OOM-killed at ~3 GB each
-  on the 8 GB VM). The cap keeps both under a few hundred MiB.
-- **Delivery guard.** A peak-search step counts as sustained only if it cleared
-  the p99/error ceilings **and** delivered at least `DELIVERY_MIN_RATIO_PCT`
-  (95%) of its target rate. A worker-capped generator that cannot keep up
-  under-sends and reports artificially low latency; the guard turns that into a
-  failed step, so the search backs off instead of recording a false peak. An
-  under-delivered scenario is reported as `under-delivered; harness-limited; not
-  a peak`, and a real one carries `peak_status=sustained`.
-- **Per-size seed rates.** The search starts from a per-size seed because the
-  generator's ceiling is bytes-per-second-bounded: 200 B and 10 KB seed at 1000
-  req/s (cap 200000), while 1 MB seeds at 100 req/s (cap 500) — the 1 MB rig
-  ceiling is ~200 req/s, so seeding it at 1000 floods the VM before the search
-  can back off.
-- **Heap cap (defensive).** The `vegeta` container also sets `GOMAXPROCS=2`
-  (matching its cores 6–7 cpuset), `GOMEMLIMIT=3GiB`, and `GOGC=50` (ADR-0021),
-  so a mis-seeded future size still cannot balloon the heap.
+`run.sh` holds all matrix parameters (rates, durations, warmup, thresholds) as constants at the top of the file. They are not flags. Unlike `repro.sh`, `run.sh` does not refuse a dirty tree or running containers. It only records them.
 
-The point is that "no sustainable rate on this rig" is a valid, publishable
-result: the harness measures the load balancer, and says so when the measurement
-rig — not the load balancer — is the limit.
+Each slice prints a summary table (algorithm, size, competitor, p50, p99, throughput). It writes files named by their parameters, for example `results/core/roundrobin-10kb-nginx-throughput.txt` and `results/failure/roundrobin-10kb-sighup-noop.txt`. Protocol-slice names carry an `http11` token, for example `results/protocol/roundrobin-10kb-http11-lb-throughput.txt`.
 
-## Provenance record
+### smoke
 
-Every invocation writes `bench/results/provenance.json` when it starts and
-updates it when it finishes (an aborted slice still leaves a record), so any
-result set traces back to exact code and hardware. The harness never refuses a
-dirty tree or running containers — it records them; the reproducer and the
-results generator are what refuse a dirty record.
+`smoke` starts every combination the matrix uses: HTTP/2 with all four algorithms, and HTTP/1.1 with round-robin, each against both competitors (10 attacks). Each attack runs for 2 s at 50 req/s on the 10 KiB endpoint. If any combination has less than 100% success, the slice exits nonzero and names it.
+
+### core and protocol: peak and latency
+
+The harness finds the peak rate in these steps:
+
+1. Start at the seed rate for the response size.
+2. Double the rate until a step fails. A step fails if p99 is above 100 ms, more than 1% of requests fail, or vegeta delivered less than 95% of the target rate.
+3. Bisect down to the size's granularity.
+
+| Size | Seed rate (req/s) | Granularity (req/s) |
+|---|---|---|
+| 200 B, 10 KiB | 1000 | 500 |
+| 1 MiB | 100 | 25 |
+
+The harness then measures latency at 30, 50, 70 and 90% of the peak. It drops the first 5 s of every measured step as warmup. The seed rates differ because the generator's limit is in bytes per second, not requests per second ([ADR-0022](../docs/adr/0022-honest-benchmarking-under-generator-limits.md)).
+
+### failure
+
+Each run uses round-robin at 10 KiB over TLS and HTTP/2, at 50% of the peak, for 60 s. The event fires at second 30.
+
+- `backend-kill` stops `backend3`.
+- `sighup-noop` sends `SIGHUP` with an unchanged config. This measures the cost of the reload path under load.
+- `sighup-drain` removes `backend4` from the config and sends `SIGHUP`.
+
+A reload run passes if it has zero non-2xx responses and zero transport errors, and if its p99 after the event is within `RELOAD_P99_FACTOR` (2×) of its p99 before the event. The drain run also requires that the `backend4` request counter does not change between the LB's `config_reloaded` log line and the end of the run. The harness reads the counter before the signal, after the reload applies, and at the end. It judges only the second interval, because traffic before the swap is normal. Each result file has a `verdict=PASS|FAIL` line. Both reload runs also write a `-timeseries.txt` file with per-second stats.
+
+The drain run edits a working copy of the committed config. It overwrites the file with `cp`, so the inode stays the same. A rename would leave the single-file bind mount on the old file, so the run checks the inode and aborts if it changed. After the run, the harness recreates the LB on the committed config.
+
+Failure detection depends on the active health checker. No bench config sets `health.probe_interval`, so the checker uses the default: a probe every 5 s, and 3 failures in a row eject a backend.
+
+### degraded
+
+The slice restarts `backend3` with a 50 ms delay. It runs the four algorithms against both competitors over TLS and HTTP/2 at 10 KiB, for 30 s each plus the 5 s warmup. It restores `backend3` to 0 ms at the end, also on failure.
+
+All eight runs use one rate: half the LB's HTTP/2 round-robin 10 KiB peak. With `all`, the slice reuses that peak from the core slice. Run alone, it first finds the peak while the backends are still fast.
+
+The harness reads each backend's `/stats` before and after every run, so the main result is the share of requests per backend. `/stats` skips the injected delay. The health probe to `backend3` waits 50 ms, which is far below the 2 s probe timeout, so `backend3` stays healthy.
+
+Expected result:
+
+- `p2c-ewma` and `leastconn` move load away from `backend3`.
+- `roundrobin` splits evenly, so about a quarter of requests wait 50 ms.
+- The LB's `consistent-hash` spills if `backend3` owns the hot key. Nginx's `hash $remote_addr consistent` does not spill.
+
+## Fair comparison
+
+The LB and Nginx use the same topology and the same keepalive pool (100). The algorithm is either the same or Nginx's nearest equivalent:
+
+| Algorithm | Nginx config | Kind |
+|---|---|---|
+| round-robin | default | matched |
+| least-connections | `least_conn` | matched |
+| consistent-hash | `hash $remote_addr consistent` (no bounded loads) | nearest-equivalent |
+| p2c-ewma | `random two least_conn` (no latency signal) | nearest-equivalent |
+
+Each result header records the kind. Each nearest-equivalent Nginx config states its gap in its header.
+
+### CPU pinning
+
+Each role has fixed cores on an 8-vCPU host, so no competitor gets more or less CPU than the other:
+
+**LB and Nginx: cores 0–1; backends 1–4: cores 2–5, one each; vegeta: cores 6–7.**
+
+`docker-compose.yml` sets this with `cpuset`. The split never scales with the host, because a scaled split gives numbers that you cannot compare. At run time the harness checks the pinning and aborts the slice if a check fails:
+
+- After each LB start, the LB's startup log line must show `gomaxprocs` = 2.
+- After each Nginx start, the harness waits for a 200 response and then counts 2 worker processes. This matches `worker_processes 2` in every Nginx config.
+
+### Load generator limits
+
+The load generator can fail when the LB is not at fault. So the harness bounds it and does not publish a number it could not produce ([ADR-0021](../docs/adr/0021-bounded-memory-in-benchmark-harness.md), [ADR-0022](../docs/adr/0022-honest-benchmarking-under-generator-limits.md)).
+
+- **Worker cap.** Every `vegeta attack` uses `-max-workers` and `-max-connections` of 1024 (`VEGETA_MAX_WORKERS`, `VEGETA_MAX_CONNECTIONS`). Without a cap, vegeta at 1000 req/s on the slow 1 MB path starts thousands of requests at once. Vegeta and the LB then ran out of memory at about 3 GB each on the 8 GB VM. The cap keeps both under a few hundred MiB.
+- **Delivery check.** A step counts only if vegeta sent at least `DELIVERY_MIN_RATIO_PCT` (95%) of the target rate. A capped generator that sends too little shows false low latency, so the step fails and the search backs off. Such a result shows `under-delivered; harness-limited; not a peak`. A real peak shows `peak_status=sustained`.
+- **Rate caps.** 200 B and 10 KB cap at 200000 req/s. 1 MB caps at 500 req/s, because the rig tops out near 200 req/s at 1 MB.
+- **Heap limits.** The `vegeta` container sets `GOMAXPROCS=2`, `GOMEMLIMIT=3GiB` and `GOGC=50`.
+
+"No sustainable rate on this rig" is a valid result. The harness says so when the rig, not the LB, is the limit.
+
+### Backend TLS in the HTTP/2 slices
+
+The HTTP/2 LB configs use `https://backend*:8080` with `tls_skip_verify: true` for the shared self-signed certificate. The health checker uses its own transport, which this setting does not reach. So the `lb` service also sets `SSL_CERT_FILE=/certs/server.crt`. The certificate lists `backend1` to `backend4`, so the probes pass. Nginx proxies to `https://backends` with `proxy_ssl_verify off`. Nginx uses HTTP/1.1 to the backends, and the LB uses HTTP/2. The client side of the comparison stays matched.
+
+## Files
+
+- `run.sh`: the harness.
+- `repro.sh`: the one-command reproducer behind `make bench-repro`.
+- `docker-compose.yml`: services `lb`, `nginx`, `backend1` to `backend4`, `vegeta`.
+- `configs/http11/`, `configs/h2/`: eight LB configs, one for each algorithm and client protocol.
+- `nginx/http11/roundrobin.conf`, `nginx/h2/{roundrobin,leastconn,consistent-hash,p2c-ewma}.conf`: Nginx configs with four backends, keepalive 100 and `worker_processes 2`. The HTTP/2 configs use TLS with `http2 on;`.
+- `vegeta/Dockerfile`: builds a pinned vegeta for the host architecture. The common prebuilt image is amd64 only.
+- `results/{core,protocol,failure,degraded}/`: the output. Each result has a `.txt` (report and metadata) and a `.hdr` histogram (it has the p99.9). Throughput and degraded results also have a `.json` vegeta report, which the generator reads. Scratch files go to the gitignored `results/.tmp/`.
+- `results/provenance.json`: where the results came from (see below).
+- `generate-results.sh`: builds the `RESULTS.md` tables.
+
+### Provenance record
+
+Each run writes `results/provenance.json` at the start and updates it at the end. An aborted slice still leaves a record.
 
 | Field | Meaning |
 |---|---|
-| `git_sha` | the commit the run started from |
-| `git_dirty` | whether the tree had uncommitted or untracked changes — a separate boolean, never a `-dirty` suffix |
-| `slices` | the slices actually run (`all` expands to `core`, `protocol`, `failure`) |
+| `git_sha` | the commit of the run |
+| `git_dirty` | true if the tree had uncommitted or untracked changes (ignores `bench/results/`) |
+| `slices` | the slices that ran (`all` expands to `core`, `protocol`, `failure`) |
 | `start_time`, `finish_time` | UTC ISO-8601 timestamps |
-| `host_os` | host OS, kernel and architecture (`uname -srm`) |
-| `host_cpu` | host CPU model (`sysctl` on macOS, `/proc/cpuinfo` on Linux) |
+| `host_os` | `uname -srm` |
+| `host_cpu` | CPU model (`sysctl` on macOS, `/proc/cpuinfo` on Linux) |
 | `docker_version`, `compose_version` | Docker engine and Compose plugin versions |
-| `docker_cpus`, `docker_memory_bytes` | vCPUs and memory as Docker reports them |
-| `cpusets` | the per-service cpuset split read from the resolved compose config |
-| `lb_go_version`, `lb_gomaxprocs` | the LB's Go version and effective GOMAXPROCS, from its startup line |
-| `nginx_version`, `nginx_workers` | Nginx version and running worker count |
-| `vegeta_version` | the pinned vegeta source tag the image is built from (the `go install`-built binary embeds no version) |
+| `docker_cpus`, `docker_memory_bytes` | vCPUs and memory that Docker reports |
+| `cpusets` | the cpuset of each service, from the resolved compose config |
+| `lb_go_version`, `lb_gomaxprocs` | from the LB startup line |
+| `nginx_version`, `nginx_workers` | Nginx version and worker count |
+| `vegeta_version` | the pinned vegeta source tag |
 
-Fields only knowable once containers exist (`lb_*`, `nginx_*`) are best-effort:
-they are `null` when the container is not yet up (the record written at start)
-and populated when the run finishes. `git_dirty` ignores `bench/results/` — the
-harness's own output — so a repeated invocation is not reported dirty by a
-previous run's record.
+The `lb_*` and `nginx_*` fields are `null` until the containers exist.
 
-## Results generator
+### Results generator
 
-`bench/generate-results.sh` turns the raw `results/` output into the published
-tables, so no published number is typed by hand. It takes an optional results
-directory and document path (defaults `bench/results` and `RESULTS.md`), writes
-only between `<!-- BEGIN GENERATED: <section> -->` / `<!-- END GENERATED -->`
-markers, preserves everything outside them byte-for-byte, and refuses a
-provenance record with `git_dirty: true`. A second run against the same results
-produces no diff. Sections: `methodology`, `core`, `protocol` (S5.T10.1) and
-`failure`, `degraded`, `hot-key` (S5.T10.2). It also checks that every
-latency/throughput figure the hand-written narrative quotes outside the markers
-(`ms`, `µs` or `req/s`, optionally prefixed `≈` or `~`) matches a generated
-cell, failing and naming any figure that does not (S5.T10.3); percentages,
-counts, sizes, ADR numbers and percentile names are never matched.
-`bench/generate-results_test.sh` runs it against the committed fixture under
-`bench/testdata/results-generator/` and is the regression gate (the generator is
-shell-only, TDD-exempt).
+`bench/generate-results.sh [results-dir] [doc]` defaults to `bench/results` and `RESULTS.md`. It writes only between `<!-- BEGIN GENERATED: <section> -->` and `<!-- END GENERATED -->` markers and keeps all other text byte for byte. The sections are `methodology`, `core`, `protocol`, `failure`, `degraded` and `hot-key`. It refuses a provenance record with `git_dirty: true`. A second run gives no diff.
 
-## Manual smoke checks
+The generator also checks each `ms`, `µs` or `req/s` figure in the prose (an optional `≈` or `~` prefix is allowed). Each must match a table cell, or the run fails and names the figure. It does not check percentages, counts or sizes. `bench/generate-results_test.sh` runs the generator against the fixture in `bench/testdata/results-generator/`.
 
-Plain HTTP/1.1 (the default topology):
+## Manual checks
+
+Plain HTTP/1.1:
 
 ```sh
 docker compose -f bench/docker-compose.yml up -d --build
@@ -283,8 +180,7 @@ curl -s http://127.0.0.1:8080/200b | wc -c    # through the LB
 curl -s http://127.0.0.1:8090/200b | wc -c    # through Nginx
 ```
 
-TLS + HTTP/2, with the backends also serving TLS so the LB speaks HTTP/2 to
-them:
+TLS and HTTP/2, with TLS on the backends too:
 
 ```sh
 scripts/generate-cert.sh
@@ -294,25 +190,9 @@ BACKEND_TLS_CERT_FILE=/certs/server.crt BACKEND_TLS_KEY_FILE=/certs/server.key \
 curl -sk --http2 https://127.0.0.1:8443/200b | wc -c   # through Nginx
 ```
 
-Vegeta idles under `up`; drive a run in-compose with an explicit entrypoint
-(the rig never uses a host-installed vegeta):
+The vegeta container idles after `up`. Run an attack inside compose, not with a vegeta on the host:
 
 ```sh
 echo "GET http://lb:8080/10kb" | docker compose -f bench/docker-compose.yml \
   run --rm --entrypoint vegeta vegeta attack -rate=500 -duration=10s > results.bin
 ```
-
-## How the h2 slice trusts its certs
-
-The h2 configs point the LB at `https://backend*:8080`, so the proxy transport
-sets `tls_skip_verify: true` for the shared self-signed cert. The active health
-checker, however, uses its own default-cloned transport (ADR-0011 decision 11)
-that the config knob cannot reach, so the compose `lb` service also sets
-`SSL_CERT_FILE=/certs/server.crt`; the cert's SAN list already covers
-`backend1`–`backend4`, so the probes verify successfully instead of ejecting
-every backend after three failures. Nginx's h2 configs likewise proxy
-`https://backends` with `proxy_ssl_verify off` — the backends serve TLS in this
-slice, so a plaintext upstream would fail. Nginx speaks HTTP/1.1 upstream here
-(it has no upstream-HTTP/2 directive for this topology), so the backend leg is
-TLS+h1 for Nginx and TLS+h2 for the LB; the client-facing comparison stays
-matched.

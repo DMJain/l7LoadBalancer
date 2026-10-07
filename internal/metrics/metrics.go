@@ -38,7 +38,7 @@ func (s CircuitState) valid() bool {
 // ClientProtocol is the closed set of lb_requests_total protocol label values:
 // the wire protocol a client-facing request arrived on. It is a distinct type
 // rather than a bare string so an unrecognized value is a deliberate
-// conversion, mirroring CircuitState (S5.T3-main).
+// conversion, mirroring CircuitState.
 type ClientProtocol string
 
 // ClientProtocol values. The set is closed at exactly three so the label
@@ -50,7 +50,7 @@ const (
 )
 
 // histogramBuckets are the provisional request-duration boundaries in seconds,
-// reserved in doc.go and documented as provisional pending Sprint 5's real
+// reserved in doc.go and documented as provisional pending real
 // benchmark data (ADR-0013 decision 4).
 var histogramBuckets = []float64{.005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10}
 
@@ -135,7 +135,7 @@ func (c *Collector) Registry() *prometheus.Registry {
 // protocol is the client-facing wire protocol ("http/1.1", "h2", or "h2c"). It
 // rides the request counter only — exactly three values, so cardinality is
 // bounded — and lets a dashboard prove HTTP/2 is actually negotiated rather
-// than silently falling back (S5.T3-main).
+// than silently falling back.
 func (c *Collector) ObserveRequest(backend, method, statusClass string, protocol ClientProtocol, d time.Duration) {
 	c.requests.WithLabelValues(backend, method, statusClass, string(protocol)).Inc()
 	c.duration.WithLabelValues(backend, method, statusClass).Observe(d.Seconds())
@@ -161,7 +161,7 @@ func (c *Collector) DeleteBackendHealthy(backend string) {
 // DeleteCircuitState removes every lb_circuit_state series for a backend — all
 // three state labels — for the same reason DeleteBackendHealthy exists. Neither
 // deletion touches the active-requests series: a removed backend's in-flight
-// requests still decrement it by name until its drain completes (S4.T4).
+// requests still decrement it by name until its drain completes.
 func (c *Collector) DeleteCircuitState(backend string) {
 	for _, s := range circuitStates {
 		c.circuit.DeleteLabelValues(backend, string(s))
@@ -221,7 +221,7 @@ func (c *Collector) DeleteActiveRequests(backend string) {
 // vocabulary ObserveRequest uses ("2xx", "5xx", …), not the raw code, so the
 // new counter stays visually consistent with lb_requests_total and its
 // cardinality stays bounded (3 endpoints × ~2 classes) (ADR-0013 decision 3,
-// ADR-0014 (S3.T12)).
+// ADR-0014).
 func (c *Collector) RecordProbe(endpoint string, statusCode int) {
 	c.probes.WithLabelValues(endpoint, statusClass(statusCode)).Inc()
 }
@@ -237,7 +237,7 @@ func statusClass(status int) string {
 // SetAlgorithm moves lb_algorithm_info from previous to current: the current
 // algorithm's series is set to 1 first and the previous one deleted after, so
 // a scrape never sees no current algorithm. Build seeds it with previous "";
-// a reload that changes the algorithm moves it (S5.T20.7, ADR-0013 amendment).
+// a reload that changes the algorithm moves it (ADR-0013 amendment).
 // The caller passes previous, so the collector keeps no state of its own.
 func (c *Collector) SetAlgorithm(previous, current string) {
 	c.algo.WithLabelValues(current).Set(1)

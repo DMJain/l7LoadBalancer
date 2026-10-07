@@ -115,7 +115,7 @@ func TestTransportResponseHeaderTimeoutFailsFast(t *testing.T) {
 }
 
 // TestReloadRejectsTransportChange proves a reload that changes the transport
-// section is rejected whole and names "transport" (S4.T8).
+// section is rejected whole and names "transport".
 func TestReloadRejectsTransportChange(t *testing.T) {
 	silenceDefault(t)
 

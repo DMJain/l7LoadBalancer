@@ -29,7 +29,7 @@ func openCircuit(t *testing.T, b *Backend, threshold int) {
 }
 
 // circuitAllow adapts Backend.CircuitAllow's (bool, CircuitTransition) pair to
-// the plain admission decision the S3.T3 tests assert on, leaving their
+// the plain admission decision the circuit tests assert on, leaving their
 // expectations unchanged while the transition value is covered separately.
 func circuitAllow(b *Backend, cooldown time.Duration) bool {
 	ok, _ := b.CircuitAllow(cooldown)
@@ -254,7 +254,7 @@ func TestBackendCircuitTrialResolves(t *testing.T) {
 	})
 }
 
-// TestBackendRearmTrialLetsAnotherRequestTakeTheTrial pins the S4.T5 fix for the
+// TestBackendRearmTrialLetsAnotherRequestTakeTheTrial pins the fix for the
 // half-open wedge: a request that took the trial but ended without a backend
 // outcome (a client cancellation) releases the slot via RearmTrial, so a later
 // request may probe the backend instead of the circuit denying every future

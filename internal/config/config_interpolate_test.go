@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestLoadEnvInterpolation covers S4.T16: ${VAR} expansion in backend URLs at
+// TestLoadEnvInterpolation covers ${VAR} expansion in backend URLs at
 // Load time. It uses t.Setenv and therefore never calls t.Parallel, because it
 // mutates the process environment.
 func TestLoadEnvInterpolation(t *testing.T) {
@@ -24,20 +24,20 @@ func TestLoadEnvInterpolation(t *testing.T) {
 	}{
 		{
 			name:    "host and port positions",
-			env:     map[string]string{"T16_HOST": "127.0.0.1", "T16_PORT": "9001"},
-			url:     "http://${T16_HOST}:${T16_PORT}",
+			env:     map[string]string{"INTERP_HOST": "127.0.0.1", "INTERP_PORT": "9001"},
+			url:     "http://${INTERP_HOST}:${INTERP_PORT}",
 			wantURL: "http://127.0.0.1:9001",
 		},
 		{
 			name:    "multiple variables across credentials and host",
-			env:     map[string]string{"T16_USER": "alice", "T16_PASS": "s3cr3t", "T16_HOST": "example.com", "T16_PORT": "8080"},
-			url:     "http://${T16_USER}:${T16_PASS}@${T16_HOST}:${T16_PORT}",
+			env:     map[string]string{"INTERP_USER": "alice", "INTERP_PASS": "s3cr3t", "INTERP_HOST": "example.com", "INTERP_PORT": "8080"},
+			url:     "http://${INTERP_USER}:${INTERP_PASS}@${INTERP_HOST}:${INTERP_PORT}",
 			wantURL: "http://alice:s3cr3t@example.com:8080",
 		},
 		{
 			name:    "variable adjacent to literal text",
-			env:     map[string]string{"T16_SUFFIX": "internal", "T16_PORT": "8080"},
-			url:     "http://api-${T16_SUFFIX}:${T16_PORT}/v1",
+			env:     map[string]string{"INTERP_SUFFIX": "internal", "INTERP_PORT": "8080"},
+			url:     "http://api-${INTERP_SUFFIX}:${INTERP_PORT}/v1",
 			wantURL: "http://api-internal:8080/v1",
 		},
 		{
@@ -49,7 +49,7 @@ func TestLoadEnvInterpolation(t *testing.T) {
 			name: "non-backend field passes through untouched",
 			yaml: `listen: ":8080"
 metrics:
-  listen: "${T16_METRICS_LISTEN}"
+  listen: "${METRICS_LISTEN_VAR}"
 backends:
   - name: "backend-a"
     url: "http://127.0.0.1:9001"
@@ -57,25 +57,25 @@ backends:
 			check: func(t *testing.T, cfg *Config) {
 				t.Helper()
 				require.NotNil(t, cfg.Metrics.Listen)
-				assert.Equal(t, "${T16_METRICS_LISTEN}", *cfg.Metrics.Listen)
+				assert.Equal(t, "${METRICS_LISTEN_VAR}", *cfg.Metrics.Listen)
 			},
 		},
 		{
 			name:      "unset variable fails naming backend and variable",
-			url:       "http://${T16_UNSET}:9001",
+			url:       "http://${UNSET_HOST_VAR}:9001",
 			wantErr:   true,
-			errSubstr: []string{`"backend-a"`, "T16_UNSET"},
+			errSubstr: []string{`"backend-a"`, "UNSET_HOST_VAR"},
 		},
 		{
 			name:      "empty variable fails naming backend and variable",
-			env:       map[string]string{"T16_EMPTY": ""},
-			url:       "http://${T16_EMPTY}:9001",
+			env:       map[string]string{"EMPTY_VAR": ""},
+			url:       "http://${EMPTY_VAR}:9001",
 			wantErr:   true,
-			errSubstr: []string{`"backend-a"`, "T16_EMPTY"},
+			errSubstr: []string{`"backend-a"`, "EMPTY_VAR"},
 		},
 		{
 			name:      "unterminated reference fails naming backend",
-			url:       "http://127.0.0.1:${T16_PORT",
+			url:       "http://127.0.0.1:${INTERP_PORT",
 			wantErr:   true,
 			errSubstr: []string{`"backend-a"`},
 		},
@@ -87,7 +87,7 @@ backends:
 		},
 		{
 			name:      "invalid name character fails naming backend",
-			url:       "http://127.0.0.1:${T16-PORT}",
+			url:       "http://127.0.0.1:${INTERP-PORT}",
 			wantErr:   true,
 			errSubstr: []string{`"backend-a"`},
 		},
@@ -98,16 +98,16 @@ backends:
   - name: "backend-a"
     url: "http://127.0.0.1:9001"
   - name: "backend-b"
-    url: "http://${T16_MISSING}:9002"
+    url: "http://${MISSING_VAR}:9002"
 `,
 			wantErr:   true,
-			errSubstr: []string{`"backend-b"`, "T16_MISSING"},
+			errSubstr: []string{`"backend-b"`, "MISSING_VAR"},
 			notInErr:  []string{`"backend-a"`},
 		},
 		{
 			name:      "failure error never contains an already-expanded value",
-			env:       map[string]string{"T16_PASS": "sup3r-s3cr3t"},
-			url:       "http://${T16_PASS}@host:9001/${T16-BAD}",
+			env:       map[string]string{"INTERP_PASS": "sup3r-s3cr3t"},
+			url:       "http://${INTERP_PASS}@host:9001/${INTERP-BAD}",
 			wantErr:   true,
 			errSubstr: []string{`"backend-a"`},
 			notInErr:  []string{"sup3r-s3cr3t"},
@@ -149,34 +149,34 @@ backends:
 
 // TestLoadEnvInterpolationResolvedURLIsValidated proves the resolved URL is
 // what Validate checks, so a typo in an expanded value fails exactly like a
-// literal typo (S4.T16).
+// literal typo.
 func TestLoadEnvInterpolationResolvedURLIsValidated(t *testing.T) {
-	t.Setenv("T16_GOOD", "127.0.0.1")
-	t.Setenv("T16_BAD", "not-a-url")
+	t.Setenv("GOOD_URL_VAR", "127.0.0.1")
+	t.Setenv("BAD_URL_VAR", "not-a-url")
 
-	good, err := Load(writeTempConfig(t, singleBackendYAML("http://${T16_GOOD}:9001")))
+	good, err := Load(writeTempConfig(t, singleBackendYAML("http://${GOOD_URL_VAR}:9001")))
 	require.NoError(t, err)
 	require.NoError(t, good.Validate())
 
-	bad, err := Load(writeTempConfig(t, singleBackendYAML("${T16_BAD}")))
+	bad, err := Load(writeTempConfig(t, singleBackendYAML("${BAD_URL_VAR}")))
 	require.NoError(t, err)
 	require.Error(t, bad.Validate())
 }
 
-// TestLoadEnvInterpolationValidationErrorIsRedacted covers S4.T17: the
+// TestLoadEnvInterpolationValidationErrorIsRedacted covers the
 // Load-then-Validate pipeline main runs over an interpolated URL fails naming
 // only the backend and the url field — neither the expanded value nor the
 // resolved URL appears, so a secret in the environment cannot reach the logs
 // through main's validation-error path. Load's own expansion errors already
-// never embed a value (S4.T16); Validate is the secret-bearing path. The
+// never embed a value; Validate is the secret-bearing path. The
 // environment value here appears verbatim in url.Parse's pre-redaction message
 // ("invalid port \":80a\" after host"), so the test fails if the raw URL is
 // wrapped back in.
 func TestLoadEnvInterpolationValidationErrorIsRedacted(t *testing.T) {
 	const secret = "80a"
-	t.Setenv("T17_BAD_PORT", secret)
+	t.Setenv("BAD_PORT_VAR", secret)
 
-	cfg, err := loadAndValidate(t, singleBackendYAML("http://127.0.0.1:${T17_BAD_PORT}"))
+	cfg, err := loadAndValidate(t, singleBackendYAML("http://127.0.0.1:${BAD_PORT_VAR}"))
 	require.Error(t, err)
 	require.Len(t, cfg.Backends, 1)
 	assert.Contains(t, err.Error(), "backend-a")
@@ -186,15 +186,15 @@ func TestLoadEnvInterpolationValidationErrorIsRedacted(t *testing.T) {
 
 // TestLoadEnvInterpolationReloadIsRemovePlusAdd proves the reload semantics: a
 // changed expansion is one removed plus one added backend, because identity is
-// (name, URL) (ADR-0015, S4.T16).
+// (name, URL) (ADR-0015).
 func TestLoadEnvInterpolationReloadIsRemovePlusAdd(t *testing.T) {
-	contents := singleBackendYAML("http://${T16_HOST}:9001")
+	contents := singleBackendYAML("http://${INTERP_HOST}:9001")
 
-	t.Setenv("T16_HOST", "host-old")
+	t.Setenv("INTERP_HOST", "host-old")
 	oldCfg, err := Load(writeTempConfig(t, contents))
 	require.NoError(t, err)
 
-	t.Setenv("T16_HOST", "host-new")
+	t.Setenv("INTERP_HOST", "host-new")
 	newCfg, err := Load(writeTempConfig(t, contents))
 	require.NoError(t, err)
 

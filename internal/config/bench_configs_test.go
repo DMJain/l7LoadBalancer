@@ -8,16 +8,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestBenchConfigs proves the eight shipped benchmark configs (S5.T4-harness,
-// issue 06) round-trip through the real Load + Validate pipeline, so a config
-// the benchmark harness mounts can never drift out of sync with the schema or
-// validation rules. Every file is self-contained by design (spec §31): literal
+// TestBenchConfigs proves the eight shipped benchmark configs round-trip through the real Load + Validate pipeline,
+// so a config the benchmark harness mounts can never drift out of sync with the schema or
+// validation rules. Every file is self-contained by design: literal
 // backend URLs, no templating, readable in isolation. The table is explicit
 // (not a directory walk) so a missing or renamed file fails loudly.
 //
 // The protocol directory is a client-facing listener-mode distinction only:
 // http11/ configs are plain HTTP, h2/ configs select TLS+ALPN. In h2 mode the
-// backends are https:// so the LB↔backend leg also negotiates HTTP/2 (S5.T3),
+// backends are https:// so the LB↔backend leg also negotiates HTTP/2,
 // with tls_skip_verify for the shared self-signed SAN cert.
 func TestBenchConfigs(t *testing.T) {
 	algorithmByToken := map[string]string{

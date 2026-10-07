@@ -1,11 +1,11 @@
-// Package chaos_test holds the Sprint 3 chaos scenarios. It is an external
+// Package chaos_test holds the chaos scenarios. It is an external
 // test package (package chaos_test, no non-test files) so its import graph is
 // exactly a consumer's and the acyclic package guarantee stays visible: the
-// tests assemble the system through internal/app's Build/Run seam (S4.T0),
+// tests assemble the system through internal/app's Build/Run seam,
 // which is the same wiring main uses, and reach the subsystems through their
 // exported APIs only.
 //
-// The harness here is shared with S3.T9's circuit chaos test: assemble()
+// The harness here is shared with the circuit chaos test: assemble()
 // builds through internal/app, flippableBackend injects failures, and the
 // log/gauge helpers read the two observability surfaces back.
 package chaos_test

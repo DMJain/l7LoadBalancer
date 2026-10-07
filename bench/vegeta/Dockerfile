@@ -1,4 +1,4 @@
-# Pinned vegeta load generator, built for the host architecture (S5.T4-infra).
+# Pinned vegeta load generator, built for the host architecture.
 #
 # The popular `peterevans/vegeta` image is amd64-only: on an arm64 host (Apple
 # Silicon) it runs under emulation, so vegeta's own CPU ceiling — not the LB's —

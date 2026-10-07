@@ -58,8 +58,8 @@ func startProtocolBackend(t *testing.T) *httptest.Server {
 }
 
 // TestClientProtocolLabelMatchesListenerMode proves the client-facing protocol
-// label is derived from the real wire protocol on each listener mode
-// (S5.T3-main): "http/1.1" in plain mode, "h2" over TLS+ALPN, and "h2c" for a
+// label is derived from the real wire protocol on each listener mode:
+// "http/1.1" in plain mode, "h2" over TLS+ALPN, and "h2c" for a
 // prior-knowledge cleartext HTTP/2 request.
 func TestClientProtocolLabelMatchesListenerMode(t *testing.T) {
 	silenceDefault(t)

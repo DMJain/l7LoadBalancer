@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # generate-cert.sh produces a self-signed SAN certificate for local dev and
-# benchmarks (S5.T1). The same certificate is used by the LB frontend and the
+# benchmarks. The same certificate is used by the LB frontend and the
 # dummy backends; the SAN list covers every docker-compose service name plus
 # loopback, so one cert works everywhere.
 #

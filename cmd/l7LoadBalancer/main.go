@@ -20,7 +20,7 @@ import (
 // version and commit identify the source tree a binary was built from. They
 // default to placeholders so a plain `go build`/`go run` still logs something
 // identifiable, and are overridden at image-build time via
-// -ldflags "-X main.version=$VERSION -X main.commit=$COMMIT" (S3.T10).
+// -ldflags "-X main.version=$VERSION -X main.commit=$COMMIT".
 var (
 	version = "dev"
 	commit  = "unknown"
@@ -37,7 +37,7 @@ const probeTimeout = 2 * time.Second
 const reloadSignalBuffer = 1
 
 // reloadLoop consumes SIGHUP signals and reloads the running application from
-// configPath, one reload at a time. It is main's whole reload policy (S4.T3):
+// configPath, one reload at a time. It is main's whole reload policy:
 // for each delivered signal it asks the application to reload from the file.
 // Before reloading it drains any further signals already queued, so several
 // SIGHUPs in quick succession collapse into one reload. It returns when ctx is
@@ -45,7 +45,7 @@ const reloadSignalBuffer = 1
 //
 // Parsing, validation, the apply, every rejection's log line and the recorded
 // outcome live in application.ReloadFrom, the operation the reload admin
-// endpoint shares (S5.T20.1, ADR-0015 decision 14); a rejected reload keeps
+// endpoint shares (ADR-0015 decision 14); a rejected reload keeps
 // the previous config serving, so the loop only has to keep going.
 //
 // It is a standalone function rather than an inline goroutine so tests can
@@ -83,7 +83,7 @@ func drainSignals(ch <-chan os.Signal) {
 // (kubectl/docker style), not a flag, and it is handled before flag.Parse so a
 // probe never triggers -config's default file lookup or any other flag
 // side-effect. This subcommand exists so the distroless container image
-// (S3.T10) has a HEALTHCHECK it can run without a shell or curl; the default
+// has a HEALTHCHECK it can run without a shell or curl; the default
 // HEALTHCHECK URL targets /livez — see ADR-0014 decision 2 for why.
 //
 // It returns handled=false for any other invocation, leaving the load-balancer
@@ -128,8 +128,8 @@ func runProbe(url string) int {
 
 // main is now only flags, file I/O, and signals: parse the config path, load
 // and validate the config, hand it to internal/app to build the whole wiring
-// graph, and run until SIGINT/SIGTERM. All wiring lives in internal/app
-// (S4.T0); main no longer knows about the registry, selector, proxy, health
+// graph, and run until SIGINT/SIGTERM. All wiring lives in internal/app;
+// main no longer knows about the registry, selector, proxy, health
 // checker, or metrics collector.
 //
 // The listen address comes from the config file (cfg.Listen), not a flag:
@@ -140,7 +140,7 @@ func main() {
 	slog.SetDefault(log)
 	slog.Info("starting", "version", version, "commit", commit)
 
-	// `l7lb probe <url>` (S3.T10): a self-contained HEALTHCHECK for the
+	// `l7lb probe <url>`: a self-contained HEALTHCHECK for the
 	// distroless image. Handled before flag.Parse so it never triggers
 	// -config's default file lookup; see probeCommand's doc comment and
 	// ADR-0014 decision 2 for why the URL targets /livez.
@@ -168,7 +168,7 @@ func main() {
 	}
 
 	// gomaxprocs and go_version are the benchmark methodology's runtime
-	// observations (S5.T5.6).
+	// observations.
 	log.Info("l7LoadBalancer starting",
 		"config", *configPath,
 		"listen", cfg.Listen,
@@ -184,7 +184,7 @@ func main() {
 	sigCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	// SIGHUP reloads the backend list in place (S4.T3). It is registered
+	// SIGHUP reloads the backend list in place. It is registered
 	// separately from the SIGINT/SIGTERM shutdown context, and the loop shares
 	// sigCtx, so a reload never races shutdown and stops with it.
 	reloadCh := make(chan os.Signal, reloadSignalBuffer)

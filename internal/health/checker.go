@@ -29,7 +29,7 @@ const (
 	// probeFailuresBeforeUnhealthy is N: the number of consecutive failed
 	// probes after which a backend is marked unhealthy. At the default 5s
 	// probe interval that ejects a dead backend in roughly 15s — quick enough
-	// for the Sprint 3 exit criterion, slow enough not to flap on one lost
+	// to detect a dead backend promptly, slow enough not to flap on one lost
 	// probe.
 	probeFailuresBeforeUnhealthy = 3
 
@@ -73,7 +73,7 @@ type Checker struct {
 	probed atomic.Int32
 	// probeRoundComplete latches true once probed reaches backendCount — the
 	// first full sweep — and is never cleared, including by a reload's
-	// add/remove (ADR-0014 (S3.T12) decision 4).
+	// add/remove (ADR-0014 decision 4).
 	probeRoundComplete atomic.Bool
 
 	// mu guards probers, which holds each running prober's control block. Add
@@ -203,7 +203,7 @@ func (c *Checker) Remove(b *backend.Backend) {
 // ProbeRoundComplete reports whether every configured backend has answered at
 // least one active probe. It is false until the first full sweep finishes, then
 // latches true for the checker's lifetime — the one-shot condition behind the
-// /startupz gate (ADR-0014 (S3.T12)).
+// /startupz gate (ADR-0014).
 func (c *Checker) ProbeRoundComplete() bool {
 	return c.probeRoundComplete.Load()
 }
@@ -220,8 +220,8 @@ func (c *Checker) ProbeRoundComplete() bool {
 // health-state guards (IsHealthy/!IsHealthy, read before the Mark* call mutates
 // it) make the line describe a *genuine* transition, so an already-healthy
 // backend's success streak — every backend's first M probes at startup — cannot
-// emit a spurious health_reinstated. The success gate is >= rather than ==
-// (S3.T6.5): passive outlier detection can eject a backend while active probes
+// emit a spurious health_reinstated. The success gate is >= rather than ==:
+// passive outlier detection can eject a backend while active probes
 // keep succeeding, so its accumulator is already past M at ejection time; an
 // equality would then skip the line and gauge write forever, leaving
 // IsHealthy() true while lb_backend_healthy stayed 0. See ADR-0011's 2026-09-22
@@ -240,7 +240,7 @@ func (p *prober) probeOnce(ctx context.Context) bool {
 	// outcome: no health mark, no log line, no gauge write. Remove cancels the
 	// prober's context and then waits for this goroutine to exit, so an outcome
 	// that gets past this check still finishes before Remove returns and a
-	// reload deletes the backend's series (S4.T3.0).
+	// reload deletes the backend's series.
 	if ctx.Err() != nil {
 		return false
 	}
@@ -294,7 +294,7 @@ func (p *prober) probeOnce(ctx context.Context) bool {
 // markProbed folds this prober's backend into the checker's first-round count,
 // exactly once. The latch is set by whichever prober's first probe is the last
 // of the set, so a subsequent round can never "re-complete" it
-// (ADR-0014 (S3.T12)).
+// (ADR-0014).
 func (p *prober) markProbed() {
 	if p.counted {
 		return

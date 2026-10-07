@@ -229,7 +229,7 @@ func TestChaosReloadRemovedIdleBackendDrains(t *testing.T) {
 	}, eventuallyDeadline, eventuallyTick, "the idle drain must be logged exactly once")
 }
 
-// TestChaosReloadDrainExitCriterion1000 is Sprint 4's first exit-criterion test:
+// TestChaosReloadDrainExitCriterion1000 is the first exit-criterion test:
 // 1000 concurrent requests held open by gated backends — some on a backend that
 // stays, some on one being removed — survive a reload that adds one backend and
 // removes another with a drain window longer than the hold. All 1000 return

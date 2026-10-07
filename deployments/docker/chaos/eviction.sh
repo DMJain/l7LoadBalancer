@@ -1,22 +1,20 @@
 #!/usr/bin/env bash
 #
-# Scripted smoke test for the S3.T8 eviction/recovery chaos scenario.
+# Scripted smoke test for the eviction/recovery chaos scenario.
 #
-# Closes MILESTONES.md's literal "`docker stop` a backend -> ejected within
-# health threshold ... recovers on restart" wording against the real
+# Checks that a `docker stop`ped backend is ejected within the health
+# threshold and recovers on restart, against the real
 # docker-compose backends, asserting through the load balancer's own
 # Prometheus exposition endpoint (metrics.listen, default :9090) rather than
 # by eyeballing Grafana.
 #
-# The load balancer runs as a host process (S3.T10's Dockerfile is out of this
-# bundle's scope); the backends come from the existing S1.T9 compose. No new
-# compose file.
+# The load balancer runs as a host process; the backends come from the existing
+# dummy-backend compose. No new compose file.
 #
 # Prereqs: docker (daemon running), the Go toolchain, curl, awk.
 #
 # End-to-end execution requires a Docker daemon; if none is available the
-# script fails fast at the first docker call. Recorded as [MANUAL VERIFICATION
-# PENDING] in the session log, matching S3.T7's precedent.
+# script fails fast at the first docker call.
 
 set -euo pipefail
 

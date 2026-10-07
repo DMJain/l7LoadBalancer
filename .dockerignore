@@ -1,4 +1,4 @@
-# Strict allowlist build context for the LB image (S3.T10, spec D21).
+# Strict allowlist build context for the LB image.
 #
 # The leading `*` excludes everything by default, so adding a new top-level
 # directory never accidentally slips secrets, docs, or gigabytes into the

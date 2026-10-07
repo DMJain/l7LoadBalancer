@@ -1,6 +1,6 @@
 package app
 
-// The reload admin endpoint (S5.T20.1, ADR-0015 decisions 13–17).
+// The reload admin endpoint (ADR-0015 decisions 13–17).
 //
 // Concurrency: every reload, from SIGHUP or from POST /admin/reload, runs
 // under App.reloadMu, so the registry apply has one writer at a time. The last

@@ -1,105 +1,50 @@
-# ADR-0024: Demo traffic generator — open-loop Poisson, bounded in-flight, honest counters
+# ADR-0024: Demo traffic generator: open-loop Poisson, bounded in-flight, honest counters
 
-- **Status**: Accepted
-- **Date**: 2026-10-02
-- **Deciders**: Darshan Jain (project owner) + OpenCode (deepseek-v4.1-flash) (S5.T16.2)
+**Status:** Accepted
 
 ## Context
 
-The local live demo (ADR-0023) needs realistic traffic against the four
-per-algorithm load balancers: eight client services, each with its own container
-IP and therefore its own consistent-hash key, each sending a Zipf-ranked share of
-a total rate. The traffic must make the selectors' differences visible while the
-viewer watches — which constrains how it is generated:
+The local demo (ADR-0023) needs realistic traffic from eight client services. Each has its own container IP, so each is its own consistent-hash key, and each sends a Zipf-ranked share of a total rate. Three risks shape how the traffic is made:
 
-- A closed-loop generator (N workers pulling from a queue) silently reduces its
-  offered load when a backend slows, so a slow backend would look like less
-  traffic, not like latency. The demo's whole point is to show latency and a
-  selector moving off it.
-- A generator with unbounded in-flight requests turns a raised rate into an
-  out-of-memory kill, making the demo itself the bottleneck. The benchmark rig
-  already learned this (ADR-0021, ADR-0022).
-- A generator that reports only what it *intended* to send lets the owner narrate
-  a rate the load balancer never received.
-
-The behaviour, control surface and resource bounds are specified in
-`.scratch/s5-t16-t17-local-demo/spec.md` (*Traffic generator (S5.T16.2)*) and
-ADR-0023. This ADR records the model those documents leave to the implementation:
-the scheduling law, what "bound" means when arrivals outrun it, the concrete
-defaults, and the counter semantics.
+- A closed-loop generator (N workers on a queue) sends less when a backend slows. A slow backend would then look like less traffic, not like latency, and the demo exists to show latency.
+- A generator with unbounded in-flight requests turns a higher rate into an OOM kill. The benchmark rig learned this (ADR-0021, ADR-0022).
+- A generator that reports only what it intended to send lets the presenter claim a rate the LB never got.
 
 ## Decision
 
-A new stdlib-only Go program, `demo/traffic-generator`, shipped as its own small
-image in the repository's single module (the dummy-backend precedent). It is
-configured by environment at startup and controlled at runtime over HTTP.
+`demo/traffic-generator` is a stdlib-only Go program with its own small image, in the repository's single module. It reads environment variables at startup and takes runtime control over HTTP.
 
-1. **Arrivals are open-loop Poisson at the client's own rate.** The client
-   computes its own share `total × (1/k^s) / Σ_{i=1..N} (1/i^s)` from `RANK` and
-   `CLIENTS`; there is no coordination between clients. It schedules an arrival by
-   drawing an exponential inter-arrival time at that rate (`ExpFloat64()/rate`),
-   independent of whether earlier requests have finished. A slow backend
-   therefore shows up as latency and in-flight count, never as a quietly reduced
-   send rate.
+1. **Arrivals are open-loop Poisson at the client's own rate.** The client computes its share as `total × (1/k^s) / Σ_{i=1..N} (1/i^s)` from `RANK` and `CLIENTS`. Clients do not coordinate. Each inter-arrival time is `ExpFloat64()/rate`, independent of earlier requests. A slow backend therefore shows as latency and in-flight count, never as a lower send rate.
+2. **In-flight is bounded, and an arrival that cannot start is dropped.** A semaphore per client (`MAX_INFLIGHT`) bounds concurrency. When an arrival is due and the semaphore is full, it counts as offered and dropped, and is never queued. The counters are:
+   - `offered`: arrivals that came due,
+   - `sent`: requests dispatched,
+   - `dropped`: due while the bound was full (`offered = sent + dropped`),
+   - `completed`: a response arrived and was drained,
+   - `errors`: the request got no response.
+3. **Response bodies are drained and discarded.** Each body is copied to `io.Discard` and closed. The compose file sets `GOMEMLIMIT=256MiB` and `GOGC=50` (the ADR-0021 method).
+4. **A control endpoint on a second `net/http` server**, on the internal network only. `GET` returns the settings and all counters. `POST` accepts an optional `total_rate` and/or `target`. It returns `400` for unknown fields, a negative rate or a target outside `TARGET_ALLOWLIST`. A target change applies to the next arrival, and in-flight requests finish normally. The settings are one immutable value behind an `atomic.Pointer`, so each arrival reads a consistent `(rate, target)` pair. In the demo the allowlist holds one target, `http://lb:8080`.
+5. **Defaults are named constants in one place.**
 
-2. **In-flight is bounded, and an arrival that cannot start is counted as
-   dropped.** A fixed semaphore per client (`MAX_INFLIGHT`) bounds concurrency.
-   When an arrival is due and the semaphore is full, it is counted as *offered*
-   and *dropped* and never queued. The counters are: `offered` (arrivals that
-   came due), `sent` (requests dispatched), `dropped` (due while the bound was
-   full; `offered = sent + dropped`), `completed` (a response arrived and was
-   drained), and `errors` (the request failed to reach a response). The control
-   endpoint reports all of them, so a rate claim is checkable against what was
-   actually sent.
+   | Setting | Default |
+   |---|---|
+   | `CLIENTS` | 8 |
+   | Zipf exponent `s` | 1.0 |
+   | Total rate | 200 req/s (the demo compose sets `TOTAL_RATE=400`) |
+   | `MAX_INFLIGHT` | 64 |
+   | Response mix | `/200b` 70, `/10kb` 25, `/1mb` 5 |
+   | Request-body mix | none 70, 1 KiB 20, 64 KiB 10 |
 
-3. **Response bodies are drained and discarded.** Every response is copied to
-   `io.Discard` and closed, so eight clients cannot retain a live demo's worth of
-   response bodies. The compose file sets `GOMEMLIMIT`/`GOGC` (ADR-0021's
-   mechanism) and the program documents that it expects them.
-
-4. **The control endpoint is a second `net/http` server on the client's own
-   port** (internal network only). `GET` returns the current settings and every
-   counter; `POST` accepts an optional `total_rate` and/or `target`, rejects
-   unknown fields, a negative rate and any target outside the configured
-   allowlist with `400`. A target change applies to the **next** arrival; requests
-   already in flight to the old target complete normally. Settings are one
-   immutable value behind an `atomic.Pointer`, so an arrival reads one consistent
-   `(rate, target)` pair.
-
-5. **Defaults are named constants in one place.** `CLIENTS=8`, Zipf exponent
-   `s=1.0`, total rate `200` req/s, `MAX_INFLIGHT=64`; the response-size mix is
-   mostly `/200b` (70) and `/10kb` (25) with a small `/1mb` (5) share, and the
-   request-body mix is none (70), small 1 KiB (20), medium 64 KiB (10), sent as a
-   discarded `POST` to the payload paths (S5.T16.1). The compose stack may
-   override all of them; the constants are the demo's starting point, sized for a
-   laptop with Docker Desktop defaults.
+   A request with a body is a `POST` to the payload path, and the backend discards the body. The compose file may override any setting. The defaults suit a laptop with Docker Desktop defaults.
 
 ## Consequences
 
-- Positive: latency is never hidden as reduced load — the demo shows what the
-  viewer is meant to see. In-flight counts stay above zero at the demo rate,
-  which least-connections needs to balance.
-- Positive: a dropped arrival is reported, not silently absorbed, so an
-  over-high rate is visible on the page rather than narrated as delivered.
-- Positive: the resource bound is structural (a semaphore and a drained body),
-  not a tuned threshold; the same class of OOM that sank the benchmark 1 MB runs
-  cannot recur here.
-- Negative: an arbitrary rate can be rejected as dropped rather than served. That
-  is the honest reading, and the dropped counter makes it explicit.
-- Neutral: no load-balancer code changes and no new dependency. No timing-config
-  reload: only the rate and target are runtime-mutable, matching the spec.
-
-## Alternatives considered
-
-- **Closed-loop generator (fixed worker pool).** Rejected: it reduces offered
-  load when a backend slows, so a slow backend looks like less traffic and the
-  selector's reaction is not what the viewer is told to look for. The demo needs
-  open-loop, and the in-flight bound is what keeps open-loop safe.
-- **Unbounded in-flight with a queue.** Rejected: it recreates the benchmark
-  OOM and makes latency under load unreadable. The bound plus a dropped counter
-  is the ADR-0021/0022 answer applied to the demo.
-- **Runtime-mutable weights and mix.** Rejected for this ticket: the spec fixes
-  only the rate and target as runtime controls; the mix is a demo default.
-- **A closed control API that restarts the client on change.** Rejected: the
-  spec requires rate and target changes to apply without a restart, and to
-  leave in-flight requests to the old target alone.
+- Latency is never hidden as lower load. At the demo rate, in-flight counts stay above zero, which least-connections needs.
+- A dropped arrival is reported, so a rate that is too high shows on the page.
+- The resource bound is structural (a semaphore and drained bodies), not a tuned threshold. The benchmark OOM cannot happen here.
+- A rate that is too high shows up as drops, not as served requests. The counters make this explicit.
+- No load-balancer code changes and no new dependency. Only the rate and the target change at runtime.
+- Rejected alternatives:
+  - A closed-loop worker pool (hides slow backends).
+  - Unbounded in-flight with a queue (recreates the OOM).
+  - Runtime-changeable mixes (the mix is a default).
+  - A control API that restarts the client (rate and target must change without a restart).

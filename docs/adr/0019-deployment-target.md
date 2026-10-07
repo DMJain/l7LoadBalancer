@@ -1,165 +1,52 @@
-# ADR-0019: Deployment target — the Docker container as the packaging artifact
+# ADR-0019: Deployment target: the Docker container as the packaging artifact
 
-- **Status**: Accepted
-- **Date**: 2026-09-28
-- **Deciders**: Darshan Jain (project owner) + opencode agent (S4.T19, decision made in the ADR-writing session; scope in `.scratch/s4-t12-t15-closeout/spec.md`)
+**Status:** Accepted
 
 ## Context
 
-Sprint 1 deferred the deployment-target decision (bare binary vs. Docker vs.
-Kubernetes) on purpose. [ADR-0005](0005-scope-of-production-grade.md) lists "a
-settled deployment target" among the things "production-grade" explicitly does
-**not** mean, and its 2026-09-22 amendment records that the Sprint 3 Dockerfile
-and root `docker-compose.yml` are demo/dev-stack artifacts that "do not
-constitute a deployment-target decision": the image exists so a reviewer can
-bring the system up with one command and so the shipped binary can self-probe
-in a shell-less image, not to commit the project to containers. The deferral's
-stated reason was that the reload and connection-lifecycle work would inform
-the choice (ADR-0005; `MILESTONES.md` Sprint 4). That work now exists, so this
-ADR makes the call.
+ADR-0005 left the deployment target (bare binary, Docker or Kubernetes) open until the reload and connection-lifecycle work existed. The choice must follow from the properties of the built system:
 
-The choice has to follow from the system actually built, whose deployment-
-relevant properties are these:
+1. **Three listeners in one process:** the client proxy on `listen` (default `:8080`), metrics on `metrics.listen` (`:9090`) and the health endpoint on `health_endpoint.listen` (`:8081`). The health endpoint is a separate server, never a path on the proxy (ADR-0014).
+2. **Reload is in process, started by SIGHUP** (ADR-0015). There is no second process and no socket handoff. `main` handles SIGHUP apart from the SIGINT/SIGTERM shutdown context.
+3. **The binary probes itself.** The `probe` subcommand lets a shell-less image run `HEALTHCHECK` as `/l7lb probe http://127.0.0.1:8081/livez`.
+4. **No external state.** Configuration is one YAML file. There is no database, cache or shared store. Backend state (health, circuit, EWMA, active requests) lives in the process and resets on restart.
+5. **No clustering.** One instance serves one configured backend set. There is no peer discovery, no shared state between instances and no scale-out requirement.
 
-1. **Three listeners in one process.** The client proxy on `cfg.Listen`
-   (default `:8080`), the Prometheus metrics server on `metrics.listen`
-   (`:9090`), and the health endpoint on `health_endpoint.listen` (`:8081`) —
-   the health endpoint a separate always-on `http.Server`, never a path on the
-   proxy, so probe traffic cannot enter the request path or its metrics
-   ([ADR-0014](0014-health-endpoint-contract-and-probe-semantics.md) decision
-   1).
-2. **Reload is in-process, triggered by SIGHUP.** A reload swaps an immutable
-   registry snapshot in place; there is no second process and no listening-
-   socket handoff ([ADR-0015](0015-reload-architecture.md) decision 1). `main`
-   installs SIGHUP separately from the SIGINT/SIGTERM shutdown context
-   (`cmd/l7LoadBalancer/main.go:202`), so a reload never races shutdown.
-3. **The binary probes itself.** The native `HEALTHCHECK` runs
-   `/l7lb probe http://127.0.0.1:8081/livez` — the `probe` subcommand
-   (`main.go:106`) exists precisely so a shell-less runtime has a health check
-   ([ADR-0014](0014-health-endpoint-contract-and-probe-semantics.md) decision
-   2; `Dockerfile:76-77`).
-4. **No external state.** Configuration is one YAML file; there is no
-   database, cache, or shared store to back up or coordinate ("there is none to
-   back up; config is a file" — ADR-0005). Backend state (health, circuit,
-   EWMA, active connections) is in-process and intentionally reset on restart;
-   only the config file is durable.
-5. **No clustering.** One instance serves one configured backend set — ADR-0005's
-   multi-tenancy bullet: "one load balancer instance serves one configured
-   backend set; no tenant isolation, quotas, or per-tenant config." There is no
-   peer discovery and no shared state between instances, and `MILESTONES.md`
-   expresses no scale-out requirement.
-
-The artifacts already exist: a digest-pinned
-`gcr.io/distroless/static-debian12:nonroot` image with the static binary baked
-to `/l7lb`, `configs/docker.yaml` baked to `/etc/l7lb/config.yaml`, all three
-ports `EXPOSE`d, and OCI labels (S3.T10); and a repo-root `docker-compose.yml`
-that runs the image with the dummy backends, Prometheus, and Grafana (S3.T11).
-What was missing was the decision that these are the *target*, not a demo.
+The artifacts exist. The image is `gcr.io/distroless/static-debian12:nonroot`, pinned by digest. It holds the static binary at `/l7lb` and `configs/docker.yaml` at `/etc/l7lb/config.yaml`. It exposes all three ports and carries OCI labels. The repo-root `docker-compose.yml` runs the image with the dummy backends, Prometheus and Grafana.
 
 ## Decision
 
-**The deployment target is the Docker container: the digest-pinned distroless
-image is the packaged deployment artifact. Kubernetes is explicitly not the
-target, and the bare binary is the supported primitive beneath the container,
-not the packaged form.**
+**The deployment target is the Docker container. The digest-pinned distroless image is the packaged artifact. Kubernetes is not the target. The bare binary is the supported primitive under the container, not the packaged form.**
 
-A deployment is: run the image, accepting `-config` pointing at a config file
-(baked, or bind-mounted over `/etc/l7lb/config.yaml`), and publish the client
-port. The health and metrics ports are exposed for an orchestrator or a
-Prometheus scraper and may stay on an internal network. Operational moves map
-directly onto the mechanisms already built:
+A deployment runs the image with `-config` pointing at a config file (the baked one, or one bind-mounted over `/etc/l7lb/config.yaml`) and publishes the client port. The health and metrics ports can stay on an internal network.
 
-- **Fleet change** — edit the backend list in the mounted config and send
-  SIGHUP to the process: `docker kill -s HUP <container>`. The binary is PID 1,
-  so it receives the signal directly and swaps the backend set in place,
-  dropping nothing (ADR-0015, ADR-0016; proven end-to-end at the OS boundary in
-  S4.T14). This is distinct from any container restart — `docker restart` /
-  `docker compose restart` sends SIGTERM and starts a fresh process, which is a
-  stop/start and drops in-flight requests (no socket handoff, ADR-0015 decision
-  1); only the SIGHUP path is the zero-drop reload.
-- **Health** — the image's own `HEALTHCHECK` (the `probe` subcommand against
-  `/livez`) gives any container runtime a liveness signal with no shell or
-  `curl` in the image.
-- **Graceful shutdown** — `docker stop` delivers SIGTERM to PID 1; the shared
-  signal context drains in-flight requests and shuts all three listeners down.
-- **Any non-backend config change** (listener addresses, algorithm, transport,
-  server timeouts) is rejected whole by reload (ADR-0015 decision 4) and
-  requires a container restart — a deliberate operator action, not a silent
-  no-op.
+| Operation | How |
+|---|---|
+| Change the backends or the algorithm | Edit the mounted config, then run `docker kill -s HUP <container>`. The binary is PID 1 and gets the signal directly. The reload drops nothing (ADR-0015, ADR-0016). |
+| Health | The image's `HEALTHCHECK` runs the `probe` subcommand against `/livez`. No shell or `curl` is needed. |
+| Graceful shutdown | `docker stop` sends SIGTERM to PID 1. In-flight requests drain and all three listeners shut down. |
+| Change any other config section | Restart the container. Reload rejects these changes (ADR-0015). |
 
-### Why the system's properties select containers
+`docker restart` or `docker compose restart` is not a reload. It sends SIGTERM and starts a new process, so in-flight requests drop. Only SIGHUP is the zero-drop path.
 
-- The image is the reproducible unit; the three-port shape, baked config, OCI
-  labels, and self-probe `HEALTHCHECK` already constitute a complete container
-  contract. Choosing containers promotes an existing, tested artifact rather
-  than commissioning new packaging.
-- A single stateless process with no external state is the canonical container
-  workload: nothing here needs host integration that a container would
-  complicate.
-- In-process SIGHUP reload works unchanged under a container runtime because
-  the binary is PID 1 and receives the signal directly; the bind-mounted config
-  lets a deployment change the backend fleet without rebuilding the image.
+Why containers fit:
 
-### SO_REUSEPORT process handoff is explicitly Post-Sprint 5
+- The image is the reproducible unit. The three ports, baked config, OCI labels and self-probe `HEALTHCHECK` already form a full container contract.
+- One stateless process with no external state is a standard container workload.
+- SIGHUP reload works unchanged in a container, because the binary is PID 1. The bind-mounted config lets a deployment change the backends without a rebuild.
 
-In-process reload cannot cover a *binary* change: a new image for the same
-listener addresses needs a process replacement, and there is no socket handoff,
-so a restart drops in-flight requests. SO_REUSEPORT-based handoff — start the
-new process on the same port, drain the old — is the mechanism that would make
-container image rollouts zero-downtime. It is recorded, not built: it stays on
-`MILESTONES.md`'s Post-Sprint 5 "Optional extensions" list ("SO_REUSEPORT
-socket handoff for reload across process restart"). ADR-0015 decision 1 already
-states why it was not needed for the backend-only reload this sprint ships.
+A binary change (a new image) needs a process replacement, and without a socket handoff that drops in-flight requests. SO_REUSEPORT handoff (start the new process on the same port, drain the old one) would make image rollouts zero-downtime. It is a possible future extension and is not built.
 
 ## Consequences
 
-- Positive: the deployment decision is now the artifact that already exists —
-  the distroless image — so the Sprint 4 close-out can state a target instead
-  of leaving it deferred, and the container contract (three ports, baked config,
-  `HEALTHCHECK`, OCI labels) is promoted from demo to target.
-- Positive: backend-fleet changes deploy without a rebuild or a restart via the
-  bind-mounted config and SIGHUP, so the common operational move is
-  zero-downtime by construction.
-- Positive: the health endpoint's orchestrator-native paths
-  (`/livez`/`/readyz`/`/startupz`, ADR-0014) remain exactly what a container
-  runtime or a future orchestrator consumes; nothing in this choice invalidates
-  them.
-- Negative: a non-backend config change or an image change requires a restart
-  that drops in-flight requests, because there is no socket handoff (ADR-0015
-  decision 1). Accepted; SO_REUSEPORT is the documented post-Sprint-5 path to
-  close it.
-- Negative: the container adds a runtime dependency the bare binary did not
-  need. Accepted for reproducibility and the demo/`HEALTHCHECK` value; the bare
-  binary remains runnable for development and the host-process chaos flow.
-- Neutral: Kubernetes is not an alternative *for this project's scope*, but the
-  health endpoint is Kubernetes-shaped by design (ADR-0014). If a future need
-  introduces clustering or external state, the target decision is revisited in
-  a new ADR; the endpoint contract need not change.
-- Neutral: this ADR closes the Sprint 4 deployment-target deliverable that
-  ADR-0005 deferred from Sprint 1 (`MILESTONES.md` Sprint 4). It records a
-  decision; it changes no code.
-
-## Alternatives considered
-
-- **Bare binary as the packaged target** (run `/l7lb` under systemd or a
-  supervisor, native SIGHUP, the `probe` subcommand as the health check):
-  rejected as the *target* — it forgoes the reproducible packaging, the pinned
-  runtime, and the single-command demo stack that already exist, for no
-  property the container lacks. Retained as the supported primitive: `make run`
-  and the host-process chaos flow keep working, and the container is the
-  packaged form of the same binary.
-- **Kubernetes as the target**: rejected — the system is a single stateless
-  instance with no clustering, no external state to coordinate, and no
-  scale-out requirement, so Kubernetes' scheduling, service discovery,
-  scaling, and rolling-update machinery would address problems this project
-  does not have. Adopting it would imply exactly the operational readiness
-  ADR-0005 disclaims. The K8s-shaped health endpoint (ADR-0014) makes the
-  system *runnable* on Kubernetes; that is a capability, not a target
-  commitment.
-- **Docker packaging plus a Kubernetes deployment contract now**: rejected for
-  the same reason as Kubernetes itself — writing orchestration manifests for a
-  target the project does not adopt is unused surface.
-- **SO_REUSEPORT handoff now, to make container rollouts zero-downtime**:
-  deferred, per ADR-0015 decision 1 and `MILESTONES.md`'s Post-Sprint 5 list —
-  it is more moving parts than the backend-only reload needs, and the
-  throughput/availability question it answers is not one Sprint 4 asks.
+- The target is the artifact that already exists and is tested.
+- Backend and algorithm changes deploy with no rebuild and no restart.
+- The health paths (`/livez`, `/readyz`, `/startupz`) suit any container runtime or orchestrator.
+- An image change or a change to another config section needs a restart that drops in-flight requests.
+- The container adds a runtime dependency. The bare binary still runs for development (`make run`) and the host-process chaos flow.
+- The health endpoint has Kubernetes names, so the system can run on Kubernetes. That is a capability, not a target. If clustering or external state ever appears, a new ADR revisits the target.
+- Rejected alternatives:
+  - The bare binary as the packaged target (loses reproducible packaging for no gain).
+  - Kubernetes (its scheduling, discovery and scaling solve problems this single stateless instance does not have, and imply operational claims ADR-0005 disclaims).
+  - Kubernetes manifests now (unused surface).
+  - SO_REUSEPORT now (more moving parts than needed).

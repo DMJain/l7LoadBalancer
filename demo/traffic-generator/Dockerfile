@@ -1,5 +1,5 @@
 # Build the demo traffic generator as a static, dependency-free binary and ship
-# it in a scratch image (S5.T16.2; the dummy-backend precedent). The program
+# it in a scratch image (the dummy-backend precedent). The program
 # imports only the standard library, so it builds from this single-file package
 # with no go.mod.
 FROM golang:1.25-alpine AS build

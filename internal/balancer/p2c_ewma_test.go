@@ -90,7 +90,7 @@ func TestPowerOfTwoChoicesEWMAPrefersFasterOfTwo(t *testing.T) {
 }
 
 // TestPowerOfTwoChoicesEWMAShiftsLoadToFasterBackend is the load-skew property
-// MILESTONES.md's Sprint 2 exit criteria name: after a sustained latency gap
+// this selector exists to show: after a sustained latency gap
 // is recorded, P2C routes measurably more traffic to the faster backend. With
 // four healthy backends P2C samples two, so the fast backend is drawn half the
 // time and wins every comparison it appears in (~50% of requests overall),
@@ -129,7 +129,7 @@ func TestPowerOfTwoChoicesEWMAShiftsLoadToFasterBackend(t *testing.T) {
 
 	assert.InDelta(t, samples/2, fast, samples/10,
 		"fast backend took %d of %d, want ~50%% (counts=%v)", fast, samples, counts)
-	t.Logf("S2.T3 load-skew: fast=%d/%d (%.1f%%), per-slow=%v", fast, samples,
+	t.Logf("load-skew: fast=%d/%d (%.1f%%), per-slow=%v", fast, samples,
 		100*float64(fast)/float64(samples), counts)
 	assert.Greater(t, fast, slowMax*2,
 		"P2C must measurably favor the fast backend: fast=%d slowest-of-slow=%d (counts=%v)",

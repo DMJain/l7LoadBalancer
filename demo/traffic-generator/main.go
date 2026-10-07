@@ -1,5 +1,5 @@
 // Command traffic-generator is one of the demo's eight traffic clients
-// (S5.T16.2, ADR-0023 decision 6, ADR-0024). It sends open-loop Poisson
+// (ADR-0023 decision 6, ADR-0024). It sends open-loop Poisson
 // arrivals at its Zipf-ranked share of a total rate, mixes response sizes and
 // request-body sizes, and exposes a control endpoint that sets the total rate
 // and the target LB at runtime while reporting honest delivery counters.
@@ -65,7 +65,7 @@ const (
 
 // Mix weights, named in one place (ADR-0024 decision 5). Response paths are the
 // dummy backend's payload endpoints; a zero body size is a GET, a non-zero one a
-// discarded POST to the payload path (S5.T16.1).
+// discarded POST to the payload path.
 var (
 	responseMix = []weightedPath{
 		{path: "/200b", weight: 70},
@@ -252,7 +252,7 @@ func (g *generator) ownRate() float64 {
 	return g.settings.Load().totalRate * g.share
 }
 
-// logStartup records rank, share, target and bounds (S5.T16.2).
+// logStartup records rank, share, target and bounds.
 func (g *generator) logStartup() {
 	st := g.settings.Load()
 	g.logger.Info("traffic generator starting",
@@ -466,7 +466,7 @@ func sleepCtx(ctx context.Context, d time.Duration) bool {
 // configFromEnv parses the startup configuration with the dummy backend's
 // strictness: empty is treated as unset, and every parse error names the
 // variable. Domain validation (rank bounds, allowlist membership, the bounds
-// themselves) is newGenerator's single responsibility (S5.T16.2).
+// themselves) is newGenerator's single responsibility.
 func configFromEnv() (config, error) {
 	var cfg config
 

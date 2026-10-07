@@ -2,7 +2,7 @@ package config
 
 // This file holds the pure comparison a reload is decided on. Neither function
 // logs, returns an error, or touches runtime state: a reload is rejected when
-// NonBackendChanges is non-empty, and the BackendDiff is what apply (S4.T2)
+// NonBackendChanges is non-empty, and the BackendDiff is what apply
 // turns into the next registry snapshot. Both functions are stateless, so they
 // are safe to call from any goroutine. The reload architecture is recorded in
 // ADR-0015.
@@ -47,15 +47,15 @@ func DiffBackends(oldCfg, newCfg *Config) BackendDiff {
 // differ between oldCfg and newCfg, in the fixed order listen, tls, h2c,
 // health, circuit, metrics, health_endpoint, reload, server, transport. A
 // non-empty result is what makes a reload be rejected whole; the backend list
-// and the algorithm are reloadable. `algorithm` is not named: since S5.T20.7 a
+// and the algorithm are reloadable. `algorithm` is not named: a
 // reload swaps the selector in place (ADR-0015 decision 18). A section with any
 // differing sub-field is named once by its section name. See ADR-0015 decision
 // 4, ADR-0016 decision 1
 // (reload.drain_window is a non-backend field and therefore not reloadable),
-// S4.T7 (server.read_timeout likewise), S4.T8 (transport likewise), S5.T1
-// (the listener mode — tls and h2c — and server.idle_timeout likewise), and
-// S5.T3-main (transport.force_http2 and transport.tls_skip_verify likewise: a
-// change to either silently alters backend protocol negotiation).
+// server.read_timeout likewise, transport likewise, the listener mode (tls and
+// h2c) and server.idle_timeout likewise, and transport.force_http2 and
+// transport.tls_skip_verify likewise (a change to either silently alters
+// backend protocol negotiation).
 //
 // Both configs must be validated. Validate materializes every default (a
 // non-empty Algorithm and non-nil duration and listen pointers), so comparing
@@ -107,7 +107,7 @@ func NonBackendChanges(oldCfg, newCfg *Config) []string {
 // tlsConfigEqual reports whether two TLS blocks are equivalent for reload
 // purposes: both absent, or both present with identical cert and key paths. A
 // nil block is not equal to a present one — adding or removing `tls:` changes
-// the listener mode and must block a reload (S5.T1).
+// the listener mode and must block a reload.
 func tlsConfigEqual(a, b *TLSConfig) bool {
 	if a == nil || b == nil {
 		return a == nil && b == nil

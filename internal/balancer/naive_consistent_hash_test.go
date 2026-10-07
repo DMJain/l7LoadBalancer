@@ -102,8 +102,8 @@ func TestNaiveConsistentHashRespectsHealthTransitions(t *testing.T) {
 
 // TestNaiveConsistentHashNoHealthyBackends covers both ways the healthy set
 // can be empty: a registry with no backends at all, and every backend
-// unhealthy. Both must return ErrNoHealthyBackends, exactly like the Sprint 1
-// selectors, never a panic or a zero value.
+// unhealthy. Both must return ErrNoHealthyBackends, exactly like the
+// round-robin and least-connections selectors, never a panic or a zero value.
 func TestNaiveConsistentHashNoHealthyBackends(t *testing.T) {
 	tests := []struct {
 		name string

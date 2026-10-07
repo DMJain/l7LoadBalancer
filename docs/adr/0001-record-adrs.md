@@ -1,23 +1,18 @@
 # ADR-0001: Record architecture decisions
 
-- **Status**: Accepted
-- **Date**: 2026-08-31
-- **Deciders**: project owner + bootstrap agent
+**Status:** Accepted
 
 ## Context
 
-The project rotates between multiple coding agents. Without a record of *why* decisions were made, later agents will re-litigate settled questions and diverge from the design.
+Many people and tools change this code over time. Without a record of why the project made a decision, a later contributor can reopen a settled question or move away from the design.
 
 ## Decision
 
-Every non-trivial architectural or design decision gets an ADR in `docs/adr/`, numbered sequentially, following the template in `0000-template.md`.
+Each non-trivial architecture or design decision gets an ADR in `docs/adr/`. ADRs have sequential numbers and use the structure in `0000-template.md`.
 
 ## Consequences
 
-- Positive: preserved context across sessions and agents; traceable design record.
-- Negative: small friction on decision points.
-
-## Alternatives considered
-
-- Inline comments only: rejected — not discoverable, not narrated.
-- Git commit messages only: rejected — commits describe *what*, ADRs describe *why*.
+- The reasons for the design stay with the code.
+- Each decision point has a small extra cost.
+- Inline comments alone were not used because they are hard to find.
+- Commit messages alone were not used because they record what changed, not why.

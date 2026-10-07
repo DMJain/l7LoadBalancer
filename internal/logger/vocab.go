@@ -2,7 +2,7 @@ package logger
 
 // Transition event names — the closed value vocabulary for the canonical
 // `event` structured-log field. They name a state transition produced by
-// Sprint 3's resilience subsystems (active health checks, passive outlier
+// the resilience subsystems (active health checks, passive outlier
 // detection, the per-backend circuit breaker).
 //
 // The values are snake_case Go constants, matching the algorithm-identifier
@@ -149,7 +149,7 @@ const (
 	// INFO rather than WARN. A client-gone request reaches no observer, records
 	// no EWMA latency, releases its active-connection slot, and is recorded as
 	// 499 ("4xx") — reserving the 5xx class for backend-caused failures
-	// (S4.T5).
+	//.
 	ReasonClientCanceled = "client_canceled"
 
 	// ReasonBackendDiedMidResponse attributes a backend that sent response
@@ -160,6 +160,6 @@ const (
 	// not a backend death, and is not logged with this reason. The death reaches
 	// no observer and records no second outcome: the success recorded when the
 	// headers arrived stands, because a second failure event for the same
-	// request would corrupt the outlier window's counts (S4.T6).
+	// request would corrupt the outlier window's counts.
 	ReasonBackendDiedMidResponse = "backend_died_mid_response"
 )

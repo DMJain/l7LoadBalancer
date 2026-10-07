@@ -1,7 +1,7 @@
-# Container default configuration for l7LoadBalancer (S3.T10).
+# Container default configuration for l7LoadBalancer.
 #
 # Baked into the image at /etc/l7lb/config.yaml and also bind-mounted over at
-# the same path by the repo-root docker-compose.yml (S3.T11), so editing this
+# the same path by the repo-root docker-compose.yml, so editing this
 # file on disk plus `docker compose restart l7lb` takes effect without a
 # rebuild.
 #
@@ -14,10 +14,10 @@
 listen: ":8080"
 
 # Backend selection algorithm. One of:
-#   round_robin      - rotate across healthy backends (S1.T4)
-#   least_conn       - pick the healthy backend with fewest active connections (S1.T5)
-#   consistent_hash  - bounded-load consistent hashing (Sprint 2)
-#   p2c_ewma         - power-of-two-choices with EWMA latency (Sprint 2)
+#   round_robin      - rotate across healthy backends
+#   least_conn       - pick the healthy backend with fewest active connections
+#   consistent_hash  - bounded-load consistent hashing
+#   p2c_ewma         - power-of-two-choices with EWMA latency
 # Defaults to round_robin if omitted.
 algorithm: "round_robin"
 

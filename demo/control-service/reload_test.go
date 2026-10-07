@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// lbAdminStub stands in for one LB's metrics listener (S5.T20.1): GET
+// lbAdminStub stands in for one LB's metrics listener: GET
 // /admin/reload/last returns the configured record, POST /admin/reload records
 // the body and answers 422 like a real LB rejecting an invalid config.
 type lbAdminStub struct {

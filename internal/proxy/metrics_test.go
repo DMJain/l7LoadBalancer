@@ -23,7 +23,7 @@ import (
 // labeledSeries returns the gathered dto.Metric whose label set exactly matches
 // want for the named metric family, or nil if no such series has been written.
 // The collector's private registry is the external, observable surface the
-// spec's whole-request-hook seam asserts against (spec Testing Decisions §3).
+// whole-request-hook seam asserts against.
 //
 // It reads the typed dto model via Registry().Gather rather than
 // prometheus/testutil's CollectAndCompare helpers: those compare whole
@@ -159,7 +159,7 @@ func TestProxyObservesWholeRequestOnEveryExitPath(t *testing.T) {
 			assert.Equal(t, 1.0, counter.GetCounter().GetValue(),
 				"exactly one request was served, so the counter must be 1")
 
-			// The protocol label rides only the request counter (S5.T3-main);
+			// The protocol label rides only the request counter;
 			// the duration histogram keeps its three-label set.
 			histLabels := maps.Clone(tt.wantLabels)
 			delete(histLabels, "protocol")
@@ -196,7 +196,7 @@ func TestProxyWithoutMetricsCollectorServes(t *testing.T) {
 }
 
 // TestProxyActiveRequestsGaugeTracksConcurrentInFlightRequests mirrors
-// S1.T6's ActiveConns leak-check against the metric: with requests blocked in
+// the ActiveConns leak-check against the metric: with requests blocked in
 // the backend, lb_active_requests must match Backend.ActiveConns() at every
 // point, and after they drain both must return to 0. Asserting the gauge
 // alongside the backend counter proves the gauge shares the IncActive/DecActive

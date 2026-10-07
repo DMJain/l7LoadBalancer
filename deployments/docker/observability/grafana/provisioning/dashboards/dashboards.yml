@@ -1,4 +1,4 @@
-# Grafana dashboard provider provisioning (S3.T7): loads every JSON file in
+# Grafana dashboard provider provisioning: loads every JSON file in
 # the mounted dashboards directory, so the committed dashboard is present the
 # moment the stack comes up.
 

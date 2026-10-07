@@ -56,7 +56,7 @@ type OutlierDetector struct {
 	// eject is the action taken on a threshold breach. It is a field rather
 	// than a direct b.MarkUnhealthy() call purely as a test seam:
 	// MarkUnhealthy is an idempotent atomic store, so its invocation count —
-	// the ticket's "exactly once, not once per failure" property — is not
+	// the "exactly once, not once per failure" property — is not
 	// otherwise observable. Production always starts from NewOutlierDetector's
 	// default. Called with d.mu held; must not block.
 	eject func(*backend.Backend)

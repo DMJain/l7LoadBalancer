@@ -13,8 +13,8 @@ import (
 )
 
 // This file is the cross-cutting counterpart to the per-selector test files.
-// Rather than re-testing each algorithm's distribution, it proves the Sprint 1
-// selectors are interchangeable with respect to health transitions:
+// Rather than re-testing each algorithm's distribution, it proves the round-robin and
+// least-connections selectors are interchangeable with respect to health transitions:
 // health-awareness must be a property of the Selector contract, not something
 // one implementation happens to get right. It also hosts the address-aware
 // selection helpers shared by every selector test, so a request is always
@@ -66,7 +66,7 @@ type selectorFactory struct {
 	new  func(reg *backend.Registry) Selector
 }
 
-func sprint1Selectors() []selectorFactory {
+func roundRobinAndLeastConnSelectors() []selectorFactory {
 	return []selectorFactory{
 		{name: "RoundRobin", new: func(reg *backend.Registry) Selector { return NewRoundRobin(reg) }},
 		{name: "LeastConnections", new: func(reg *backend.Registry) Selector { return NewLeastConnections(reg) }},
@@ -86,12 +86,12 @@ func selectNames(t *testing.T, s Selector, n int) []string {
 }
 
 // TestSelectorsRespectHealthTransitions runs one scripted sequence against
-// both Sprint 1 selectors: a target backend is chosen while healthy, stops
+// both of those selectors: a target backend is chosen while healthy, stops
 // being chosen the moment it goes unhealthy, and resumes once it recovers.
 func TestSelectorsRespectHealthTransitions(t *testing.T) {
 	const target = "backend-b"
 
-	for _, sf := range sprint1Selectors() {
+	for _, sf := range roundRobinAndLeastConnSelectors() {
 		t.Run(sf.name, func(t *testing.T) {
 			reg := newTestRegistry(t)
 			// Model in-flight traffic on the two non-target backends so that

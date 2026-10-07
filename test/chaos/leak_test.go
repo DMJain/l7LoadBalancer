@@ -14,8 +14,8 @@ import (
 // leakAuditDelta is the goroutine headroom the audit allows over its warmup
 // baseline: GC-finalizer queueing and timer jitter land here, while a real
 // per-request leak (one goroutine per cancellation or death) is dozens of
-// goroutines and cannot hide inside it. This is S4.T9's "small delta"; the
-// soak (S4.T10) generalizes the same assertion to a full hour.
+// goroutines and cannot hide inside it. This is the audit's "small delta"; the
+// soak generalizes the same assertion to a full hour.
 const leakAuditDelta = 10
 
 // Burst sizes: enough repeated failures that a per-request leaked goroutine is
@@ -25,11 +25,11 @@ const (
 	leakDeathBurst        = 15
 )
 
-// TestChaosGoroutineLeakAudit is S4.T9's automated leak audit through the
+// TestChaosGoroutineLeakAudit is the automated leak audit through the
 // application seam. It warms the system, captures a goroutine baseline, then
 // drives a failure-laden burst — client cancellations against a gated backend
-// (S4.T5's suppression path) followed by backend deaths (S4.T6's transport
-// path) — and asserts the goroutine count settles back within a small delta of
+// followed by backend deaths (the transport
+// failure path) — and asserts the goroutine count settles back within a small delta of
 // the baseline. circuitChaosConfig pushes the checker's cadence past the test
 // window (one initial probe still fires), so the only traffic is the burst the
 // test drives.

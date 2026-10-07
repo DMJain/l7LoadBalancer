@@ -37,8 +37,8 @@ type registrySnapshot struct {
 }
 
 // Registry holds the set of backends built from validated config and mediates
-// concurrent read (selectors, proxy) and write (health checker, Sprint 3;
-// config reload, Sprint 4) access.
+// concurrent read (selectors, proxy) and write (health checker;
+// config reload) access.
 //
 // Concurrency: the backend set is one immutable snapshot behind an
 // atomic.Pointer, replaced whole by Apply. All readers — All, Selectable,
@@ -47,7 +47,7 @@ type registrySnapshot struct {
 // single writer, called by one goroutine at a time (the reload loop). The
 // circuit gate is written once by SetCircuitGate before the registry is served
 // and only read afterwards, the same contract as Proxy.RegisterObserver. See
-// docs/design/sprint-1-contracts.md and ADR-0012, ADR-0015.
+// docs/architecture.md and ADR-0012, ADR-0015.
 type Registry struct {
 	snap    atomic.Pointer[registrySnapshot]
 	circuit CircuitGate
@@ -135,9 +135,9 @@ func (r *Registry) SetCircuitGate(g CircuitGate) {
 //
 // The set is captured at call time; concurrent health or circuit transitions
 // between this call and the next are expected and need no cross-call
-// consistency (see S1.T4's modulo indexing). Renamed from Healthy in S3.T3:
-// the old name would have quietly meant something narrower than what it
-// filters on once circuit state existed.
+// consistency (see the modulo indexing in the selectors). The name is Selectable rather
+// than Healthy because "healthy" would quietly mean something narrower than what it
+// filters on once circuit state exists.
 func (r *Registry) Selectable() []*Backend {
 	snap := r.snap.Load()
 	selectable := make([]*Backend, 0, len(snap.backends))

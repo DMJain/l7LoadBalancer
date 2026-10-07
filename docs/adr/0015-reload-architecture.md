@@ -1,338 +1,71 @@
-# ADR-0015: Zero-downtime reload architecture — in-process snapshot swap, backend identity, and admission
+# ADR-0015: Zero-downtime reload architecture: in-process snapshot swap, backend identity, and admission
 
-- **Status**: Accepted
-- **Date**: 2026-09-25
-- **Deciders**: Darshan Jain (project owner) + opencode agent (S4.T1, design session recorded in `.scratch/s4-t0-t4-reload/spec.md`)
+**Status:** Accepted
 
 ## Context
 
-Sprint 4's first exit criterion is "SIGHUP with 1000 in-flight requests drops
-zero." An operator edits the backend list, sends SIGHUP, and routing must move
-to the new fleet: unchanged backends keep everything the load balancer learned
-about them, added backends take traffic only once they are proven, and removed
-backends finish what they were doing. The backend set is fixed in five places
-at startup — the registry's slice, the health checker's one-goroutine-per-
-backend fan-out, the consistent-hash ring built once at selector construction,
-the outlier detector's per-backend windows, and the per-backend metric series.
+An operator edits the backend list or the algorithm and triggers a reload. Routing must move to the new configuration with no dropped request. Unchanged backends must keep what the load balancer learned about them. Added backends must take traffic only when they are proven. Removed backends must finish their in-flight work (ADR-0016).
 
-S4.T0 moved the whole wiring graph into `internal/app` behind `Build`/`Run`, so
-a reload has one package to attach to and the exit-criterion test can drive the
-real system without signals or temp files. S4.T1 builds the pure comparison a
-reload is decided on; S4.T2 makes the registry's backend set replaceable while
-traffic flows; S4.T3 orchestrates the whole thing from SIGHUP. The decisions
-below span T1–T3 and have to be fixed before any of that code is written,
-because each is a package-boundary, identity, or concurrency decision that is
-expensive to reverse.
-
-This ADR is written from the design-session record in the bundle spec
-(decisions D5–D17). It does not cover draining (ADR-0016, S4.T4.0) or the
-non-backend hot-reload, reload-outcome metric, client-cancellation
-classification, and pre-warming follow-ups (spec Out of Scope).
+At startup the backend set is fixed in five places: the registry slice, the health checker's goroutine per backend, the consistent-hash ring, the outlier detector's windows, and the per-backend metric series. All wiring is in `internal/app` behind `Build`/`Run`, so a reload has one place to attach to.
 
 ## Decision
 
-### Why in-process, not a process handoff
+### In process, not a process handoff
 
-1. **Reload swaps the registry's backend set in process; it does not start a
-   second process and hand off the listening socket (SO_REUSEPORT).** The
-   listener is never closed, so there is no accept-boundary drop and no
-   connection migration to design. Unchanged backends keep their instance and
-   all runtime state — health, circuit, active connections, EWMA latency —
-   which is the operator-visible property the reload exists for and which a
-   fresh process cannot preserve without shipping state across a process
-   boundary. SIGHUP is a reload signal, not a restart signal: `main` installs
-   `SIGHUP` separately from the existing SIGINT/SIGTERM shutdown context, so a
-   reload never races shutdown.
-
-   SO_REUSEPORT/process replacement is deferred (spec Out of Scope, post-Sprint
-   5): it is the right tool for a binary deployment or a config change larger
-   than the backend list, but it is more moving parts than this change needs,
-   and the throughput question it answers is not the one Sprint 4 asks.
+1. A reload changes the running process. It does not start a second process and hand off the socket (SO_REUSEPORT). The listener never closes, so no connection drops at the accept boundary. Unchanged backends keep their instance and all runtime state: health, circuit, active requests and EWMA latency. A new process cannot keep this state without sending it across a process boundary. `main` handles SIGHUP apart from the SIGINT/SIGTERM shutdown context, so a reload never races shutdown. SO_REUSEPORT handoff is a possible future extension for binary upgrades.
 
 ### Backend identity and the diff
 
-2. **Backend identity is the `(name, URL)` pair.** A name kept with a changed
-   URL is one **removed** plus one **added** backend, never an "updated" one:
-   state learned about the old host (circuit, EWMA, health) must never be
-   applied to a different host. Duplicate names within a file are already
-   rejected by `config.Validate`, so the diff assumes uniqueness and needs no
-   disambiguation rule. Order is part of neither identity nor equality: two
-   configs listing the same identities in a different order diff to all-
-   unchanged.
-
-3. **The diff is a pure function over `(old, new)` validated configs**,
-   returning added, removed, and unchanged `[]BackendConfig`: added and
-   unchanged in the **new file's order**, removed in the **old file's order**.
-   The new-file order is what `Registry.All`/`Selectable` then report, so the
-   file dictates round-robin rotation order and `LeastConnections`' deterministic
-   tie-break. A second pure function returns the names of the non-backend
-   fields that differ, comparing **resolved** values so an omitted field and an
-   explicit default compare equal after `Validate`'s defaulting. Neither
-   function logs, errors, or touches runtime state — S4.T2's apply and S4.T3's
-   reload operation consume them.
-
-4. **Only the backend list is reloadable; any non-backend difference rejects
-   the reload whole.** This covers `listen`, `algorithm`, `health`, `circuit`,
-   `metrics`, and `health_endpoint` (and, from ADR-0016, `reload`). A reload
-   that would silently do nothing must be surfaced, not ignored, and a partial
-   apply of a knob whose runtime consumers hold derived state (a probe interval
-   already baked into a running ticker, a breaker's cooldown) is more dangerous
-   than refusing it. The old config keeps serving and the log names the changed
-   fields. Hot-reloading these is a proposed ticket, not built here.
+2. **Backend identity is the pair `(name, URL)`.** A name kept with a new URL is one removed backend plus one added backend. State learned about one host must never apply to a different host. `config.Validate` rejects duplicate names. Order is not part of identity: the same identities in a different order diff to all unchanged.
+3. **The diff is a pure function over two validated configs.** `config.DiffBackends` returns added and unchanged backends in the new file's order, and removed backends in the old file's order. The new order becomes the order of `Registry.All`/`Selectable`, so the file sets the round-robin rotation and the `LeastConnections` tie-break. `config.NonBackendChanges` returns the names of other sections that differ. It compares resolved values, so an omitted field equals its explicit default. Neither function logs or touches runtime state.
+4. **The backend list and `algorithm` are reloadable. Any other difference rejects the whole reload.** `NonBackendChanges` checks, in order: `listen`, `tls`, `h2c`, `health`, `circuit`, `metrics`, `health_endpoint`, `reload`, `server`, `transport`. Their consumers hold derived state, for example a probe interval in a running ticker or an armed drain timer. A partial apply is more dangerous than a clear refusal. The old config keeps serving, and the log names the changed fields.
 
 ### The snapshot
 
-5. **The registry holds one atomic pointer to an immutable snapshot: a
-   monotonically increasing version plus the ordered backend slice.** `All`,
-   `Selectable`, and `Allow` read the current snapshot; their contracts are
-   unchanged and readers never lock. An exported version accessor serves tests
-   and logs, and the version and backend set are read in a **single atomic
-   load**, so correctness comes from the structure rather than a rule about
-   read order. The consistent-hash selector reads version and backends from
-   that same one load.
-
-6. **`apply` is the single writer that builds the next snapshot.** It walks the
-   new file's backends in order, reusing the existing instance for each
-   unchanged identity and constructing a fresh one for each added identity; it
-   returns the added and removed instances. Re-adding a previously removed
-   identity therefore yields a fresh instance that shares no state with the old
-   one. `apply` is called by one goroutine at a time (the reload loop); readers
-   are unaffected while it builds.
-
-7. **Removed backends are marked removed before the swap.** `Backend` gains an
-   unexported atomic removed flag with a read accessor, method-only in the
-   style of ADR-0006/ADR-0010/ADR-0012, amending ADR-0002 decision 5. Marking
-   first (rather than at or after the swap) means any request selected just
-   before the swap already sees the flag when it completes, so the suppression
-   rule below needs no read-order caveat. Removed backends leave `All` and
-   `Selectable` at the swap. A request already holding the old pointer is
-   otherwise unaffected: it completes against its backend.
-
-8. **A removed backend reports nothing to observers.** The proxy skips the
-   entire observer fan-out when the request's backend is removed — normal
-   completions, transport failures, and client cancellations alike. This is the
-   single rule that keeps every observer ignorant of reload: no circuit, health,
-   outlier, or metric write can come from a backend that is no longer part of
-   the fleet, so a same-name fresh backend's series reflect only its own
-   traffic and no ghost transition is emitted. The proxy's active-connection
-   accounting is **not** observer-driven and is deliberately unaffected — a
-   removed backend must still release its slot; otherwise `ActiveConns` would
-   never drain.
+5. **The registry holds one atomic pointer to an immutable snapshot:** a version number that only increases, and the ordered backend slice. `All`, `Selectable` and `Allow` read the current snapshot without locks. The version and the backends come from one atomic load, so they always match.
+6. **`apply` is the only writer.** It walks the new backends in order. It reuses the existing instance for an unchanged identity and makes a new one for an added identity. A removed identity that is added again gets a new instance with no shared state.
+7. **Removed backends are marked removed before the swap.** `Backend` has an unexported atomic flag, read through `IsRemoved()`. Because the mark comes first, a request selected just before the swap sees the flag when it completes.
+8. **A removed backend reports nothing to observers.** The proxy skips the whole observer fan-out when the backend is removed: normal completions, transport failures and client cancellations. No circuit, health, outlier or metric write can come from a backend that left the fleet. A new backend with the same name therefore shows only its own traffic. The active-request count is not observer-driven and still decrements, so a removed backend can drain.
 
 ### Selection
 
-9. **The consistent-hash ring rebuilds on demand, keyed on the snapshot
-   version.** `ConsistentHashBoundedLoads` caches `(version, ring)` behind an
-   atomic pointer and, when `Select` sees a version mismatch, builds a ring from
-   that snapshot's full backend list and CASes it in; redundant concurrent
-   builds right after a swap are correct and simply lose the CAS. Pull-based
-   rebuild is chosen over push-based invalidation because the selector already
-   reads the snapshot on every request, so the version check is free, and no
-   reload path has to know that a ring exists. Load remains live
-   `ActiveConns()` on the backend (ADR-0009), and the ring is placement-only
-   (ADR-0008), so rebuilding it loses nothing. The unwired naive comparator
-   stays static — it is test evidence, not a production selector. Round-robin's
-   modulo index shifting over a changed slice length is accepted, exactly as on
-   health flips (S1.T4).
+9. **The consistent-hash ring rebuilds on demand, keyed on the snapshot version.** `ConsistentHashBoundedLoads` caches `(version, ring)` behind an atomic pointer. When `Select` sees a new version, it builds a ring from that snapshot and stores it with CAS. Two concurrent builds after a swap are both correct, and one loses the CAS. The reload path does not need to know that a ring exists. Load stays live `ActiveConns()` (ADR-0009), and the ring holds only placement (ADR-0008), so a rebuild loses nothing. Round-robin's index may start mid-cycle after a reload, as after a health change.
 
-### Admission and the blue/green window
+### Admission and blue/green
 
-10. **A backend added by reload starts unhealthy and is admitted after one
-    successful probe; backends at process startup start healthy.** This is a
-    deliberate asymmetry. At startup there is no previously-serving fleet to
-    protect and no "old config" to fall back to: the process has not answered a
-    request yet, every backend is unproven, and it must come up serving, so
-    startup trusts the operator's file and lets the active checker correct it.
-    A reload happens in place while traffic is already being served; a typo'd
-    URL in an added backend must not produce client-visible 502s against
-    traffic the old fleet was serving correctly. The added backend's first
-    successful probe is a **reinstatement with reason `initial_probe`**,
-    distinct from ejection recovery (`probe_recovered`); a failing first probe
-    emits no transition at all, because the backend was never healthy. Recovery
-    after ejection still requires the normal two consecutive successes. The
-    probe-round-complete latch is never cleared by reload (ADR-0014 decision 4),
-    so `/startupz` stays latched.
+10. **A backend added by reload starts unhealthy and is admitted after one successful probe. Backends at process startup start healthy.** At startup there is no serving fleet to protect, so the process trusts the file and lets the checker correct it. During a reload, traffic is already flowing, and a typo in a new URL must not cause client 502s. The first successful probe is a reinstatement with reason `initial_probe`. A failed first probe logs no transition, because the backend was never healthy. Recovery after an ejection still needs two consecutive successes. The `/startupz` latch is never cleared (ADR-0014).
+11. **A reload that replaces every backend (blue/green) is allowed.** All added backends start unhealthy, so `Selectable()` is empty until the first probe succeeds. In that window `/readyz` reports not ready and clients get 503. The `config_reloaded` line logs at WARN when `unchanged=0`.
+12. **The loaded config is one atomic pointer on the application.** A successful reload replaces it, so each reload diffs against the current config, not the startup config.
 
-11. **A reload that replaces every backend (blue/green) is permitted, and its
-    brief empty-selectable window is logged at WARN.** With every added backend
-    starting unhealthy, `Selectable()` is empty until the first probe
-    succeeds, so `/readyz` reports not-ready and client requests get 503 for
-    that window. This is the honest, observable cost of decision 10 and is
-    accepted: it is logged as a **config reloaded** line at WARN because
-    `unchanged=0`, `/readyz` reflects the live empty set so an upstream can fail
-    over, and pre-warming added backends (probing before the swap) is a proposed
-    ticket, not built here.
+### Two triggers, one operation
 
-12. **The loaded config is held on the application as one atomic pointer and
-    replaced by the reload operation after the registry apply succeeds**, so
-    each reload diffs against the currently loaded config rather than the
-    startup config and successive reloads compose. `Build` seeds it; T2 only
-    tests read it, T3's reload replaces it.
+13. **SIGHUP reloads from the config file. `POST /admin/reload` on the metrics listener reloads from a YAML body.** The body uses the same strict decoder and `${VAR}` expansion as the file (`config.Parse`, which `config.Load` calls). The response is 200 on success and 422 with the error text on any rejection (parse, validation, non-backend change, apply). The body limit is 1 MiB (413 above it). Before `Run` starts, the endpoint returns 503.
+14. **Every reload goes through one operation that parses, validates, applies and records the outcome, under one mutex.** Both triggers log the same way (`config_reload_failed` with `parse_error` or `validation_error`). `App.Reload` takes an already-validated config and the same mutex.
+15. **After a body reload, the file on disk is not authoritative until the next SIGHUP.** The next reload diffs against the body's config. A SIGHUP applies the file again. The endpoint never writes the file.
+16. **`GET /admin/reload/last` returns the last outcome.** Before any attempt it returns `{"result":"none"}`. After an attempt it returns `{"result":"success"|"rejected","time":<RFC 3339>,"error":<text>}`. The record is one atomic pointer, covers both triggers, and is lost on restart.
+17. **An endpoint reload runs on the application's run context, not the request context.** A reload starts long-lived work (a prober per added backend, a drain per removed backend) that must outlive the HTTP request.
+
+The admin endpoint is not a production control plane. It has no authentication, authorization, persistence or audit beyond the reload log line. It exists for the demo and for tests. No compose file publishes the metrics listener (ADR-0013). The endpoint takes a body because a signal carries no payload and returns no result.
+
+### Algorithm reload
+
+18. **The proxy reads its selector through one atomic pointer.** A reload that changes `algorithm` builds the new selector first. If the build fails, the whole reload is rejected and nothing changes. Then the reload applies the backend diff, stores the new selector with one atomic store, and records the loaded config. Validation still rejects an unknown algorithm.
+19. **No request is affected by the selector swap.** A request calls the selector once, at the start of `ServeHTTP`. A dispatched request keeps its backend. A request that arrives during the swap sees either the whole old selector or the whole new one. The listener stays open, so no connection resets.
+20. **The new selector starts warm.** Every selector is built from the registry, and the state that steers selection lives on the backend: the P2C-EWMA latency (ADR-0010, fed by an observer for every algorithm) and the active-request count (ADR-0007, ADR-0009). The ring is built from the current snapshot. Only the round-robin index starts again, which does no harm.
+21. **The swap is visible.** The `config_reloaded` log line carries `previous_algorithm` and `algorithm`. `lb_algorithm_info` (ADR-0013) moves to the new algorithm.
 
 ## Consequences
 
-- Positive: reload preserves every piece of learned state for unchanged
-  backends, which is the property an operator notices, and does so without a
-  second process, fd passing, or an accept-boundary drop.
-- Positive: purity of the diff (decisions 2–4) makes the whole comparison
-  decision exhaustively table-testable with no registry, server, or clock.
-- Positive: one structural rule (one snapshot behind one atomic pointer, one
-  pre-swap mark) gives removed-backend suppression without any observer knowing
-  reload exists.
-- Negative: `Backend`'s exported surface grows again with the removed-flag
-  accessor, and the flag is another method-only convention rather than a
-  type-enforced one (same limitation ADR-0006 and ADR-0011 accepted).
-- Negative: a blue/green reload has a real empty-selectable window (decision
-  11) whose duration is the time to the first successful probe.
-- Negative: round-robin's rotation index is not reset across a reload, so the
-  first post-reload rotation can start mid-cycle; accepted as on health flips.
-- Neutral: non-backend changes are rejected rather than hot-reloaded; the
-  follow-up ticket can add them without changing this ADR's snapshot mechanism.
-
-## Alternatives considered
-
-- **SO_REUSEPORT / start-a-new-process handoff**: rejected in decision 1 —
-  cannot preserve per-backend learned state, requires socket handoff or kernel
-  load balancing, and answers a throughput question Sprint 4 does not ask;
-  deferred to the post-Sprint 5 extension.
-- **Diff by name only ("name is identity, URL is a mutable attribute")**:
-  rejected in decision 2 — would carry state learned on the old host onto a
-  different host, the exact failure the reload must not introduce.
-- **Emit an explicit "updated" entry for a name whose URL changed**: rejected in
-  decision 2 — a separate kind of change is a second code path (and a second
-  admission/reset rule) for a case expressible as one removal plus one
-  addition.
-- **Order-insensitive diff that sorts backends**: rejected in decision 3 — the
-  file order is load-bearing (rotation and tie-break), so the diff must report
-  the new file's order, not a canonical one.
-- **Reject a reload that removes every backend / leaves zero selectable**:
-  rejected in decision 11 — blue/green migration is a legitimate operator move;
-  the brief window is logged and observable rather than forbidden.
-- **Added backends start healthy, matching startup**: rejected in decision 10 —
-  it trades a short empty window for client-visible 502s from a typo, the
-  failure the reload path is specifically built to avoid.
-- **Push-based ring invalidation from the reload path**: rejected in decision 9
-  — requires reload to know the selector's internals; the pull version check on
-  a path that already reads the snapshot is free.
-- **A `map[*Backend]state` in the reload path to carry state across**: rejected
-  in decision 6 — state already lives on the instance, so keeping the instance
-  for an unchanged identity is the whole mechanism.
-
-## Amendment (2026-10-07, S5.T20.1) — a second trigger: the reload admin endpoint
-
-The recorded demo needs a reload attempt that can be triggered from a page and
-whose result can be read back (`.scratch/s5-t20-demo-dashboard/spec.md`, D2).
-SIGHUP can do neither: a signal carries no payload, and its only output is a log
-line. This amendment adds a second trigger. It does not change what a reload
-is: decisions 1–12 hold, and decision 4 in particular still rejects any
-non-backend change, the algorithm included.
-
-13. **`POST /admin/reload` on the metrics listener applies a YAML config sent
-    in the request body.** The body is parsed with the same strict decoder and
-    `${VAR}` expansion as the file (`config.Parse`, which `config.Load` now
-    calls), validated, and handed to the same reload operation. The response is
-    `200` on success and `422` with the error text on any rejection (parse,
-    validation, non-backend change, apply), so a caller can show *why*. The body
-    is capped at 1 MiB (`413` above it).
-
-14. **Every reload, from either trigger, goes through one application-level
-    operation that parses, validates, applies and records the outcome, under one
-    mutex.** Decision 6's "one goroutine at a time" was true by construction
-    while SIGHUP was the only trigger; with two triggers it is enforced by the
-    mutex. The parse- and validation-failure log lines move from `main` into
-    that operation unchanged (`config_reload_failed` with `parse_error` /
-    `validation_error`), so both triggers log alike. `App.Reload` keeps its
-    contract (an already-validated config) and takes the same mutex.
-
-15. **After a body-applied reload, the file on disk is not authoritative until
-    the next SIGHUP.** The loaded-config record (decision 12) becomes the body's
-    config, and the next reload diffs against it whatever its trigger. A SIGHUP
-    therefore re-applies the file and is the documented way back to it. Keeping
-    the file in step is the caller's job. The endpoint never writes the file.
-
-16. **The last attempt's outcome is kept in memory and served by
-    `GET /admin/reload/last`** as `{"result":"none"}` before any attempt, else
-    `{"result":"success"|"rejected","time":<RFC 3339>,"error":<text>}`. It is
-    recorded for both triggers, it is one atomic pointer (readers never see a
-    half-written record), and it is lost on restart.
-
-17. **A reload through the endpoint runs on the application's run context, not
-    the request's.** Reload starts long-lived work — a prober per added backend,
-    a drain per removed one — that must outlive the HTTP request. Before `Run`
-    has started, the endpoint answers `503`.
-
-**Not a production control plane.** The endpoint has no authentication, no
-authorization, no persistence, and no audit beyond the existing reload log
-line. It exists for the demo and for tests. It inherits the metrics listener's
-exposure (ADR-0013 amendment of 2026-10-07): no compose file in this
-repository publishes that listener, and an operator who runs the bare binary
-should bind `metrics.listen` to loopback. ADR-0005 keeps security hardening out
-of scope.
-
-### Alternatives considered (amendment)
-
-- **The endpoint re-reads the config file (no body).** Rejected (owner,
-  2026-10-07): a demo "invalid config" attempt would then need a second,
-  writable config file and a way to write it from the control page.
-- **The endpoint writes the body to the config file, then reloads.** Rejected:
-  the demo mounts configs read-only, and a write path turns a reload endpoint
-  into a file-management endpoint.
-- **A separate admin listener.** Rejected: one more port and config field for
-  the same unpublished, unauthenticated exposure the metrics listener already
-  has (ADR-0013 decision 8; S4.T9's pprof reasoning).
-
-## Amendment (2026-10-07, S5.T20.7) — the algorithm is reloadable
-
-Decision 4 rejected every non-backend change, the algorithm included, so the
-Sprint 4 reload could be limited to the backend list. That was a scoping
-choice, not a property of production load balancers. Nginx applies a new
-balancing method on reload by starting new workers while the old ones finish
-their connections. HAProxy hands the listening socket to a new process. Envoy
-swaps cluster settings inside the running process. None of them refuses the
-change or drops the requests in flight. The owner decided (2026-10-07) that
-this project must behave the same way. This amendment **supersedes decision 4
-for `algorithm` only**: every other non-backend field is still rejected whole,
-for decision 4's original reason (their consumers hold derived state that a
-partial apply would leave inconsistent).
-
-18. **A reload may change `algorithm`; the selector is swapped in process.**
-    The proxy reads its selector through one atomic pointer. A reload whose
-    algorithm differs builds the new selector *before* anything is applied, so
-    a build failure rejects the whole reload with nothing changed. It then
-    applies the backend diff, swaps the selector with one atomic store, and
-    records the loaded config. An unknown algorithm is still rejected by
-    validation.
-
-19. **No request is affected by the swap.** A request asks the selector for a
-    backend exactly once, at the start of `ServeHTTP`. A request already
-    dispatched keeps its backend and finishes normally. A request arriving
-    during the swap loads either the complete old selector or the complete new
-    one, never a mix. The listener is never closed, so no connection is reset.
-
-20. **The new selector starts warm wherever the algorithm has state.** Every
-    selector is built from the registry alone, and the state that steers
-    selection lives on the backend, not on the selector. That means P2C-EWMA's
-    latency average (ADR-0010, fed by an observer registered for every
-    algorithm) and the active-request count that least-connections and
-    bounded consistent hashing read (ADR-0007, ADR-0009). The consistent-hash
-    ring is built from the current snapshot at construction (decision 9). Only
-    round-robin's rotation index starts over, which is harmless (the same
-    accepted cost as in the Consequences above).
-
-21. **The swap is observable.** The `config_reloaded` line carries
-    `previous_algorithm` and `algorithm` when the algorithm changed, the last
-    reload record (decision 16) reads success, and `lb_algorithm_info`
-    (ADR-0013 amendment of 2026-10-07, S5.T20.7) moves to the new algorithm.
-
-### Alternatives considered (amendment, S5.T20.7)
-
-- **Keep rejecting it and run one process per algorithm (the demo's previous
-  shape, ADR-0023 decision 4).** Rejected by the owner: it shows traffic moving
-  between processes, not a load balancer changing its own behaviour.
-- **Replace the process to change the algorithm (SO_REUSEPORT handoff).**
-  Rejected for the same reason as in decision 1. It would also throw away the
-  per-backend state that decision 20 lets the new selector reuse.
-- **Swap the selector before applying the backend diff.** Rejected: the order
-  does not change what a request sees, since every selector reads the
-  registry's current snapshot. Applying the diff first keeps one rule for a
-  combined reload: the backends change, then the policy over them.
+- Reload keeps all learned state for unchanged backends, with no second process, no file-descriptor passing and no accept-boundary drop.
+- The diff is pure, so it is fully table-testable with no registry, server or clock.
+- One snapshot behind one atomic pointer, plus one mark before the swap, hides reload from every observer.
+- The algorithm changes in place, warm, with no effect on in-flight requests.
+- `Backend` grows the removed-flag accessor, another method-only convention.
+- A blue/green reload has an empty-selectable window that lasts until the first successful probe.
+- Changes to other config sections need a restart.
+- Rejected alternatives:
+  - SO_REUSEPORT handoff (loses learned state).
+  - Identity by name only (moves state to a different host).
+  - An "updated" diff entry (a second code path for remove plus add).
+  - A sorted diff (file order matters).
+  - Added backends starting healthy (client 502s from a typo).

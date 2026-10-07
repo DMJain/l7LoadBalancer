@@ -18,7 +18,7 @@ import (
 )
 
 // statsBody is the /stats response contract: the backend's name and how many
-// benchmark requests have arrived at it (S5.T5.5.2).
+// benchmark requests have arrived at it.
 type statsBody struct {
 	Backend  string `json:"backend"`
 	Requests int64  `json:"requests"`
@@ -41,7 +41,7 @@ func discardLogger() *slog.Logger {
 }
 
 // TestHandlerEndpoints locks the response contract for the benchmark payload
-// endpoints and the /health probe (S5.T4-infra). Sizes are asserted exactly so
+// endpoints and the /health probe. Sizes are asserted exactly so
 // a benchmark never silently measures the wrong payload profile.
 func TestHandlerEndpoints(t *testing.T) {
 	h := newHandler("backend1", 0, 0, true, discardLogger())
@@ -77,7 +77,7 @@ func TestHandlerEndpoints(t *testing.T) {
 
 // TestHandlerMethodContract locks the allowed methods per path: GET everywhere;
 // POST additionally on the payload paths, where the body is read and discarded so
-// the demo traffic generator can send uploads (S5.T16.1); every other method or
+// the demo traffic generator can send uploads; every other method or
 // path keeps the pre-existing 405 with Allow: GET.
 func TestHandlerMethodContract(t *testing.T) {
 	h := newHandler("backend1", 0, 0, true, discardLogger())
@@ -131,7 +131,7 @@ func TestHealthBypassesChaos(t *testing.T) {
 	assert.Len(t, rec.Body.Bytes(), 200)
 }
 
-// TestEnvBool locks the LOG_REQUESTS parsing contract (S5.T5.5.1): unset or
+// TestEnvBool locks the LOG_REQUESTS parsing contract: unset or
 // empty means the default, only the exact strings "true" and "false" are
 // accepted, and anything else is an error naming the variable — the same
 // loud-failure strictness as SLEEP_MS/FAIL_RATE.
@@ -175,7 +175,7 @@ func TestEnvBool(t *testing.T) {
 
 // TestHandlerLoggingSwitch proves the per-request log line can be silenced on
 // every path — payload, default, /health and the 405 branch — and that it is
-// written when logging is on (S5.T5.5.1). The logger is captured, so the
+// written when logging is on. The logger is captured, so the
 // assertion is on the exact bytes emitted, not on a discard.
 func TestHandlerLoggingSwitch(t *testing.T) {
 	paths := []struct {
@@ -220,7 +220,7 @@ func TestHandlerLoggingSwitch(t *testing.T) {
 	})
 }
 
-// TestStatsEndpointShape locks the /stats response contract (S5.T5.5.2): 200
+// TestStatsEndpointShape locks the /stats response contract: 200
 // with a JSON body naming the backend and its arrival count. A fresh handler
 // reports zero.
 func TestStatsEndpointShape(t *testing.T) {
@@ -233,7 +233,7 @@ func TestStatsEndpointShape(t *testing.T) {
 
 // TestStatsCountsArrivalsExcludesControl proves the counter counts benchmark
 // traffic — the payload and default paths — and not the control endpoints
-// /health and /stats themselves (S5.T5.5.2).
+// /health and /stats themselves.
 func TestStatsCountsArrivalsExcludesControl(t *testing.T) {
 	h := newHandler("backend1", 0, 0, true, discardLogger())
 
@@ -253,7 +253,7 @@ func TestStatsCountsArrivalsExcludesControl(t *testing.T) {
 
 // TestStatsCountsOnArrival proves the increment happens on arrival, before any
 // injected latency: a request still sleeping is already reflected by /stats
-// while its own response has not returned (S5.T5.5.2).
+// while its own response has not returned.
 func TestStatsCountsOnArrival(t *testing.T) {
 	h := newHandler("backend1", 300, 0, true, discardLogger())
 
@@ -280,8 +280,7 @@ func TestStatsCountsOnArrival(t *testing.T) {
 }
 
 // TestStatsBypassesChaos proves /stats is a control endpoint like /health: an
-// injected failure rate and delay cannot make the count endpoint fail or stall
-// (S5.T5.5.2).
+// injected failure rate and delay cannot make the count endpoint fail or stall.
 func TestStatsBypassesChaos(t *testing.T) {
 	h := newHandler("backend1", 5000, 1.0, true, discardLogger())
 

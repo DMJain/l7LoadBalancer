@@ -86,7 +86,7 @@ backends:
 			},
 		},
 		{
-			name: "Sprint 3 duration fields decode from YAML strings without defaulting",
+			name: "health and circuit duration fields decode from YAML strings without defaulting",
 			contents: `listen: ":8080"
 health:
   probe_interval: "1500ms"
@@ -108,7 +108,7 @@ backends:
 			},
 		},
 		{
-			name:     "omitted Sprint 3 durations are left nil by Load",
+			name:     "omitted health and circuit durations are left nil by Load",
 			contents: "listen: \":8080\"\n",
 			check: func(t *testing.T, cfg *Config) {
 				t.Helper()

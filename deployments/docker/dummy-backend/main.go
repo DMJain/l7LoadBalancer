@@ -1,17 +1,17 @@
 // Command dummy-backend is a lightweight, stdlib-only HTTP server used to
-// exercise the load balancer end-to-end without real upstreams (S1.T9).
+// exercise the load balancer end-to-end without real upstreams.
 //
 // It identifies itself in every response and can inject artificial latency
-// and failures, so selection-algorithm differences and (from Sprint 3)
+// and failures, so selection-algorithm differences and
 // resilience behavior are observable on `docker compose up` with no manual
 // configuration.
 //
 // Concurrency: net/http serves each request on its own goroutine, so handler
 // invocations run concurrently. The shared mutable state is the per-process
 // arrival counter — a sync/atomic.Int64 incremented on entry and read with Load
-// (S5.T5.5.2) — and, when the admin listener is enabled, the chaos profile — an
+// — and, when the admin listener is enabled, the chaos profile — an
 // atomic.Pointer[profile] read once per request and swapped whole by the admin
-// handler (S5.T16.1). Each backend runs as its own container, so one counter and
+// handler. Each backend runs as its own container, so one counter and
 // one profile are the whole story. math/rand/v2's top-level functions are safe
 // for concurrent use.
 package main
@@ -41,7 +41,7 @@ const (
 )
 
 // payloads are the pre-generated bodies for the benchmark response-size
-// endpoints (S5.T4-infra). Built once at package init so a benchmark measures
+// endpoints. Built once at package init so a benchmark measures
 // transport overhead, not per-request allocation. Sizes are exact: 200 B,
 // 10 KiB, 1 MiB.
 var payloads = map[string][]byte{
@@ -51,7 +51,7 @@ var payloads = map[string][]byte{
 }
 
 // statsResponse is the /stats body: the backend's name and how many benchmark
-// requests have arrived at it (S5.T5.5.2).
+// requests have arrived at it.
 type statsResponse struct {
 	Backend  string `json:"backend"`
 	Requests int64  `json:"requests"`
@@ -93,7 +93,7 @@ func main() {
 
 	// The runtime admin listener is opt-in: only the demo stack sets
 	// ADMIN_ENABLED=true, so the bench rig and root stack cannot have their
-	// backends changed mid-run (S5.T16.1).
+	// backends changed mid-run.
 	adminEnabled, err := envBool("ADMIN_ENABLED", false)
 	if err != nil {
 		logger.Error("invalid ADMIN_ENABLED", "error", err)
@@ -156,7 +156,7 @@ func main() {
 	// server.TLSNextProto is deliberately left nil: ListenAndServeTLS
 	// auto-configures HTTP/2 via ALPN only while it is nil. Setting it to an
 	// empty map silently disables HTTP/2 server-side — the server-side twin of
-	// the client's ForceAttemptHTTP2 gotcha (S5.T4-infra, spec §20).
+	// the client's ForceAttemptHTTP2 gotcha (see the HTTP/2 note above).
 	var serveErr error
 	if certFile != "" {
 		serveErr = server.ListenAndServeTLS(certFile, keyFile)
@@ -191,7 +191,7 @@ func tlsFilesFromEnv() (certFile, keyFile string, err error) {
 // sleep, the uniform jitter applied around it, and the per-request failure
 // probability. It is held behind an atomic.Pointer and swapped whole, so a
 // request reads one consistent (sleep, jitter, fail_rate) triple even while the
-// admin listener is changing it (S5.T16.1).
+// admin listener is changing it.
 type profile struct {
 	sleepMS  int
 	jitterMS int
@@ -203,8 +203,7 @@ type profile struct {
 // on entry, read by /stats) and the chaos profile (read once per request, written
 // by the admin listener when ADMIN_ENABLED is set). net/http serves each request
 // on its own goroutine, so both are safe for concurrent use; each backend runs as
-// its own container, so one counter and one profile are the whole story
-// (S5.T5.5.2, S5.T16.1).
+// its own container, so one counter and one profile are the whole story.
 type backend struct {
 	name        string
 	logger      *slog.Logger
@@ -215,7 +214,7 @@ type backend struct {
 
 // newBackend builds the backend with its initial chaos profile. The env values
 // (SLEEP_MS, FAIL_RATE, jitter 0) are that initial profile; with ADMIN_ENABLED
-// unset nothing can change it, so runtime behaviour is unchanged (S5.T16.1).
+// unset nothing can change it, so runtime behaviour is unchanged.
 func newBackend(name string, initial profile, logRequests bool, logger *slog.Logger) *backend {
 	b := &backend{name: name, logger: logger, logRequests: logRequests}
 	b.profile.Store(&initial)
@@ -266,7 +265,7 @@ func (b *backend) handler() http.Handler {
 
 		payload, isPayload := payloads[r.URL.Path]
 
-		// Payload paths accept GET and, from S5.T16.1, POST with a body that is
+		// Payload paths accept GET and POST with a body that is
 		// read and discarded, so the traffic generator can send uploads. Every
 		// other method or path keeps the pre-existing 405 behaviour.
 		if r.Method != http.MethodGet && !(r.Method == http.MethodPost && isPayload) {
@@ -318,7 +317,7 @@ func (b *backend) methodNotAllowed(w http.ResponseWriter, r *http.Request, start
 
 // effectiveSleep is the injected delay for one request: the base sleep plus a
 // uniform offset in [-jitter, +jitter], clamped at >= 0 so jitter never yields a
-// negative sleep (S5.T16.1).
+// negative sleep.
 func effectiveSleep(p *profile) time.Duration {
 	ms := p.sleepMS
 	if p.jitterMS > 0 {
@@ -331,7 +330,7 @@ func effectiveSleep(p *profile) time.Duration {
 }
 
 // adminRequest is the admin endpoint's request body. Pointer fields distinguish
-// an omitted field, which keeps its current value, from a present zero (S5.T16.1).
+// an omitted field, which keeps its current value, from a present zero.
 type adminRequest struct {
 	SleepMS  *int     `json:"sleep_ms"`
 	JitterMS *int     `json:"jitter_ms"`
@@ -339,7 +338,7 @@ type adminRequest struct {
 }
 
 // profileJSON is the admin endpoint's response body: the full profile now in
-// effect, which the control service displays (S5.T16.1).
+// effect, which the control service displays.
 type profileJSON struct {
 	SleepMS  int     `json:"sleep_ms"`
 	JitterMS int     `json:"jitter_ms"`
@@ -351,7 +350,7 @@ type profileJSON struct {
 // value, unknown fields and out-of-range values are rejected with 400, and the
 // response is the full profile now in effect. The listener is never served
 // unless ADMIN_ENABLED is set, so the bench rig and root stack cannot have their
-// backends changed mid-run (S5.T16.1).
+// backends changed mid-run.
 func (b *backend) adminHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {

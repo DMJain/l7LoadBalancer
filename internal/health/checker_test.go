@@ -168,7 +168,7 @@ func TestProberMarksHealthyAfterConsecutiveSuccesses(t *testing.T) {
 }
 
 // TestProberReinstatesPassivelyEjectedBackendWithAccumulatorPastThreshold covers
-// the S3.T6.5 drift. Passive outlier detection ejects an "up but erroring"
+// the accumulator drift. Passive outlier detection ejects an "up but erroring"
 // backend while active probes keep succeeding in the background, so the
 // prober's consecutive-successes accumulator is already past M at ejection
 // time. The reinstatement gate must compare with >= against M, not ==: with ==
@@ -313,7 +313,7 @@ func TestProbeMalformedURLIsFailure(t *testing.T) {
 // the /startupz probe consumes: ProbeRoundComplete is false until every
 // configured backend has answered at least one probe, then true forever. The
 // per-backend probe order is enforced by driving probers one at a time, so the
-// assertion is not a race between timers (ADR-0014 (S3.T12)).
+// assertion is not a race between timers (ADR-0014).
 func TestProbeRoundCompleteLatchesAfterEveryBackendProbed(t *testing.T) {
 	for _, n := range []int{1, 2, 3} {
 		t.Run(fmt.Sprintf("%d backends", n), func(t *testing.T) {

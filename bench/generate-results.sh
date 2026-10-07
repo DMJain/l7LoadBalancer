@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 #
-# generate-results.sh — the results generator (S5.T10.1–T10.2, issues 16–17).
+# generate-results.sh — the results generator.
 #
 # Turns the raw harness output into the published results tables, so no
-# published number is typed by hand (spec §64, §271). It writes only inside
+# published number is typed by hand. It writes only inside
 # marker regions of one results document:
 #
 #   <!-- BEGIN GENERATED: <section> -->
@@ -14,15 +14,15 @@
 # byte-for-byte. If the document does not exist it is created with its marker
 # skeleton. A second run against the same results produces no diff.
 #
-# Sections generated: methodology, core, protocol (S5.T10.1); failure,
-# degraded, hot-key (S5.T10.2).
+# Sections generated: methodology, core, protocol; failure,
+# degraded, hot-key.
 #
-# Narrative number check (S5.T10.3): after generating, every latency or
+# Narrative number check: after generating, every latency or
 # throughput figure quoted outside the marker regions (`ms`, `µs`, `req/s`,
 # optionally prefixed `≈` or `~`) must match a generated cell. Percentages,
 # core counts, sizes, ADR numbers and percentile names carry no such unit and
 # are never matched. A mismatch exits nonzero naming every unmatched token, so
-# the hand-written narrative cannot drift from the data (spec §67, §285).
+# the hand-written narrative cannot drift from the data.
 #
 # Percentiles p50/p90/p95/p99/max come from each result's vegeta JSON report
 # (committed as the `.json` sibling of the `.txt` summary); p99.9 comes from the
@@ -37,13 +37,13 @@
 # histogram rather than interpolated.
 #
 # It refuses a provenance record with `git_dirty` true: dirty results must not
-# be published by accident (spec §69).
+# be published by accident.
 #
 # Usage:  bench/generate-results.sh [<results-dir>] [<document>]
 #   results-dir  defaults to bench/results
 #   document     defaults to RESULTS.md at the repo root
 #
-# The two optional paths are the test seam (spec §272); the committed fixture
+# The two optional paths are the test seam; the committed fixture
 # test is bench/generate-results_test.sh.
 
 set -euo pipefail
@@ -165,14 +165,14 @@ verdict_line() { # <txt>
 }
 
 # arrival_share <txt> <backend> prints one backend's `share_pct` from the result
-# header's `# arrivals backend=<name> count=<n> share_pct=<p>` lines (S5.T8.1).
+# header's `# arrivals backend=<name> count=<n> share_pct=<p>` lines.
 arrival_share() { # <txt> <backend>
   sed -n "s/^# arrivals backend=$2 count=[0-9]* share_pct=\([0-9.]*\)\$/\1/p" "$1" | head -n1
 }
 
 # snapshot_count <txt> <label> <backend> prints the raw /stats count for one
 # backend at one drain-reload event point, from the result header's
-# `# snapshot=<label> backend=<name> count=<n>` lines (S5.T9.2).
+# `# snapshot=<label> backend=<name> count=<n>` lines.
 snapshot_count() { # <txt> <label> <backend>
   sed -n "s/^# snapshot=$2 backend=$3 count=\([0-9]*\)\$/\1/p" "$1" | head -n1
 }
@@ -264,7 +264,7 @@ emit_methodology() {
 EOF
 }
 
-# --- Failure verdicts (S5.T10.2) -------------------------------------------
+# --- Failure verdicts -------------------------------------------
 
 KILL_HEADER='| Run | Event at (s) | Total errors | First error (s) | Last error (s) | Time to detection (s) | p50 (ms) | p99 (ms) | p99 recovery (s) |'
 KILL_RULE='| --- | --- | --- | --- | --- | --- | --- | --- | --- |'
@@ -348,7 +348,7 @@ emit_failure() {
   fi
 }
 
-# --- Degraded distributions (S5.T10.2) --------------------------------------
+# --- Degraded distributions --------------------------------------
 
 DEGRADED_HEADER='| Algorithm | Competitor | p50 (ms) | p99 (ms) | backend1 % | backend2 % | backend3 % | backend4 % |'
 DEGRADED_RULE='| --- | --- | --- | --- | --- | --- | --- | --- |'
@@ -380,7 +380,7 @@ emit_degraded() {
   done
 }
 
-# --- Hot-key distributions (S5.T10.2) ---------------------------------------
+# --- Hot-key distributions ---------------------------------------
 
 HOTKEY_HEADER='| Source | Size | Competitor | Load | Owner | backend1 % | backend2 % | backend3 % | backend4 % | Spill |'
 HOTKEY_RULE='| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |'
@@ -431,7 +431,7 @@ emit_hotkey() {
   printf '%s\n%s\n' "$HOTKEY_HEADER" "$HOTKEY_RULE"
   local size comp base txt
   # Core: the throughput result per size and competitor is the single-address hot
-  # key at peak; the latency result carries one distribution per rate (S5.T8.1).
+  # key at peak; the latency result carries one distribution per rate.
   for size in 200b 10kb 1mb; do
     for comp in lb nginx; do
       base="consistent-hash-$size-$comp-throughput"
@@ -463,7 +463,7 @@ emit_hotkey() {
 }
 
 # ---------------------------------------------------------------------------
-# Narrative number check (S5.T10.3).
+# Narrative number check.
 # ---------------------------------------------------------------------------
 
 # allowed_cells <doc> prints `unit<TAB>value` for every numeric cell inside the
@@ -601,7 +601,7 @@ fi
 
 # Replace each known generated region in place, preserving everything else
 # byte-for-byte. An unknown `BEGIN GENERATED` section is left untouched so a
-# later section added by another ticket survives until it is generated here.
+# later section added later survives until it is generated here.
 tmp="$DOC.tmp.$$"
 awk -v dir="$GEN_DIR" -v secs="methodology core protocol failure degraded hot-key" '
   BEGIN { n = split(secs, s, " "); for (i = 1; i <= n; i++) known[s[i]] = 1 }

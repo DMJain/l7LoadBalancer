@@ -1,5 +1,5 @@
 // Command control-service is the local live demo's control page and JSON API
-// (S5.T16.4.1–T16.4.2, ADR-0023 decisions 8 and 9, ADR-0025 and its amendment).
+// (ADR-0023 decisions 8 and 9, ADR-0025 and its amendment).
 // It serves one embedded static page from which the owner switches the active
 // LB, sets the total load rate, sets each backend's latency/jitter/failure, and
 // kills or revives a backend — no terminal needed — and reads the current state
@@ -48,7 +48,7 @@ import (
 const defaultAddr = ":8090"
 
 // defaultDockerHost is Docker's own convention for the Engine endpoint. The demo
-// mounts the socket and uses this default; tests set an http URL (S5.T16.4.2).
+// mounts the socket and uses this default; tests set an http URL.
 const defaultDockerHost = "unix:///var/run/docker.sock"
 
 // defaultContainerPrefix maps a backend name to its Docker container name. The
@@ -75,8 +75,8 @@ var (
 		"http://backend1:9091", "http://backend2:9091",
 		"http://backend3:9091", "http://backend4:9091",
 	}
-	// The demo runs one LB whose algorithm changes by reload (S5.T20.8,
-	// ADR-0023 decision 14). LBS and LB_ADMINS still take a list.
+	// The demo runs one LB whose algorithm changes by reload (ADR-0023
+	// decision 14). LBS and LB_ADMINS still take a list.
 	defaultLBs = []string{"http://lb:8080"}
 	// defaultLBAdmins are the LBs' metrics listeners, which serve /metrics and
 	// the reload admin routes (ADR-0025 decisions 12 and 16). Same order as
@@ -103,8 +103,7 @@ const defaultGrafanaURL = "http://127.0.0.1:3000"
 // peer is one named peer: a generator's control endpoint, a backend's admin
 // listener, or an LB's client URL. The name is what the page and the fan-out
 // response report. container is the backend's Docker container name, derived
-// from the name and CONTAINER_PREFIX and empty for generators and LBs
-// (S5.T16.4.2).
+// from the name and CONTAINER_PREFIX and empty for generators and LBs.
 type peer struct {
 	name      string
 	url       string
@@ -117,12 +116,12 @@ type config struct {
 	backends   []peer
 	lbs        []peer
 	// lbAdmins are the LBs' metrics listeners, index-paired with lbs and
-	// named after them (S5.T20.2).
+	// named after them.
 	lbAdmins   []peer
 	grafanaURL string
 	addr       string
 	// dockerHost is the Docker Engine endpoint: a unix socket in the demo, an
-	// http URL in tests (S5.T16.4.2).
+	// http URL in tests.
 	dockerHost string
 	// containerPrefix maps a backend or LB name to its container name
 	// (ADR-0025 decisions 8 and 18).
@@ -162,8 +161,7 @@ type peerResult struct {
 	Error string `json:"error,omitempty"`
 }
 
-// backendProfile is a backend's chaos profile, the admin listener's contract
-// (S5.T16.1).
+// backendProfile is a backend's chaos profile, the admin listener's contract.
 type backendProfile struct {
 	SleepMS  int     `json:"sleep_ms"`
 	JitterMS int     `json:"jitter_ms"`
@@ -179,7 +177,7 @@ type backendResponse struct {
 
 // containerResponse is the kill/revive action's response: whether the Engine
 // accepted the call, and on failure its error, so the page shows a failed
-// action rather than swallowing it (S5.T16.4.2, ADR-0025 amendment decision 9).
+// action rather than swallowing it (ADR-0025 amendment decision 9).
 type containerResponse struct {
 	OK        bool   `json:"ok"`
 	Error     string `json:"error,omitempty"`
@@ -187,7 +185,7 @@ type containerResponse struct {
 }
 
 // engineClient talks to the Docker Engine API with the standard library's HTTP
-// client — no Docker SDK (S5.T16.4.2, ADR-0025 amendment decision 7). In the
+// client — no Docker SDK (ADR-0025 amendment decision 7). In the
 // demo it dials the unix socket; tests point it at an httptest stand-in. It is
 // safe for concurrent use: http.Client is.
 type engineClient struct {
@@ -219,7 +217,7 @@ func newEngine(dockerHost string) (*engineClient, error) {
 	}
 }
 
-// kill stops a container abruptly — the Engine's kill, not stop (S5.T16.4.2).
+// kill stops a container abruptly — the Engine's kill, not stop.
 func (e *engineClient) kill(ctx context.Context, container string) error {
 	return e.post(ctx, "/containers/"+url.PathEscape(container)+"/kill")
 }
@@ -342,16 +340,16 @@ type peerJSON struct {
 	Name   string `json:"name"`
 	Target string `json:"target"`
 	// LastReload is the LB's GET /admin/reload/last answer; LastReloadError
-	// replaces it when the read failed (S5.T20.2).
+	// replaces it when the read failed.
 	LastReload      *lastReload `json:"last_reload,omitempty"`
 	LastReloadError string      `json:"last_reload_error,omitempty"`
 	// Algorithm is the algorithm the LB reports through lb_algorithm_info;
-	// AlgorithmError replaces it when the read failed (S5.T20.8).
+	// AlgorithmError replaces it when the read failed.
 	Algorithm      string `json:"algorithm,omitempty"`
 	AlgorithmError string `json:"algorithm_error,omitempty"`
 }
 
-// lastReload is the LB's last-reload record (S5.T20.1, ADR-0015 decision 16).
+// lastReload is the LB's last-reload record (ADR-0015 decision 16).
 type lastReload struct {
 	Result string `json:"result"`
 	Time   string `json:"time,omitempty"`
@@ -370,8 +368,7 @@ type reloadInvalidResponse struct {
 // backendState and generatorState embed the peer's own contract type, so a
 // change to the admin or generator status shape cannot drift from what the page
 // renders. Container is the Engine container name; ContainerState is its
-// running/exited status, with ContainerError when the Engine call failed
-// (S5.T16.4.2).
+// running/exited status, with ContainerError when the Engine call failed.
 type backendState struct {
 	Name string `json:"name"`
 	backendProfile
@@ -388,7 +385,7 @@ type generatorState struct {
 }
 
 // generatorStatus is the subset of the generator's status the control service
-// reads (S5.T16.2).
+// reads.
 type generatorStatus struct {
 	TotalRate float64 `json:"total_rate"`
 	Target    string  `json:"target"`
@@ -564,7 +561,7 @@ func (s *server) handleRate(w http.ResponseWriter, r *http.Request) {
 }
 
 // backendUpdate is the profile action's request body. Pointer fields distinguish
-// an omitted field, which keeps its value, from a present zero (S5.T16.1).
+// an omitted field, which keeps its value, from a present zero.
 type backendUpdate struct {
 	Backend  string   `json:"backend"`
 	SleepMS  *int     `json:"sleep_ms"`
@@ -617,12 +614,12 @@ func (s *server) handleBackend(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, backendResponse{OK: true, Profile: prof})
 }
 
-// handleKill stops a backend's container abruptly (S5.T16.4.2).
+// handleKill stops a backend's container abruptly.
 func (s *server) handleKill(w http.ResponseWriter, r *http.Request) {
 	s.handlePower(w, r, "kill")
 }
 
-// handleRevive starts a backend's container again (S5.T16.4.2).
+// handleRevive starts a backend's container again.
 func (s *server) handleRevive(w http.ResponseWriter, r *http.Request) {
 	s.handlePower(w, r, "revive")
 }
@@ -630,7 +627,7 @@ func (s *server) handleRevive(w http.ResponseWriter, r *http.Request) {
 // handlePower validates the backend against the allowlist before any Engine call
 // and then kills or starts its container. The container name is derived from the
 // validated backend, never taken from the request. A failed Engine call is
-// reported as a failed action, never swallowed (S5.T16.4.2, ADR-0025 amendment
+// reported as a failed action, never swallowed (ADR-0025 amendment
 // decisions 8 and 9).
 func (s *server) handlePower(w http.ResponseWriter, r *http.Request, action string) {
 	var in struct {
@@ -720,7 +717,7 @@ func (s *server) readAlgorithm(ctx context.Context, rawURL string) (string, erro
 }
 
 // algorithmSeries is the exposition prefix of the LB's algorithm gauge
-// (ADR-0013 amendment, S5.T20.7).
+// (ADR-0013 amendment).
 const algorithmSeries = `lb_algorithm_info{algorithm="`
 
 // parseAlgorithm returns the label of the lb_algorithm_info series whose value
@@ -897,9 +894,8 @@ func (s *server) gatherGenerators(ctx context.Context) []generatorState {
 
 // gatherBackends reads all four profiles and their Engine container states
 // concurrently. The admin listener takes POST only, so a read is a POST with an
-// empty object — every field omitted, every field kept (S5.T16.1). The Engine
-// state is read beside each profile; a failed read is reported, not fatal
-// (S5.T16.4.2).
+// empty object — every field omitted, every field kept. The Engine
+// state is read beside each profile; a failed read is reported, not fatal.
 func (s *server) gatherBackends(ctx context.Context) []backendState {
 	states := make([]backendState, len(s.cfg.backends))
 	forEachPeer(s.cfg.backends, func(i int, p peer) {

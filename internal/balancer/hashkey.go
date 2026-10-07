@@ -22,7 +22,7 @@ import (
 //
 // Known limitation: RemoteAddr is the immediate peer's address. Behind
 // another proxy this is that proxy's IP, not the original client's;
-// X-Forwarded-For resolution is deliberately out of scope for Sprint 2.
+// X-Forwarded-For resolution is deliberately not handled.
 func requestHashKey(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {

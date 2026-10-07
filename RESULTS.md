@@ -1,8 +1,8 @@
 # Benchmark results
 
-This is the published result of the l7LoadBalancer benchmark matrix. It is self-contained: the methodology, the tables and the reload verdicts below are generated from the raw harness output in `bench/results/`, and the prose around them is the interpretation. No figure inside the generated regions is typed by hand — `bench/generate-results.sh` rewrites every generated region and fails if a figure quoted in the prose does not match a generated cell.
+`bench/generate-results.sh` writes every table and the methodology block from the raw output in `bench/results/`. Nobody types those figures by hand. The script also fails if a figure in the prose does not match a table cell.
 
-The raw output was produced by a single uninterrupted `make bench-repro` run from a fresh clone of commit `8c2b7d4` (`8c2b7d4adf0df3afc3433458f9f4908651b4801c`); `bench/results/provenance.json` records `git_dirty: false`, so the numbers trace to exactly that code. That run was flagged noisy and incomplete by its tracking entry (S5.T6); those limitations are stated at the end rather than hidden.
+The raw output comes from one uninterrupted `make bench-repro` run from a fresh clone of commit `8c2b7d4` (`8c2b7d4adf0df3afc3433458f9f4908651b4801c`). `bench/results/provenance.json` records `git_dirty: false`, so the numbers trace to exactly that code. The run was noisy and incomplete. The limitations are at the end.
 
 ## Methodology
 
@@ -20,7 +20,7 @@ The raw output was produced by a single uninterrupted `make bench-repro` run fro
 
 ## Core results (HTTP/2)
 
-Every algorithm is compared head-to-head with Nginx over HTTP/2 at three response sizes. `roundrobin` and `leastconn` are **matched** comparisons — Nginx's own algorithm is the same. `consistent-hash` and `p2c-ewma` are **nearest-equivalent**: Nginx has no exact equivalent, and the gap is stated per algorithm below. The `Comparison` column of each table carries the label.
+Each algorithm runs against Nginx over HTTP/2 at three response sizes. `roundrobin` and `leastconn` are **matched**: Nginx uses the same algorithm. `consistent-hash` and `p2c-ewma` are **nearest-equivalent**: Nginx has no exact match, and the analysis below states the gap. The `Comparison` column shows the label.
 
 <!-- BEGIN GENERATED: core -->
 | Algorithm | Size | Competitor | Comparison | p50 (ms) | p90 (ms) | p95 (ms) | p99 (ms) | p99.9 (ms) | max (ms) | Peak (req/s) |
@@ -51,17 +51,17 @@ Every algorithm is compared head-to-head with Nginx over HTTP/2 at three respons
 
 ### Per-algorithm analysis
 
-- **round-robin (matched).** The two load-balancer scenarios at 200 B and 10 KiB were skipped (see Limitations), so the LB side of those rows is absent; at 1 MiB the LB reached 200 req/s against Nginx's 175 req/s. Nginx's own peaks for the first two sizes — 3000 req/s at 200 B and 2500 req/s at 10 KiB — sit far below its HTTP/1.1 results in the protocol table, which is the clearest sign that the HTTP/2 core slice ran cold.
+- **round-robin (matched).** The load-balancer runs at 200 B and 10 KiB were skipped (see Limitations). At 1 MiB the LB reached 200 req/s and Nginx 175 req/s. Nginx's peaks at 200 B (3000 req/s) and 10 KiB (2500 req/s) are far below its HTTP/1.1 peaks. This is the clearest sign that the HTTP/2 core slice ran cold.
 
-- **least-connections (matched).** The LB leads at 200 B (6000 req/s against Nginx's 5000 req/s) and 10 KiB (3000 req/s against 2500 req/s); Nginx edges it at 1 MiB (200 req/s against the LB's 150 req/s). With four identical backends and no injected latency there is no imbalance to exploit, so a near-tie is the expected shape.
+- **least-connections (matched).** The LB leads at 200 B (6000 req/s against 5000 req/s) and at 10 KiB (3000 req/s against 2500 req/s). Nginx leads at 1 MiB (200 req/s against 150 req/s). The four backends are identical and have no added latency, so there is no imbalance to use. A near-tie is the expected result.
 
-- **consistent-hash (nearest-equivalent).** The LB reaches 8500 req/s at 200 B, 1500 req/s at 10 KiB and 200 req/s at 1 MiB; Nginx reaches 3000 req/s, 8000 req/s and 225 req/s. This is not a like-for-like comparison: Nginx hashes with ketama and **no bounded loads**, while the LB adds a bound that spills traffic once a backend's in-flight load exceeds (1+ε)×mean. The spill is visible in the hot-key section, and it is the feature the project built, so the throughput difference partly measures that extra behaviour rather than raw ring speed.
+- **consistent-hash (nearest-equivalent).** The LB reaches 8500 req/s at 200 B, 1500 req/s at 10 KiB and 200 req/s at 1 MiB. Nginx reaches 3000 req/s, 8000 req/s and 225 req/s. Nginx hashes with ketama and **no bounded loads**. The LB spills traffic when a backend's in-flight load is more than (1+ε)×mean. So the difference partly measures the spill, not only ring speed. The hot-key section shows the spill.
 
-- **p2c-ewma (nearest-equivalent).** The LB reaches 4500 req/s at 200 B, 4000 req/s at 10 KiB and 200 req/s at 1 MiB; Nginx reaches 8000 req/s, 5000 req/s and 175 req/s. Nginx's competitor is `random two least_conn` — two-choice over **active connections with no latency signal** — whereas the LB's power-of-two-choices weights by an EWMA of observed latency. On a rig with four identical backends and no injected latency the two coincide, so the gap only shows when the degraded slice puts latency on one backend.
+- **p2c-ewma (nearest-equivalent).** The LB reaches 4500 req/s at 200 B, 4000 req/s at 10 KiB and 200 req/s at 1 MiB. Nginx reaches 8000 req/s, 5000 req/s and 175 req/s. Nginx uses `random two least_conn`, which compares active connections and has **no latency signal**. The LB weights its choice by an EWMA of observed latency. With four identical backends the two methods act the same. Only a slow backend shows the difference.
 
 ## Protocol comparison (HTTP/1.1 vs HTTP/2)
 
-The protocol slice runs the same matched round-robin topology over plain HTTP/1.1. Comparing its peaks with the core HTTP/2 round-robin peaks shows the effect of the listener protocol on this rig.
+This slice runs the same matched round-robin topology over plain HTTP/1.1.
 
 <!-- BEGIN GENERATED: protocol -->
 | Algorithm | Size | Competitor | Comparison | p50 (ms) | p90 (ms) | p95 (ms) | p99 (ms) | p99.9 (ms) | max (ms) | Peak (req/s) |
@@ -74,11 +74,17 @@ The protocol slice runs the same matched round-robin topology over plain HTTP/1.
 | roundrobin | 1mb | nginx | matched | 2.592 | 9.698 | 14.006 | 44.730 | 82.917 | 100.463 | 350 |
 <!-- END GENERATED -->
 
-Over HTTP/1.1, Nginx peaks at 11500 req/s (200 B), 6000 req/s (10 KiB) and 350 req/s (1 MiB); the LB reaches 8000 req/s, 4500 req/s and 275 req/s. Those are consistently higher than the HTTP/2 core round-robin peaks (Nginx 3000 req/s and 2500 req/s at 200 B and 10 KiB), which is the opposite of what a mature HTTP/2 implementation would show and reinforces that the HTTP/2 core round-robin figures are the noisy low end of the published run rather than a property of the algorithms.
+Over HTTP/1.1, Nginx peaks at 11500 req/s (200 B), 6000 req/s (10 KiB) and 350 req/s (1 MiB). The LB reaches 8000 req/s, 4500 req/s and 275 req/s. These are higher than the HTTP/2 core round-robin peaks (Nginx 3000 req/s and 2500 req/s at 200 B and 10 KiB). A mature HTTP/2 stack should show the opposite. So the HTTP/2 core round-robin figures are the noisy low end of this run, not a property of the algorithms.
 
 ## Failure and reload under load
 
-The failure slice holds a steady HTTP/2 round-robin load at half the peak for 60 seconds and fires one event mid-run. It covers three runs: a backend killed (detection and recovery), a **no-op reload** (SIGHUP with an unchanged config), and a **drain reload** (a backend removed, then drained). Both reloads are judged against criteria fixed before the run — zero non-2xx responses, zero transport errors, and a post-event p99 no worse than twice the pre-event p99 — and the drain reload additionally requires the removed backend's arrival count to be frozen between the reload being applied and the end of the run.
+The failure slice holds a steady HTTP/2 round-robin load at half the peak for 60 seconds and fires one event in the middle. There are three runs:
+
+- **backend-kill** stops a backend.
+- **no-op reload** sends `SIGHUP` with an unchanged config.
+- **drain reload** removes a backend and drains it.
+
+Both reloads must meet criteria fixed before the run: zero non-2xx responses, zero transport errors, and a post-event p99 no worse than twice the pre-event p99. The drain reload must also show that the removed backend's request count does not change between "reload applied" and the end of the run.
 
 <!-- BEGIN GENERATED: failure -->
 | Run | Event at (s) | Total errors | First error (s) | Last error (s) | Time to detection (s) | p50 (ms) | p99 (ms) | p99 recovery (s) |
@@ -97,11 +103,13 @@ The failure slice holds a steady HTTP/2 round-robin load at half the peak for 60
 | end | 105780 | 105779 | 36430 | 95710 |
 <!-- END GENERATED -->
 
-**Verdicts: `sighup-noop` PASS and `sighup-drain` PASS.** The no-op reload recorded zero non-2xx and zero transport errors, with a pre-event p99 of 1.752 ms and a post-event p99 of 1.762 ms; the drain reload likewise recorded zero errors, with a pre-event p99 of 1.856 ms against a post-event p99 of 2.140 ms, both inside the 2× factor. The drain snapshot table shows backend4's count at 95710 both when the reload was applied and at the end — unchanged, so the removed backend received no request after the swap. That is the zero-drop-while-draining claim evidenced under load.
+The "Time to detection" column is the width of the error window (last error minus first error). It is not the delay before the failure was noticed.
+
+**Verdicts: `sighup-noop` PASS and `sighup-drain` PASS.** The no-op reload had zero non-2xx and zero transport errors. Its p99 was 1.752 ms before the event and 1.762 ms after. The drain reload also had zero errors, with a p99 of 1.856 ms before and 2.140 ms after. Both are inside the 2× factor. The snapshot table shows backend4 at 95710 when the reload applied and at the end. So the removed backend got no request after the swap, and no request was dropped while it drained.
 
 ## Degraded backend
 
-One backend (backend3) is recreated with a 50-millisecond delay for the whole slice; the other three stay fast. All eight runs (four algorithms × two competitors) use one absolute rate — half the HTTP/2 round-robin 10 KiB LB peak — so their distributions and latencies are directly comparable. The expected shape: least-connections and p2c-ewma shift away from the slow backend; round-robin splits evenly; the LB's consistent-hash spills if the slow backend owns the hot key while Nginx's unbounded hash does not.
+The slice restarts backend3 with a 50-millisecond delay for the whole slice. All eight runs (four algorithms × two competitors) use one absolute rate: half the HTTP/2 round-robin 10 KiB LB peak. The expected result: least-connections and p2c-ewma move load away from backend3, round-robin splits evenly, and the LB's consistent-hash spills while Nginx's unbounded hash does not.
 
 <!-- BEGIN GENERATED: degraded -->
 | Algorithm | Competitor | p50 (ms) | p99 (ms) | backend1 % | backend2 % | backend3 % | backend4 % |
@@ -116,11 +124,15 @@ One backend (backend3) is recreated with a 50-millisecond delay for the whole sl
 | p2c-ewma | nginx | 51.469 | 67.523 | 25.03 | 25.01 | 24.94 | 25.02 |
 <!-- END GENERATED -->
 
-**Outcome against that expectation.** Round-robin split exactly evenly (25.00% to each backend, both competitors). Consistent-hash behaved as predicted: the LB spilled (32.89% to backend3, with 32.56% to backend2 and 31.63% to backend4) while Nginx pinned 99.93% to backend3. But least-connections and p2c-ewma did **not** shift away from the slow backend — least-connections put 24.80% on backend3 and p2c-ewma 25.88%, both within a few points of an even split. The reason is visible in the latency: the p50 of every degraded run sits close to the injected delay rather than to a fast backend's sub-millisecond latency, which means the injected delay was present on all four backends in this run, not backend3 alone. With no fast backend to prefer, there was nothing for a load- or latency-aware algorithm to shift toward. This is a limitation of the published run, not a verdict on the algorithms, and it is why the degraded slice does not demonstrate the expected divergence.
+**Result.** Round-robin split exactly evenly (25.00% to each backend, both competitors). Consistent-hash matched the prediction. The LB spilled (32.89% to backend3, 32.56% to backend2, 31.63% to backend4), and Nginx kept 99.93% on backend3. But least-connections and p2c-ewma did **not** move away from backend3. They put 24.80% and 25.88% on it, close to an even split.
+
+The latency explains this. The p50 of every run is near the injected delay, not near a fast backend's sub-millisecond latency. So the delay was on all four backends in this run, not only on backend3. With no fast backend, a load-aware or latency-aware algorithm had nothing to prefer. This is a fault of the run, not a verdict on the algorithms.
 
 ## Hot key
 
-The load generator is a single container with a single address, and the LB's consistent-hash key is the client address, so every consistent-hash run is a **hot key** scenario: all requests hash to one backend. In every run that owner is backend3. Nginx's unbounded ketama sends essentially all of it there — 99.97% at core 200 B and 99.96% at core 10 KiB. The LB's bounded ring instead spills once the owner's in-flight load exceeds (1+ε)×mean: at core 10 KiB throughput the owner took 82.27% and the rest went to backend2 (17.19%), while at the lowest measured load (core 1 MiB latency@30%) no spill occurred (97.74%). The `Spill` column of the hot-key table records this for every consistent-hash run, core and degraded.
+The load generator is one container with one address. The LB's consistent-hash key is the client address. So every consistent-hash run is a **hot key** case: all requests hash to one backend, and here that owner is always backend3.
+
+Nginx's unbounded ketama sends almost everything there: 99.97% at core 200 B and 99.96% at core 10 KiB. The LB's bounded ring spills when the owner's in-flight load is more than (1+ε)×mean. At core 10 KiB throughput the owner took 82.27% and backend2 took 17.19%. At the lowest load measured (core 1 MiB, latency@30%) there was no spill (97.74%). The `Spill` column shows this for every consistent-hash run.
 
 <!-- BEGIN GENERATED: hot-key -->
 | Source | Size | Competitor | Load | Owner | backend1 % | backend2 % | backend3 % | backend4 % | Spill |
@@ -159,16 +171,16 @@ The load generator is a single container with a single address, and the LB's con
 | degraded | 10kb | nginx | degraded | backend3 | 0.02 | 0.02 | 99.93 | 0.02 | no |
 <!-- END GENERATED -->
 
-## Limitations and caveats
+## Limitations
 
-- **The published run is incomplete.** It produced 67 of the 71 result sets. Two core LB scenarios — round-robin at 200 B/LB and 10 KiB/LB — were skipped with "no sustainable rate at the seed rate (p99)", and their rows are absent from the core table. Every other algorithm's 200 B and 10 KiB LB scenario passed well above that rate, so the skips read as a cold start rather than a real ceiling.
+- **The run is incomplete.** It produced 67 of 71 result sets. Two core LB runs, round-robin at 200 B and at 10 KiB, were skipped with "no sustainable rate at the seed rate (p99)". Their rows are absent. Every other algorithm passed well above that rate in those runs, so the skips look like a cold start, not a real ceiling.
 
-- **The throughput ceiling is soft.** The cpusets are enforced inside Docker Desktop's Linux VM, which shares the host's physical cores through a hypervisor. The pinning removes contention *inside* the VM and makes the LB-vs-Nginx comparison fair, but it cannot give a true core, so absolute throughput is a soft ceiling. ADR-0022 records this and the generator bound.
+- **The throughput ceiling is soft.** The cpusets apply inside the Docker Desktop Linux VM, which shares the physical cores through a hypervisor. Pinning removes contention inside the VM and keeps the LB-vs-Nginx comparison fair. It cannot give a real core ([ADR-0022](docs/adr/0022-honest-benchmarking-under-generator-limits.md)).
 
-- **The load generator is the limit for the large payloads.** The generator has two vCPUs; 10 KiB tops out in the low thousands of req/s and 1 MiB at a few hundred, so many peak-search steps were refused as under-delivered (ADR-0022) and the published peaks are rig-limited rather than proxy-limited.
+- **The load generator limits large responses.** The generator has two vCPUs. At 10 KiB it tops out in the low thousands of req/s, and at 1 MiB at a few hundred. Many peak-search steps failed as under-delivered, so those peaks are limited by the rig, not by the proxy.
 
-- **Peaks are noisy.** Core HTTP/2 round-robin/Nginx peaked at 3000 req/s at 200 B while the same topology over HTTP/1.1 reached 11500 req/s; the HTTP/2 core round-robin figures are the least trustworthy in the matrix.
+- **Peaks are noisy.** Core HTTP/2 round-robin Nginx peaked at 3000 req/s at 200 B. The same topology over HTTP/1.1 reached 11500 req/s. The HTTP/2 core round-robin figures are the least reliable in the matrix.
 
-- **The degraded slice did not isolate the slow backend** (see above): the injected delay reached all four backends, so the expected algorithm divergence did not appear.
+- **The degraded slice did not isolate the slow backend.** The delay reached all four backends, so the expected difference between algorithms did not appear.
 
-- **This document is generated from commit `8c2b7d4`.** Re-running `make bench-repro` from a clean checkout of that commit reproduces the raw output; `bench/generate-results.sh` then reproduces this document, and a second generation produces no diff.
+- **Reproduce it.** Run `make bench-repro` from a clean checkout of `8c2b7d4` to get the raw output again. Then `bench/generate-results.sh` rebuilds this file. A second generation makes no diff.

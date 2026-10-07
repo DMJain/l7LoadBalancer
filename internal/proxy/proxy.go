@@ -35,7 +35,7 @@ const p2cFailurePenalty = 2 * time.Second
 // wire. The proxy writes it to the recorder, metrics, and logs only — it makes
 // client churn legible as a 499/"4xx" rather than a backend-caused 5xx. It is
 // deliberately not written as a 5xx because the client, not the backend, ended
-// the request (S4.T5).
+// the request.
 const statusClientClosedRequest = 499
 
 // reqState is the per-request bookkeeping shared between ServeHTTP, Director,
@@ -63,14 +63,14 @@ type reqState struct {
 	// context's cause, and the transport's own timers leave this context alive,
 	// so only a genuine client disconnect cancels it. Concurrency follows
 	// ADR-0007: the state is created on and only touched by the request
-	// goroutine, and the error handler runs on that same goroutine (S4.T5).
+	// goroutine, and the error handler runs on that same goroutine.
 	clientCtx context.Context
 	status    int
 	// backendProto is the protocol the LB→backend leg negotiated (resp.Proto,
 	// e.g. "HTTP/2.0"), captured in modifyResponse and surfaced on the "request
 	// complete" line as backend_proto. Empty when no response arrived (a
 	// short-circuit or a failed round trip). Touched only on the request
-	// goroutine, like the rest of reqState (ADR-0007). S5.T3-main.
+	// goroutine, like the rest of reqState (ADR-0007).
 	backendProto string
 	once         sync.Once
 
@@ -120,7 +120,7 @@ func stateFrom(ctx context.Context) *reqState {
 // RoundTripObserver is notified of every backend round trip's outcome. It is
 // a consumer-defined interface (ADR-0002's Selector exception does not apply
 // here): proxy only stores and calls it, while passive outlier detection
-// (S3.T2) and the circuit breaker (S3.T3) implement it in their own packages.
+// and the circuit breaker implement it in their own packages.
 //
 // ObserveRoundTrip is called unconditionally — success and failure alike,
 // regardless of the configured selector or the circuit's current state —
@@ -155,7 +155,7 @@ func NewLatencyObserver() RoundTripObserver {
 
 // Proxy wraps net/http/httputil.ReverseProxy, delegating backend selection
 // to a balancer.Selector on each request and tracking ActiveConns around the
-// round trip. Implemented in S1.T6.
+// round trip. Implemented in
 //
 // Concurrency: the request path is stateless apart from the per-request
 // reqState carried in the request context and the atomics on *backend.Backend.
@@ -166,7 +166,7 @@ func NewLatencyObserver() RoundTripObserver {
 // lock — see RegisterObserver and SetMetrics.
 //
 // The selector is the one field that changes while serving: a reload that
-// changes the algorithm replaces it with SetSelector (S5.T20.7, ADR-0015
+// changes the algorithm replaces it with SetSelector (ADR-0015
 // decision 18). It sits behind an atomic pointer, and each request loads it
 // once, so a request sees the whole old selector or the whole new one, and a
 // request already dispatched is never affected (decision 19).
@@ -209,7 +209,7 @@ type selectorRef struct{ balancer.Selector }
 
 // SetSelector replaces the selector used by the next request. It is safe to
 // call while the proxy serves: the swap is one atomic store, and a request in
-// flight keeps the backend it already selected (S5.T20.7, ADR-0015 decisions
+// flight keeps the backend it already selected (ADR-0015 decisions
 // 18–19).
 func (p *Proxy) SetSelector(sel balancer.Selector) {
 	p.sel.Store(&selectorRef{sel})
@@ -243,7 +243,7 @@ func (p *Proxy) SetMetrics(c *metrics.Collector) {
 // connections, replacing http.DefaultTransport. It is optional and additive,
 // mirroring SetMetrics: a bare New(reg, sel) keeps the ReverseProxy's default.
 // internal/app builds a tuned transport (dial/response-header timeouts, idle
-// pool) from config and installs it here (S4.T8).
+// pool) from config and installs it here.
 //
 // SetTransport must be called before the Proxy begins serving traffic: the
 // request path reads rp.Transport without a lock, matching how SetMetrics and
@@ -312,7 +312,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	state.activate()
 
 	// Join this request to the backend's retired context. Retiring the backend
-	// (a removed backend whose drain window expired, S4.T4) cancels this
+	// (a removed backend whose drain window expired) cancels this
 	// request's outbound context with ErrDrainWindowExpired, which the
 	// transport surfaces as a failed round trip and ErrorHandler turns into a
 	// 502. context.AfterFunc registers the callback without a goroutine while
@@ -355,7 +355,7 @@ func (p *Proxy) director(r *http.Request) {
 //
 // The body wrapper also observes read errors, so a backend that dies after the
 // headers but before completing the body leaves a WARN trace instead of a
-// silent truncation (S4.T6) — while a drain or client-gone cancellation on the
+// silent truncation — while a drain or client-gone cancellation on the
 // same path is recognised and not misreported as a backend death. The observer
 // fan-out above runs before the body is streamed, so that death cannot be
 // un-rung: the success recorded here stands.
@@ -409,7 +409,7 @@ func (p *Proxy) modifyResponse(resp *http.Response) error {
 // checking at error-handler time is race-free. On shutdown the HTTP server
 // cancels in-flight request contexts, so shutdown-time cancellations classify
 // as client-gone too; that is accepted and desirable, since suppressing
-// observer writes while the process exits is correct (S4.T5).
+// observer writes while the process exits is correct.
 //
 // In every tier the active-connection slot is released (once-guarded, so the
 // success path's body-wrapper Close and this path cannot double-decrement,
@@ -464,7 +464,7 @@ func (p *Proxy) errorHandler(w http.ResponseWriter, r *http.Request, err error) 
 // backend death (ADR-0016, ADR-0017). The recorded success is deliberately not
 // revisited: the observer already saw a success when the headers arrived, and a
 // second failure event for the same request would corrupt the outlier window's
-// counts (S4.T6). A backend that consistently dies after headers is therefore
+// counts. A backend that consistently dies after headers is therefore
 // never ejected by passive detection — a known limitation, not fixed here.
 //
 // Concurrency: Read and Close run on the request goroutine, in ReverseProxy's
@@ -534,7 +534,7 @@ func (p *Proxy) completeRequest(r *http.Request, state *reqState, start time.Tim
 // observeRequest feeds one whole client-facing request into the metrics
 // collector: a counter increment on backend/method/status_class/protocol and a
 // duration observation on backend/method/status_class (the protocol label
-// rides the counter only, S5.T3-main). The duration is the whole-request
+// rides the counter only). The duration is the whole-request
 // window (the same start as latency_ms), deliberately not RoundTripObserver's
 // backend-round-trip-only measurement — there is exactly one definition of
 // "request duration" on the metrics surface (ADR-0013 decision 3).
@@ -581,7 +581,7 @@ func statusClass(status int) string {
 }
 
 // protocolLabel maps a client request's wire protocol to the closed
-// metrics.ClientProtocol vocabulary (S5.T3-main): h2 for HTTP/2 over TLS, h2c
+// metrics.ClientProtocol vocabulary: h2 for HTTP/2 over TLS, h2c
 // for cleartext HTTP/2 (h2c prior knowledge or Upgrade), and http/1.1 for
 // everything else. req.Proto is the source; TLS presence is what separates h2
 // from h2c, since both report "HTTP/2.0". The vocabulary is deliberately closed
@@ -612,7 +612,7 @@ func (p *Proxy) logRequest(r *http.Request, state *reqState, start time.Time) {
 	}
 	// backend_proto gives backend-side protocol visibility: the protocol the
 	// LB→backend leg negotiated, distinct from the client-facing protocol
-	// metric label. Absent when no backend response arrived (S5.T3-main).
+	// metric label. Absent when no backend response arrived.
 	if state.backendProto != "" {
 		attrs = append(attrs, "backend_proto", state.backendProto)
 	}

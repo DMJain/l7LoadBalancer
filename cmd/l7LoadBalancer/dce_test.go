@@ -13,8 +13,8 @@ import (
 // TestNaiveConsistentHashNotLinked guards the invariant that the deliberately
 // unwired naiveConsistentHash comparator never reaches the shipped binary:
 // nothing in non-test code references it, so gc/linker dead-code-eliminates
-// it. The type is kept as normal (not test-only) source because the Sprint 2
-// spec and ADR-0008 treat it as a real package Selector; this test makes the
+// it. The type is kept as normal (not test-only) source because
+// ADR-0008 treats it as a real package Selector; this test makes the
 // "it ships nothing" claim a checked invariant rather than a remembered fact.
 //
 // This asserts a negative about gc/linker DCE behavior, not a language

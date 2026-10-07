@@ -27,7 +27,7 @@ func outlierBackends(t *testing.T, n int) []*backend.Backend {
 // ejectRecorder counts ejections per backend through the detector's unexported
 // eject seam. Backend.MarkUnhealthy is idempotent (an atomic store), so its
 // invocation count is otherwise unobservable — the seam is what makes the
-// ticket's "called exactly once, not once per failure" assertion checkable.
+// "called exactly once, not once per failure" assertion checkable.
 type ejectRecorder struct {
 	mu     sync.Mutex
 	counts map[*backend.Backend]int

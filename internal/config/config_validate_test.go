@@ -23,10 +23,10 @@ func threeBackendYAML() string {
 		backendYAML("backend-c", "http://127.0.0.1:9003")
 }
 
-// configWithSprint3YAML builds a minimal otherwise-valid config with the
+// configWithHealthCircuitYAML builds a minimal otherwise-valid config with the
 // supplied health and circuit YAML blocks (each may be empty) spliced in
 // before the backends section.
-func configWithSprint3YAML(health, circuit string) string {
+func configWithHealthCircuitYAML(health, circuit string) string {
 	return "listen: \":8080\"\n" + health + circuit +
 		"backends:\n" + backendYAML("backend-a", "http://127.0.0.1:9001")
 }
@@ -268,7 +268,7 @@ func TestValidate(t *testing.T) {
 			},
 		},
 		{
-			name: "Sprint 3 durations omitted fall back to documented defaults",
+			name: "durations omitted fall back to documented defaults",
 			yaml: threeBackendYAML(),
 			check: func(t *testing.T, cfg *Config) {
 				t.Helper()
@@ -281,8 +281,8 @@ func TestValidate(t *testing.T) {
 			},
 		},
 		{
-			name: "Sprint 3 durations set explicitly are kept",
-			yaml: configWithSprint3YAML(
+			name: "durations set explicitly are kept",
+			yaml: configWithHealthCircuitYAML(
 				"health:\n  probe_interval: \"1500ms\"\n  probe_timeout: \"250ms\"\n",
 				"circuit:\n  cooldown: \"10s\"\n",
 			),
@@ -297,38 +297,38 @@ func TestValidate(t *testing.T) {
 			},
 		},
 		{
-			name:      "Sprint 3 health probe interval of zero is rejected",
-			yaml:      configWithSprint3YAML("health:\n  probe_interval: \"0s\"\n", ""),
+			name:      "health probe interval of zero is rejected",
+			yaml:      configWithHealthCircuitYAML("health:\n  probe_interval: \"0s\"\n", ""),
 			wantErr:   true,
 			errSubstr: "probe_interval",
 		},
 		{
-			name:      "Sprint 3 health probe interval negative is rejected",
-			yaml:      configWithSprint3YAML("health:\n  probe_interval: \"-1s\"\n", ""),
+			name:      "health probe interval negative is rejected",
+			yaml:      configWithHealthCircuitYAML("health:\n  probe_interval: \"-1s\"\n", ""),
 			wantErr:   true,
 			errSubstr: "probe_interval",
 		},
 		{
-			name:      "Sprint 3 health probe timeout of zero is rejected",
-			yaml:      configWithSprint3YAML("health:\n  probe_timeout: \"0s\"\n", ""),
+			name:      "health probe timeout of zero is rejected",
+			yaml:      configWithHealthCircuitYAML("health:\n  probe_timeout: \"0s\"\n", ""),
 			wantErr:   true,
 			errSubstr: "probe_timeout",
 		},
 		{
-			name:      "Sprint 3 health probe timeout negative is rejected",
-			yaml:      configWithSprint3YAML("health:\n  probe_timeout: \"-500ms\"\n", ""),
+			name:      "health probe timeout negative is rejected",
+			yaml:      configWithHealthCircuitYAML("health:\n  probe_timeout: \"-500ms\"\n", ""),
 			wantErr:   true,
 			errSubstr: "probe_timeout",
 		},
 		{
-			name:      "Sprint 3 circuit cooldown of zero is rejected",
-			yaml:      configWithSprint3YAML("", "circuit:\n  cooldown: \"0s\"\n"),
+			name:      "circuit cooldown of zero is rejected",
+			yaml:      configWithHealthCircuitYAML("", "circuit:\n  cooldown: \"0s\"\n"),
 			wantErr:   true,
 			errSubstr: "cooldown",
 		},
 		{
-			name:      "Sprint 3 circuit cooldown negative is rejected",
-			yaml:      configWithSprint3YAML("", "circuit:\n  cooldown: \"-30s\"\n"),
+			name:      "circuit cooldown negative is rejected",
+			yaml:      configWithHealthCircuitYAML("", "circuit:\n  cooldown: \"-30s\"\n"),
 			wantErr:   true,
 			errSubstr: "cooldown",
 		},
@@ -619,7 +619,7 @@ func TestValidate(t *testing.T) {
 	}
 }
 
-// TestValidateListenerMode covers the listener-mode config surface (S5.T1): a
+// TestValidateListenerMode covers the listener-mode config surface: a
 // present `tls:` block selects TLS mode by presence and requires both cert
 // files, `h2c: true` selects h2c mode, and the two together are rejected as
 // mutually exclusive rather than one silently winning.
@@ -691,7 +691,7 @@ func TestValidateListenerMode(t *testing.T) {
 	}
 }
 
-// TestValidateBackendURLErrorsRedactRawURL covers S4.T17: validateBackendURL's
+// TestValidateBackendURLErrorsRedactRawURL covers validateBackendURL's
 // error messages name only the backend and the url field, never the raw URL, so
 // a resolved secret cannot reach the logs (main logs validation errors). Every
 // branch that could quote the URL is covered so the redaction cannot regress

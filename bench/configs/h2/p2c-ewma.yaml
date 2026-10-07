@@ -1,4 +1,4 @@
-# Benchmark config (S5.T4-harness): TLS+ALPN HTTP/2, P2C-EWMA LB, https:// backends. See bench/README.md.
+# Benchmark config: TLS+ALPN HTTP/2, P2C-EWMA LB, https:// backends. See bench/README.md.
 listen: ":8080"
 tls:
   cert_file: "/certs/server.crt"

@@ -1,4 +1,4 @@
-# Grafana datasource provisioning (S3.T7). The uid `prometheus` is the one the
+# Grafana datasource provisioning. The uid `prometheus` is the one the
 # committed dashboard's panels reference, so the two must stay in sync.
 
 apiVersion: 1

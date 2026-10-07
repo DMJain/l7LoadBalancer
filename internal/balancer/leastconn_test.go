@@ -14,7 +14,7 @@ import (
 
 // seedActive raises the named backend's active-connection count to n, so a
 // test can pre-seed the state LeastConnections reads. Mutation here stands
-// in for what the proxy will do in S1.T6.
+// in for what the proxy will do in
 func seedActive(t *testing.T, reg *backend.Registry, name string, n int) {
 	t.Helper()
 	for _, b := range reg.All() {

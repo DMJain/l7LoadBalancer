@@ -97,7 +97,7 @@ func tlsTestConfig(t *testing.T, backendURL string, idle *time.Duration) *config
 // TestBuildTLSModeServerConstruction proves Build loads the configured cert
 // pair into the client server's TLSConfig when a tls: block is present, and
 // that HTTP/2 mode disables ReadTimeout and takes IdleTimeout from config. The
-// metrics and health listeners stay plain HTTP (S5.T1).
+// metrics and health listeners stay plain HTTP.
 func TestBuildTLSModeServerConstruction(t *testing.T) {
 	silenceDefault(t)
 
@@ -166,7 +166,7 @@ func TestBuildTLSMissingCertFails(t *testing.T) {
 
 // TestRunTLSListenerNegotiatesH2AndServesHTTP2 proves App.Run's TLS branch
 // (ListenAndServeTLS) accepts an ALPN handshake that negotiates h2 and serves a
-// full request as HTTP/2.0 (S5.T1). It runs the real app on a free loopback
+// full request as HTTP/2.0. It runs the real app on a free loopback
 // port, so the http.Server's automatic HTTP/2 configuration is exercised end to
 // end rather than by poking the server directly.
 func TestRunTLSListenerNegotiatesH2AndServesHTTP2(t *testing.T) {

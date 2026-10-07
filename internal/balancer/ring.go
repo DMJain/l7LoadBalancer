@@ -33,8 +33,8 @@ type vnode struct {
 // so one ring may be shared by many goroutines. It is built once, at
 // selector-construction time, from every backend the registry holds
 // (Registry.All()) regardless of health — health flips never rebuild a
-// ring; only backend-membership changes would, and that is Sprint 4's
-// concern. See ADR-0008 and docs/design/sprint-1-contracts.md.
+// ring; only backend-membership changes would, and that is the reload path's
+// concern. See ADR-0008 and docs/architecture.md.
 type ring struct {
 	vnodes []vnode
 }

@@ -89,17 +89,17 @@ const (
 // Backend represents one upstream server the load balancer can route to.
 //
 // Concurrency: healthy is written by the health checker (active probes and
-// passive outlier detection, both Sprint 3) and read by every selector and
+// passive outlier detection, both in the health package) and read by every selector and
 // the proxy on the hot path. active is incremented/decremented by the
-// proxy around each round trip (S1.T6) and read by LeastConnections and
-// metrics (Sprint 3). latencyEWMA is written by the proxy on every round
-// trip (S2.T3) and read by PowerOfTwoChoicesEWMA. circuit is the whole
-// circuit-breaker state (S3.T3), read and CAS-updated by every selector
+// proxy around each round trip and read by LeastConnections and
+// metrics. latencyEWMA is written by the proxy on every round
+// trip and read by PowerOfTwoChoicesEWMA. circuit is the whole
+// circuit-breaker state, read and CAS-updated by every selector
 // (via Registry.Selectable) and the proxy admission gate. removed is set
-// once by Registry.Apply just before a backend leaves the snapshot (S4.T2)
+// once by Registry.Apply just before a backend leaves the snapshot
 // and read by the proxy's observer fan-out and by
 // ConsistentHashBoundedLoads' admission check, which guards against a stale
-// ring admitting a just-removed backend. retiredCtx is the drain signal (S4.T4):
+// ring admitting a just-removed backend. retiredCtx is the drain signal:
 // cancelled by Retire when a removed backend's drain window expires, and joined
 // into each in-flight request by the proxy, which registers a context.AfterFunc
 // on it. All fields are unexported; callers MUST use
@@ -107,7 +107,7 @@ const (
 // RecordLatency/EWMALatency/CircuitOpen/CircuitAllow/CircuitSuccess/
 // CircuitFailure/IsRemoved/Retire/RetiredContext and never touch the fields
 // directly — this keeps the field representation free to change without
-// touching balancer or proxy code. See docs/design/sprint-1-contracts.md
+// touching balancer or proxy code. See docs/architecture.md
 // "Concurrency ownership table", ADR-0010, ADR-0011, ADR-0012, ADR-0015, and
 // ADR-0016.
 type Backend struct {
@@ -130,7 +130,7 @@ type Backend struct {
 }
 
 // IsHealthy reports whether the backend is currently eligible for
-// selection. Implemented in S1.T3.
+// selection.
 func (b *Backend) IsHealthy() bool {
 	return b.healthy.Load()
 }
@@ -151,27 +151,25 @@ func (b *Backend) MarkHealthy() {
 // health checks and passive outlier detection call this (ADR-0011 decisions
 // 2 and 3). Owned by the health-check subsystem by convention: its
 // per-backend goroutines call it directly on the *Backend they hold. No
-// production caller exists yet; S1.T8's cross-selector tests drive health
-// transitions with it until Sprint 3 wires the checkers.
+// production caller exists yet; the cross-selector tests drive health
+// transitions with it.
 func (b *Backend) MarkUnhealthy() {
 	b.healthy.Store(false)
 }
 
 // IncActive increments the active connection count. Called by the proxy
-// before dispatching a request. Implemented in S1.T3.
+// before dispatching a request.
 func (b *Backend) IncActive() {
 	b.active.Add(1)
 }
 
 // DecActive decrements the active connection count. Called by the proxy
-// once the response completes (success, error, or timeout). Implemented
-// in S1.T3.
+// once the response completes (success, error, or timeout).
 func (b *Backend) DecActive() {
 	b.active.Add(-1)
 }
 
-// ActiveConns returns the current active connection count. Implemented in
-// S1.T3.
+// ActiveConns returns the current active connection count.
 func (b *Backend) ActiveConns() int64 {
 	return b.active.Load()
 }
@@ -199,7 +197,7 @@ func (b *Backend) IsRemoved() bool {
 // Retire cancels the backend's retired context with ErrDrainWindowExpired,
 // which fires the after-funcs the proxy registered on it and thereby cancels
 // the backend's in-flight requests. It is called only by a drain whose window
-// elapsed (S4.T4); a removed backend's other requests have already finished or
+// elapsed; a removed backend's other requests have already finished or
 // been cut off by the time it runs. It is idempotent — a second call cannot
 // change the cause — because context.CancelCauseFunc is. On a directly-
 // constructed Backend with no retired context it is a no-op. See ADR-0016
@@ -353,7 +351,7 @@ func (b *Backend) CircuitAllow(cooldown time.Duration) (bool, CircuitTransition)
 
 // RearmTrial releases a Half-Open circuit's trial slot after the request that
 // took it ended without a backend outcome — a client-gone cancellation, which
-// the proxy records as no observer result at all (S4.T5). While a trial is
+// the proxy records as no observer result at all. While a trial is
 // outstanding the circuit admits no other request, so without this the trial
 // flag would never clear and the backend would deny every future request even
 // though no probe of it ever completed. It is a no-op unless the circuit is

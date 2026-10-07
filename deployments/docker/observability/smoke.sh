@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Scripted smoke test for the observability demo stack (S3.T7).
+# Scripted smoke test for the observability demo stack.
 #
 # Assumes the load balancer is already running locally (`make run`) and the
 # dummy backends are up. Brings up this stack, then verifies:

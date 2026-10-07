@@ -20,7 +20,7 @@ import (
 // cut off near the bound instead of pinning the server goroutine. The backend
 // drains the request body before answering, so no response can arrive until the
 // full body does — without the bound the connection would stay open until the
-// test's own deadline (S4.T7).
+// test's own deadline.
 func TestSlowLorisBodyDisconnectedAtReadTimeout(t *testing.T) {
 	silenceDefault(t)
 

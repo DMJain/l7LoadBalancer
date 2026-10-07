@@ -1,7 +1,7 @@
-# Repo-root demo stack (S3.T11): the whole demonstrable system in one command.
+# Repo-root demo stack: the whole demonstrable system in one command.
 #
 # `docker compose up -d --build` at the repository root brings up the load
-# balancer image (S3.T10), the three dummy backends, Prometheus, and Grafana on
+# balancer image, the three dummy backends, Prometheus, and Grafana on
 # a single default bridge network. This file is ADDITIVE to the two composes
 # under deployments/docker/ — deployments/docker/docker-compose.yml (backends
 # only, for the host-process `make run` flow and the chaos scripts) and
@@ -59,7 +59,7 @@ services:
     ports:
       - "8080:8080"
       - "8081:8081"
-    # Explicit here as well as baked into the image (S3.T10): the LB self-probes
+    # Explicit here as well as baked into the image: the LB self-probes
     # its own /livez with the `probe` subcommand, so Prometheus' `service_healthy`
     # gate below has something real to wait for.
     healthcheck:

@@ -12,7 +12,7 @@ import (
 // TestNewFromConfigMapsAlgorithm proves the config-string -> selector-type
 // mapping is exhaustive over the algorithms this build accepts: each
 // implemented identifier yields the concrete selector named in the frozen
-// algorithm table (docs/design/sprint-1-contracts.md), not just any Selector.
+// algorithm table (docs/architecture.md), not just any Selector.
 func TestNewFromConfigMapsAlgorithm(t *testing.T) {
 	tests := []struct {
 		algorithm string

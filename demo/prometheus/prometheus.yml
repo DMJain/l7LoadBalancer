@@ -1,7 +1,7 @@
-# Prometheus scrape config for the local demo stack (S5.T16.3.2, ADR-0023
+# Prometheus scrape config for the local demo stack (ADR-0023
 # decisions 9 and 14).
 #
-# One LB, job `lb` (S5.T20.8); the shared dashboard's `$lb` variable
+# One LB, job `lb`; the shared dashboard's `$lb` variable
 # (`label_values(job)`) lists it and the demo dashboard filters on it. 1 s
 # scrape interval: the demo embeds panels at `var-window=15s`,
 # which needs enough samples in a short window; the root stack's Prometheus
@@ -14,14 +14,14 @@ global:
   scrape_interval: 1s
 
 scrape_configs:
-  # The demo's one LB (S5.T20.8, ADR-0023 decision 14). Its algorithm changes
+  # The demo's one LB (ADR-0023 decision 14). Its algorithm changes
   # by hot reload, which lb_algorithm_info reports.
   - job_name: lb
     static_configs:
       - targets: ["lb:9090"]
 
   # CPU and memory of the LB and backend containers, read by the control
-  # service from Docker's stats (S5.T20.9, ADR-0025 decision 18). Every 2 s:
+  # service from Docker's stats (ADR-0025 decision 18). Every 2 s:
   # each scrape makes one Engine call per container.
   - job_name: control
     scrape_interval: 2s

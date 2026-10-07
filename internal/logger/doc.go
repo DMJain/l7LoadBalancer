@@ -14,16 +14,15 @@
 //	backend_proto - protocol the LB→backend leg negotiated (resp.Proto, e.g.
 //	                "HTTP/2.0"), present on the "request complete" line when a
 //	                backend response arrived. It is the backend-side complement
-//	                of lb_requests_total's client-facing protocol label
-//	                (S5.T3-main).
+//	                of lb_requests_total's client-facing protocol label.
 //
-// Process-scoped fields (S5.T5.6). Present on the "l7LoadBalancer starting"
+// Process-scoped fields. Present on the "l7LoadBalancer starting"
 // line:
 //
 //	gomaxprocs - the effective GOMAXPROCS value (Go derives it from CPU affinity)
 //	go_version - the runtime version string the binary was built with
 //
-// Transition-scoped fields (Sprint 3; values are the closed Go-constant
+// Transition-scoped fields (values are the closed Go-constant
 // vocabularies in vocab.go). A transition line also carries the request-scoped
 // backend field, naming the backend the transition concerns:
 //
@@ -31,7 +30,7 @@
 //	event        - a state transition that occurred, one of the Event* constants
 //	reason       - why it occurred, one of the Reason* constants
 //
-// Reload-scoped fields (Sprint 4; the reload events are in the same Event*
+// Reload-scoped fields (the reload events are in the same Event*
 // vocabulary):
 //
 //	event        - config_reloaded or config_reload_failed
@@ -40,12 +39,12 @@
 //	removed      - number of backends the reload removed (config_reloaded)
 //	unchanged    - number of backends the reload left untouched (config_reloaded)
 //	algorithm    - the algorithm a reload switched to (config_reloaded, only
-//	               when it changed; S5.T20.7)
+//	               when it changed)
 //	previous_algorithm - the algorithm that reload replaced (same condition)
 //	fields       - names of the changed non-backend fields (config_reload_failed
 //	               with reason non_backend_change)
 //
-// Drain-scoped fields (Sprint 4; ADR-0016). reason window_expired appears on
+// Drain-scoped fields (ADR-0016). reason window_expired appears on
 // both the proxy's "backend round-trip failed" line for a request a drain
 // cancelled and the "backend drained" line for a drain that had to cancel:
 //
@@ -54,7 +53,7 @@
 //	               window elapsed with requests still in flight)
 //	cancelled    - number of requests the drain cancelled (backend_drained)
 //
-// Cancellation-scoped fields (Sprint 4; S4.T5). reason client_canceled appears
+// Cancellation-scoped fields. reason client_canceled appears
 // on the proxy's "backend round-trip failed" line, logged at INFO when the
 // client's own request context was done before a response arrived. The request
 // is recorded as 499 (status class 4xx), reaches no observer, and records no
@@ -63,7 +62,7 @@
 //	reason       - client_canceled, a client-gone cancellation, not a backend
 //	               failure
 //
-// Mid-body-death-scoped fields (Sprint 4; S4.T6). reason
+// Mid-body-death-scoped fields. reason
 // backend_died_mid_response appears on the proxy's WARN "backend died
 // mid-response" line when a non-EOF body read error follows the response
 // headers — the backend died before completing the body. A drain cancellation
@@ -76,6 +75,6 @@
 //	bytes_copied - response-body bytes copied to the client before the read error
 //	reason       - backend_died_mid_response
 //
-// See docs/design/sprint-1-contracts.md "Log field vocabulary" for an
+// See docs/architecture.md "Log field vocabulary" for an
 // example log line per event type.
 package logger

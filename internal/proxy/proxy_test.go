@@ -501,12 +501,12 @@ func TestProxyLogsRequestCompleteOnSuccess(t *testing.T) {
 	assert.NotEmpty(t, got["remote_addr"])
 	assert.Contains(t, got, "latency_ms")
 	// backend_proto exposes the backend-side protocol the round trip
-	// negotiated, distinct from the client-facing protocol label (S5.T3-main).
+	// negotiated, distinct from the client-facing protocol label.
 	assert.Equal(t, "HTTP/1.1", got["backend_proto"])
 }
 
 // TestProtocolLabelMapsRequestProtocol pins the closed lb_requests_total
-// protocol vocabulary (S5.T3-main): HTTP/2 over TLS is "h2", cleartext HTTP/2
+// protocol vocabulary: HTTP/2 over TLS is "h2", cleartext HTTP/2
 // (h2c) is "h2c", and every HTTP/1.x request is "http/1.1". TLS presence is
 // what separates h2 from h2c, since both report Proto "HTTP/2.0".
 func TestProtocolLabelMapsRequestProtocol(t *testing.T) {
@@ -561,7 +561,7 @@ func TestProxyLogsRequestCompleteOn503(t *testing.T) {
 // the real latency observer and the detector: the spy receiving exactly one
 // call per request shows all three were fed the same request path, so the
 // detector's ejection is genuinely attributable to the fan-out (the generic
-// per-observer exactly-once guarantee itself is ticket 02's test, not this one).
+// per-observer exactly-once guarantee itself is tested elsewhere, not here).
 func TestProxyFanOutFeedsPassiveOutlierDetectorAlongsideLatencyObserver(t *testing.T) {
 	failing := failingBackend(t)
 
@@ -600,7 +600,7 @@ func TestProxyFanOutFeedsPassiveOutlierDetectorAlongsideLatencyObserver(t *testi
 }
 
 // TestProxyFanOutFeedsDetectorMixedResponseAndTransportFailures proves the
-// failure signal is the union the ticket specifies: a backend that alternately
+// failure signal is the union of both failure paths: a backend that alternately
 // returns 500 (the modifyResponse path) and aborts the connection with no
 // response at all (the errorHandler transport-failure path) is ejected once the
 // mixed failures reach the threshold, not only when one kind repeats.
@@ -738,8 +738,8 @@ func TestProxyLogsCircuitDenial(t *testing.T) {
 	assert.Equal(t, float64(http.StatusServiceUnavailable), completes[0]["status"])
 }
 
-// TestProxyCircuitOpensOnRepeated5xxAndStopsRouting is MILESTONES.md's Sprint 3
-// chaos-test exit criterion at unit-test scale: injecting 5xx responses on one
+// TestProxyCircuitOpensOnRepeated5xxAndStopsRouting is the circuit-breaker
+// chaos scenario at unit-test scale: injecting 5xx responses on one
 // backend eventually opens its circuit, after which selection stops routing to
 // it while a healthy peer keeps serving.
 func TestProxyCircuitOpensOnRepeated5xxAndStopsRouting(t *testing.T) {
@@ -944,7 +944,7 @@ func TestProxyDrainCancelBeforeHeadersReturns502(t *testing.T) {
 		"a drain cancellation must classify as window_expired, not client-gone")
 }
 
-// TestProxyClientCancelReachesNoObserverAndRecords499 is the T5 chaos test: a
+// TestProxyClientCancelReachesNoObserverAndRecords499 is the client-cancellation chaos test: a
 // client that disconnects mid-request (its request context is cancelled, which
 // is exactly what net/http does on a dropped connection) must be classified as
 // client-gone, not as a backend failure. It reaches no observer, records no
@@ -1017,12 +1017,12 @@ func TestProxyClientCancelReachesNoObserverAndRecords499(t *testing.T) {
 }
 
 // TestProxyResponseHeaderTimeoutReachesObserversAsFailure is the guard on the
-// other side of the T5 predicate: a transport's own response-header timer
+// other side of the client-cancellation predicate: a transport's own response-header timer
 // leaves the client's request context alive, so the failure must fall through
 // to the genuine-transport-failure tier — observers get the fixed penalty, the
 // response is 502, and the cause line is the WARN failure line, not
 // client_canceled. The proxy runs on an explicit transport here (configuring
-// the production transport is S4.T8); a gated backend that never sends headers
+// the production transport is configured elsewhere); a gated backend that never sends headers
 // trips the timer deterministically.
 func TestProxyResponseHeaderTimeoutReachesObserversAsFailure(t *testing.T) {
 	release := make(chan struct{})
@@ -1066,7 +1066,7 @@ func TestProxyResponseHeaderTimeoutReachesObserversAsFailure(t *testing.T) {
 }
 
 // TestProxyClientCancelRearmsHalfOpenTrial is the regression test for the wedge
-// the T5 suppression would otherwise introduce: a client-gone request that was
+// the client-cancellation suppression would otherwise introduce: a client-gone request that was
 // admitted as a half-open circuit's single trial must re-arm the trial, or the
 // circuit would deny every later request to a live backend forever. It forces
 // the trial path with a fixed selector and a real circuit gate, cancels the
@@ -1307,7 +1307,7 @@ func TestProxyClientCancelMidBodyIsNotMidBodyDeath(t *testing.T) {
 // midBodyDeathBackend starts an httptest.Server that answers with 200 headers
 // promising more body bytes than it sends, then abruptly closes the connection.
 // The proxy's body read therefore ends on a non-EOF error (an unexpected EOF),
-// which is exactly the mid-body death S4.T6 detects.
+// which is exactly the mid-body death the proxy detects.
 func midBodyDeathBackend(t *testing.T) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -1329,7 +1329,7 @@ func midBodyDeathBackend(t *testing.T) *httptest.Server {
 	return srv
 }
 
-// TestProxyBackendDiesMidBodyLogsAndKeepsSuccess is the T6 test: a backend that
+// TestProxyBackendDiesMidBodyLogsAndKeepsSuccess is the mid-body-death test: a backend that
 // sends response headers then dies before completing the body is logged at WARN
 // with reason backend_died_mid_response, carrying the backend, the path, and the
 // bytes already copied. The success recorded when the headers arrived stands —
@@ -1374,7 +1374,7 @@ func TestProxyBackendDiesMidBodyLogsAndKeepsSuccess(t *testing.T) {
 	assert.Equal(t, float64(http.StatusOK), completes[0]["status"])
 }
 
-// TestProxyCleanBodyReadLogsNoDeath pins the other half of the T6 predicate: a
+// TestProxyCleanBodyReadLogsNoDeath pins the other half of the mid-body-death predicate: a
 // normally completed body ends on io.EOF, which is a clean end and must not be
 // logged as a death.
 func TestProxyCleanBodyReadLogsNoDeath(t *testing.T) {

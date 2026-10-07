@@ -101,7 +101,7 @@ func TestProbeCommandDoesNotInterceptLoadBalancer(t *testing.T) {
 }
 
 // TestBinaryLogsInjectedVersionAndCommit covers the two build-time facts the
-// image relies on (spec D16): -ldflags -X main.version/main.commit reach the
+// image relies on: -ldflags -X main.version/main.commit reach the
 // JSON startup log line, and the probe subcommand runs without ever touching
 // flag parsing — the binary is executed from an empty directory with no
 // configs/example.yaml, so a fall-through to config.Load would fail the probe
@@ -130,7 +130,7 @@ func TestBinaryLogsInjectedVersionAndCommit(t *testing.T) {
 }
 
 // TestBinaryLogsStartupRuntimeFields covers the benchmark methodology's two
-// runtime facts (S5.T5.6): the "l7LoadBalancer starting" line reports the
+// runtime facts: the "l7LoadBalancer starting" line reports the
 // effective GOMAXPROCS and the Go version the binary was built with. The
 // harness reads gomaxprocs to prove CPU pinning took effect (Go derives
 // GOMAXPROCS from CPU affinity), and go_version is the only way a distroless

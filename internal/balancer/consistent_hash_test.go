@@ -129,7 +129,7 @@ func TestConsistentHashBoundedLoadsStableAffinity(t *testing.T) {
 }
 
 // TestConsistentHashBoundedLoadsRespectsHealthTransitions is the same scripted
-// health sequence naiveConsistentHash and the Sprint 1 selectors cover:
+// health sequence naiveConsistentHash and the round-robin and least-connections selectors cover:
 // bounded-loads applies the identical health check alongside its capacity
 // check, so an unhealthy backend is skipped regardless of its capacity
 // headroom, and resumes once healthy.

@@ -15,7 +15,7 @@ import (
 )
 
 // adminBody mirrors the admin endpoint's response contract: the full profile
-// now in effect (S5.T16.1).
+// now in effect.
 type adminBody struct {
 	SleepMS  int     `json:"sleep_ms"`
 	JitterMS int     `json:"jitter_ms"`
@@ -24,7 +24,7 @@ type adminBody struct {
 
 // newTestBackend builds a backend and returns its request and admin handlers,
 // which share one profile pointer so a profile set through admin is observed by
-// the request handler (S5.T16.1).
+// the request handler.
 func newTestBackend(initial profile) (*backend, http.Handler, http.Handler) {
 	b := newBackend("backend1", initial, true, discardLogger())
 	return b, b.handler(), b.adminHandler()
@@ -42,7 +42,7 @@ func driveAdmin(admin http.Handler, method, body string) *httptest.ResponseRecor
 
 // TestAdminEnabledEnvParsing locks ADMIN_ENABLED to the envBool strictness: unset
 // or empty means off, only true/false are accepted, and anything else fails
-// naming the variable (S5.T16.1).
+// naming the variable.
 func TestAdminEnabledEnvParsing(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -82,7 +82,7 @@ func TestAdminEnabledEnvParsing(t *testing.T) {
 }
 
 // TestAdminRejectsNonPost proves only POST is accepted, and the 405 advertises
-// POST (S5.T16.1).
+// POST.
 func TestAdminRejectsNonPost(t *testing.T) {
 	_, _, admin := newTestBackend(profile{})
 
@@ -96,7 +96,7 @@ func TestAdminRejectsNonPost(t *testing.T) {
 }
 
 // TestAdminRejectsUnknownField proves a typo fails loudly instead of being
-// silently ignored (S5.T16.1).
+// silently ignored.
 func TestAdminRejectsUnknownField(t *testing.T) {
 	_, _, admin := newTestBackend(profile{})
 
@@ -104,7 +104,7 @@ func TestAdminRejectsUnknownField(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 }
 
-// TestAdminRejectsMalformedJSON proves an undecodable body is a 400 (S5.T16.1).
+// TestAdminRejectsMalformedJSON proves an undecodable body is a 400.
 func TestAdminRejectsMalformedJSON(t *testing.T) {
 	_, _, admin := newTestBackend(profile{})
 
@@ -113,7 +113,7 @@ func TestAdminRejectsMalformedJSON(t *testing.T) {
 }
 
 // TestAdminRejectsOutOfRange proves negative milliseconds and a failure rate
-// outside [0, 1] are rejected 400 naming the field (S5.T16.1).
+// outside [0, 1] are rejected 400 naming the field.
 func TestAdminRejectsOutOfRange(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -138,7 +138,7 @@ func TestAdminRejectsOutOfRange(t *testing.T) {
 }
 
 // TestAdminOmittedFieldKeepsValue proves an omitted field keeps its current
-// value, so the page can set one knob at a time (S5.T16.1).
+// value, so the page can set one knob at a time.
 func TestAdminOmittedFieldKeepsValue(t *testing.T) {
 	_, _, admin := newTestBackend(profile{sleepMS: 7, jitterMS: 3, failRate: 0.2})
 
@@ -161,7 +161,7 @@ func TestAdminOmittedFieldKeepsValue(t *testing.T) {
 }
 
 // TestAdminResponseIsFullProfile proves the response is the full profile now in
-// effect, which the control page displays (S5.T16.1).
+// effect, which the control page displays.
 func TestAdminResponseIsFullProfile(t *testing.T) {
 	_, _, admin := newTestBackend(profile{})
 
@@ -177,7 +177,7 @@ func TestAdminResponseIsFullProfile(t *testing.T) {
 }
 
 // TestAdminSetChangesRequestBehaviour proves a runtime profile reaches the very
-// next proxied request: failure on status, sleep on latency (S5.T16.1).
+// next proxied request: failure on status, sleep on latency.
 func TestAdminSetChangesRequestBehaviour(t *testing.T) {
 	_, req, admin := newTestBackend(profile{})
 
@@ -199,7 +199,7 @@ func TestAdminSetChangesRequestBehaviour(t *testing.T) {
 }
 
 // TestJitterBounds proves the effective sleep is spread both below and above the
-// base within the injected band, and never far beyond it (S5.T16.1).
+// base within the injected band, and never far beyond it.
 func TestJitterBounds(t *testing.T) {
 	_, req, admin := newTestBackend(profile{})
 	require.Equal(t, http.StatusOK, driveAdmin(admin, http.MethodPost, `{"sleep_ms":20,"jitter_ms":20}`).Code)
@@ -227,7 +227,7 @@ func TestJitterBounds(t *testing.T) {
 }
 
 // TestAdminEmptyBodyIsNoOp proves a body with no fields keeps the whole profile —
-// the degenerate case of omitted-field-keeps (S5.T16.1).
+// the degenerate case of omitted-field-keeps.
 func TestAdminEmptyBodyIsNoOp(t *testing.T) {
 	_, _, admin := newTestBackend(profile{sleepMS: 4, jitterMS: 2, failRate: 0.3})
 
@@ -242,7 +242,7 @@ func TestAdminEmptyBodyIsNoOp(t *testing.T) {
 }
 
 // TestJitterClampedAtZero proves a jitter larger than the base sleep never
-// yields a negative delay (S5.T16.1).
+// yields a negative delay.
 func TestJitterClampedAtZero(t *testing.T) {
 	_, req, admin := newTestBackend(profile{})
 	require.Equal(t, http.StatusOK, driveAdmin(admin, http.MethodPost, `{"sleep_ms":0,"jitter_ms":50}`).Code)
@@ -259,7 +259,7 @@ func TestJitterClampedAtZero(t *testing.T) {
 
 // TestControlPathsBypassRuntimeChaos proves /health and /stats stay chaos-free
 // even when a profile is set at runtime, so a flaky backend is not ejected by
-// its own probe (S5.T16.1).
+// its own probe.
 func TestControlPathsBypassRuntimeChaos(t *testing.T) {
 	_, req, admin := newTestBackend(profile{})
 	require.Equal(t, http.StatusOK, driveAdmin(admin, http.MethodPost, `{"sleep_ms":5000,"fail_rate":1}`).Code)
@@ -276,7 +276,7 @@ func TestControlPathsBypassRuntimeChaos(t *testing.T) {
 }
 
 // TestPayloadPathsAcceptPostBody proves the payload paths accept a POST whose
-// body is read and discarded, returning the same body as GET (S5.T16.1).
+// body is read and discarded, returning the same body as GET.
 func TestPayloadPathsAcceptPostBody(t *testing.T) {
 	_, req, _ := newTestBackend(profile{})
 
@@ -302,7 +302,7 @@ func TestPayloadPathsAcceptPostBody(t *testing.T) {
 }
 
 // TestConcurrentSetWhileServing drives requests and admin writes at once; the
-// -race gate is the real assertion (S5.T16.1).
+// -race gate is the real assertion.
 func TestConcurrentSetWhileServing(t *testing.T) {
 	_, req, admin := newTestBackend(profile{})
 

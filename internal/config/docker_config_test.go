@@ -9,7 +9,7 @@ import (
 )
 
 // TestDockerConfig proves the shipped configs/docker.yaml — the default baked
-// into the container image at /etc/l7lb/config.yaml (S3.T10) — round-trips
+// into the container image at /etc/l7lb/config.yaml — round-trips
 // through the real Load + Validate pipeline, so the image's default config can
 // never drift out of sync with the schema or validation rules. Unlike
 // example.yaml (the host-process default, which points at 127.0.0.1:9001-3),

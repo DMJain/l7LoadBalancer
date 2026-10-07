@@ -1,4 +1,4 @@
-# Prometheus scrape config for the repo-root demo stack (S3.T11).
+# Prometheus scrape config for the repo-root demo stack.
 #
 # Sibling of prometheus.yml in this directory. The only difference is the
 # scrape target: the load balancer runs as the `l7lb` compose service here

@@ -1,8 +1,8 @@
-# Prometheus scrape config for the l7LoadBalancer observability demo stack
-# (S3.T7). See ../README.md.
+# Prometheus scrape config for the l7LoadBalancer observability demo stack.
+# See ../README.md.
 #
 # The load balancer is NOT a compose service here: it runs locally via
-# `make run` (S1.T9's convention), so Prometheus reaches its always-on
+# `make run`, so Prometheus reaches its always-on
 # metrics endpoint through the host gateway. `metrics.listen` defaults to
 # :9090 (config.DefaultMetricsListen); change the target here if you set a
 # different port in configs/example.yaml.
@@ -11,7 +11,7 @@
 # (ADR-0013 decision 17) — no trade-off worth recording.
 #
 # Sibling: prometheus-stack.yml is the container-network variant used by the
-# repo-root docker-compose.yml (S3.T11), scraping `l7lb:9090` by service name
+# repo-root docker-compose.yml, scraping `l7lb:9090` by service name
 # instead of this file's host-gateway target. See ADR-0013 decision 18.
 
 global:

@@ -183,7 +183,7 @@ func TestReloadRejectsNonBackendChange(t *testing.T) {
 }
 
 // TestReloadRejectsServerTimeoutChange proves a reload that changes the
-// server.read_timeout bound is rejected whole and names "server" (S4.T7).
+// server.read_timeout bound is rejected whole and names "server".
 func TestReloadRejectsServerTimeoutChange(t *testing.T) {
 	silenceDefault(t)
 
@@ -286,8 +286,8 @@ func TestReloadBlueGreenLogsWarn(t *testing.T) {
 // TestReloadSeedsAddedAndDeletesRemovedSeries proves the collector hook-up: an
 // added backend's series are seeded (active requests 0, healthy 0, circuit
 // closed), a removed backend's healthy and circuit-state series are deleted,
-// and its active-requests series is deliberately left in place (the T3 → T4
-// hand-off).
+// and its active-requests series is deliberately left in place (it is deleted when the
+// backend's drain completes).
 func TestReloadSeedsAddedAndDeletesRemovedSeries(t *testing.T) {
 	silenceDefault(t)
 
@@ -336,7 +336,7 @@ lb_circuit_state{backend="backend-c",state="open"} 0
 	require.NoError(t, testutil.GatherAndCompare(
 		application.Collector().Registry(), strings.NewReader(wantCircuit), "lb_circuit_state"))
 
-	// S4.T4's drain deletes the removed backend's active-requests series at
+	// The drain deletes the removed backend's active-requests series at
 	// drain completion; the unchanged backend's remains and the added one's is
 	// seeded.
 	const wantActive = `

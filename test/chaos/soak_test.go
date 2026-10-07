@@ -23,12 +23,12 @@ import (
 // at package scope so the test binary's flag.Parse finds them.
 var (
 	soakEnabled = flag.Bool("soak", false,
-		"run the S4.T10 one-hour soak test (skipped without this flag; see -soak-duration)")
+		"run the one-hour soak test (skipped without this flag; see -soak-duration)")
 	soakDuration = flag.Duration("soak-duration", time.Hour,
 		"soak wall-clock budget; the four failure phases and the quiet period scale proportionally")
 )
 
-// Committed tolerances (S4.T10). The goroutine delta is the audit's own delta,
+// Committed tolerances. The goroutine delta is the audit's own delta,
 // reused so the number has one definition: it absorbs GC-finalizer queueing and
 // timer jitter, while a real per-request or per-reload leak is thousands of
 // goroutines and cannot hide inside it. The heap delta bounds post-GC live-heap
@@ -40,7 +40,7 @@ const (
 
 // Phase plan. The quiet period is taken off the budget first (capped so a
 // shortened iteration does not always pay a full minute); the four failure
-// phases then divide what remains in the spec's 20:10:10:10 ratio, so the whole
+// phases then divide what remains in the 20:10:10:10 ratio, so the whole
 // run is approximately -soak-duration. At the default one-hour budget that is
 // ~24 min steady and ~12 min per failure phase.
 const (
@@ -73,21 +73,20 @@ const (
 )
 
 // statusClientClosed is nginx's client-closed-request code, which the proxy
-// writes when a client cancels before it could answer (S4.T5). The proxy's own
+// writes when a client cancels before it could answer. The proxy's own
 // constant is unexported, so the external chaos package restates the value.
 const statusClientClosed = 499
 
-// TestChaosSoakConnectionLifecycle is S4.T10: a flag-gated soak through the
-// application seam. It cycles steady proxying, client cancellations (S4.T5),
-// backend deaths (S4.T6), and reloads (S4.T3/T4) under sustained load, then
+// TestChaosSoakConnectionLifecycle is a flag-gated soak through the
+// application seam. It cycles steady proxying, client cancellations,
+// backend deaths, and reloads under sustained load, then
 // asserts after a quiet period that the goroutine count and post-GC heap have
 // not grown past the committed tolerances. It exercises the failure paths that
 // allocate resources, not just the happy path.
 //
 // The reload phase invokes App.Reload directly — the operation main's SIGHUP
 // loop calls. Whether the OS delivers SIGHUP to main's channel is the one line
-// of the reload path this bundle deliberately leaves untested (see the bundle
-// spec's Out of Scope); the seam under test is the application, not the signal
+// of the reload path this bundle deliberately leaves untested (deliberately out of scope); the seam under test is the application, not the signal
 // registration.
 func TestChaosSoakConnectionLifecycle(t *testing.T) {
 	if !*soakEnabled {
@@ -109,7 +108,7 @@ func TestChaosSoakConnectionLifecycle(t *testing.T) {
 
 	// Four backends run from the start, so every backend's transport connection
 	// pool is in the baseline. The reload phase alternates 3-subsets of them
-	// (removing one, adding another, S4.T3/T4); if the reserve entered only at
+	// (removing one, adding another); if the reserve entered only at
 	// reload time its fresh pool would be miscounted as leak growth. Four names
 	// is the harness's limit.
 	fbs := newFlippableBackends(t, 4)
@@ -143,7 +142,7 @@ func TestChaosSoakConnectionLifecycle(t *testing.T) {
 	sleepCtx(ctx, phaseDuration(phaseBudget, soakSteadyFraction))
 
 	// --- Phase 2: client cancellations. The slow-headers handler keeps a
-	// response from starting, so a cancelled client lands in S4.T5's
+	// response from starting, so a cancelled client lands in the
 	// client-gone branch (499) rather than after the headers. ---
 	serveAll(fbs, func(fb *flippableBackend) { fb.ServeSlowHeaders(soakHeaderDelay) })
 	load.cancel.Store(true)
@@ -152,7 +151,7 @@ func TestChaosSoakConnectionLifecycle(t *testing.T) {
 	serveAll(fbs, func(fb *flippableBackend) { fb.Serve200() })
 
 	// --- Phase 3: backend death. The victim streams its body slowly, so a kill
-	// truncates a response whose headers already reached the proxy (S4.T6) and
+	// truncates a response whose headers already reached the proxy and
 	// the active checker ejects then reinstates it. ---
 	runDeathPhase(t, ctx, a, fbs[0], phaseDuration(phaseBudget, soakDeathFraction))
 
@@ -278,7 +277,7 @@ func serveAll(fbs []*flippableBackend, apply func(*flippableBackend)) {
 }
 
 // ServeSlowHeaders answers 200 after an initial delay, before any header is
-// written. A client that cancels during the delay exercises S4.T5's
+// written. A client that cancels during the delay exercises the
 // client-gone branch; a client that waits sees a normal 200.
 func (fb *flippableBackend) ServeSlowHeaders(delay time.Duration) {
 	h := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -291,7 +290,7 @@ func (fb *flippableBackend) ServeSlowHeaders(delay time.Duration) {
 
 // ServeSlowBody writes and flushes 200 headers, then waits delay before writing
 // the body. A backend killed during the wait truncates a response whose headers
-// already reached the proxy — S4.T6's mid-body-death path.
+// already reached the proxy — the mid-body-death path.
 func (fb *flippableBackend) ServeSlowBody(delay time.Duration) {
 	h := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -399,7 +398,7 @@ func soakRequest(h http.Handler, cancelAfter time.Duration) int {
 
 // runDeathPhase kills and restarts the victim on a fixed cadence for dur. Every
 // kill lands while the victim is streaming a body, so requests in flight on it
-// are truncated (S4.T6) and its active probes fail, ejecting it; the restart
+// are truncated and its active probes fail, ejecting it; the restart
 // lets the checker reinstate it. It leaves the victim running, serving 200, and
 // healthy.
 func runDeathPhase(t *testing.T, ctx context.Context, a *assembly, victim *flippableBackend, dur time.Duration) {
