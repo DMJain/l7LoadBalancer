@@ -162,3 +162,77 @@ Three properties of the built system constrain how a live demo can work:
 - **Change latency by env var and container recreate** — rejected: that is the
   mechanism whose leak sank the published `degraded` slice, and it restarts the
   backend under load.
+
+## Amendment (2026-10-07, S5.T20.4) — a demo-only dashboard file
+
+Decision 9 kept one dashboard JSON for the root stack and the demo. The
+recorded demo needs a different screen: number tiles for what the clients see,
+a stacked traffic-share chart that continues across LB switches and marks each
+switch, and health and circuit state for the active LB
+(`.scratch/s5-t20-demo-dashboard/spec.md`, D4). Adding those panels to the
+shared file would change the root stack's dashboard for a need the root stack
+does not have.
+
+11. **The demo provisions a second, demo-only dashboard,
+    `demo/grafana/dashboards/l7lb-demo.json` (uid `l7lb-demo`).** The shared
+    dashboard JSON and its provisioning files are unchanged and still mounted,
+    never copied, so the original `l7loadbalancer` dashboard is still there in
+    the demo. The demo Grafana mounts the shared datasource directory, a
+    demo-only dashboard provider that lists both directories, and the two
+    dashboard directories. The control page embeds the demo dashboard whole in
+    one kiosk-mode iframe, replacing its three single-panel iframes.
+    Decision 9's other rule, no new charting code, holds: every chart is a
+    Grafana panel.
+
+12. **The demo dashboard reads every LB at once, and the active one is known
+    from `demo_active_lb`** (ADR-0025 amendment decision 14). Rates and shares
+    are summed over all `lb-*` jobs, because only the active LB carries
+    traffic, so the share chart continues across a switch. Circuit state is
+    joined with `demo_active_lb` so that it shows the active LB only. Health
+    takes the minimum across LBs, since all four probe the same backends. The
+    "no backend available" tile counts `5xx` with an empty `backend` label,
+    which is how the proxy records a 503 when no backend is selectable.
+
+## Amendment (2026-10-07, S5.T20.7) — the algorithm became reloadable
+
+Context item 1 and decision 4 rest on ADR-0015 decision 4, which rejected any
+reload that changes `algorithm`. ADR-0015's amendment of 2026-10-07 (decisions
+18–21) makes the algorithm reloadable in place, so that premise no longer
+holds. The alternative "make `algorithm` hot-reloadable" is no longer rejected:
+it is done.
+
+13. **Decision 4 (one LB per algorithm) is kept until the demo is reshaped.**
+    The four-LB stack still runs, and it can now also show a true hot reload:
+    edit an LB's config file in place, send it SIGHUP, and its algorithm
+    changes without a restart. Moving the demo to one hot-reloaded LB, and
+    removing the control page's algorithm buttons, is a follow-up ticket that
+    needs the owner's approval.
+
+## Amendment (2026-10-07, S5.T20.8) — one hot-reloaded LB
+
+14. **Decision 4 is superseded: the demo runs one LB, `lb`, and its algorithm
+    is changed by reload.** The owner wants the demo to show what production
+    does: one process whose selection algorithm changes on a config reload
+    while clients keep being served (ADR-0015 decisions 18–21). The four
+    per-algorithm LBs, their configs, and the generators' target switching
+    are removed. All eight clients send to `lb` for the whole run.
+
+15. **The LB's config directory is bind-mounted, not the single file.**
+    `demo/configs/` is mounted read-only at `/etc/l7lb-demo/`, and the LB
+    runs with `-config /etc/l7lb-demo/lb.yaml`. Many editors save by writing
+    a new file and renaming it over the old one. A single-file bind mount
+    keeps pointing at the old inode, so the LB would reload stale content. A
+    directory mount sees the rename. Editing `demo/configs/lb.yaml` with any
+    editor and sending SIGHUP is therefore the whole procedure.
+
+16. **The acceptance check proves the hot reload.** Phase 2 changes the
+    algorithm to `p2c_ewma` through `POST /admin/reload`, the same operation
+    SIGHUP uses (ADR-0015 decision 14). It then requires a successful reload,
+    `lb_algorithm_info` on `p2c_ewma`, backend3's share below the ceiling, and
+    zero client errors across the reload. Its exit trap re-posts the file's
+    config, so the file is authoritative again afterwards (ADR-0015
+    decision 15).
+
+Decision 12's active-LB join and decision 13's interim note are withdrawn with
+decision 4. Decision 6's distinct client IPs still matter for consistent
+hashing.

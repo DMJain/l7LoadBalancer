@@ -174,3 +174,67 @@ call.
   the group id is host-specific and the socket is root-equivalent regardless;
   running the demo-only control container as root is the honest, portable
   choice.
+
+## Amendment (2026-10-07, S5.T20.2) — LB admin listeners, the invalid-reload action, and `/metrics`
+
+The recorded demo needs the page to show which algorithm is active and the
+result of the last reload attempt, to trigger a reload that is rejected on
+purpose, and to give the dashboard a time series of LB switches for its
+markers (`.scratch/s5-t20-demo-dashboard/spec.md`). The service stays
+stateless (decision 1). Every new value is read live from a peer or derived
+from the generators, as before.
+
+12. **A fourth peer set: the four LBs' metrics listeners.** `LB_ADMINS` (default
+    `http://lb-roundrobin:9090,…`, the same order as `LBS`) lists them. A
+    startup check rejects a count that differs from `LBS`. `/api/state` reads
+    each LB's `GET /admin/reload/last` (ADR-0015 decision 16) concurrently and
+    reports it on that LB's entry. A failed read is reported, not fatal. The
+    listeners stay on the internal network.
+
+13. **The invalid-reload action sends one fixed body, never a caller-supplied
+    one.** `POST /api/reload-invalid` takes no input. It posts a constant YAML
+    config to the *active* LB's `POST /admin/reload`, and returns that LB's
+    answer. The config is valid in every field except `algorithm: "p3c_ewma"`,
+    so validation rejects exactly that field, and the LB's running config never
+    changes. When the generators disagree there is no active LB, and the action
+    answers `409` without calling any LB. Fixing the body keeps the same
+    property as decision 8's allowlist: nothing a caller sends can reach the
+    LB's reload path, so the page cannot be used to change a backend list.
+
+14. **`GET /metrics` serves `demo_active_lb{lb="…"}`, 1 for the active LB and 0
+    for the others** (all 0 when the generators disagree), in the Prometheus
+    text format written by hand (no client library). It is derived from the
+    generators on each scrape, like `/api/state`. The demo Prometheus scrapes
+    it, and the demo dashboard draws a marker each time the active LB changes.
+
+15. **Labels follow the demo script.** The LB dropdown becomes four buttons
+    named by algorithm, and they never say "reload": a switch is a traffic
+    switch (ADR-0015 decision 4). Kill/Revive are labelled Stop/Start, with
+    decision 9's kill semantics unchanged. A per-backend Clear sets `0/0/0`.
+
+### Alternatives considered (amendment, 2026-10-07)
+
+- **Derive each admin URL from the LB's hostname and a fixed port.** Rejected:
+  tests point every peer at an `httptest` server on an arbitrary port. An
+  explicit list is the seam every other peer set already uses.
+- **Let the page send its own invalid YAML.** Rejected (decision 13): it would
+  turn the control service into a proxy for arbitrary reloads.
+- **Keep the active-LB history in the control service.** Rejected: decision 1.
+  Prometheus already stores the series.
+
+## Amendment (2026-10-07, S5.T20.8) — one LB, algorithm read from the LB
+
+ADR-0023's amendment of the same date reduces the demo to one LB whose
+algorithm changes by reload. Decisions 14 and 15 assumed the previous shape.
+
+16. **The page shows the algorithm the LB reports, not one derived from an LB
+    name.** `/api/state` reads each LB's `/metrics` from `LB_ADMINS` and
+    reports the label of `lb_algorithm_info` whose value is 1 (ADR-0013
+    amendment, S5.T20.7). A failed read is reported, not fatal (decision 12).
+
+17. **Decision 14 (`demo_active_lb` on `/metrics`) is withdrawn**, along with
+    the four algorithm buttons in decision 15. With one LB there is no active
+    LB to track, and the algorithm changes by reload, so the page offers no
+    algorithm control at all. `POST /api/lb` stays as a generic endpoint, but
+    the page no longer calls it. Stop/Start, Clear and the fixed
+    invalid-reload action (decision 13) stay.

@@ -535,15 +535,29 @@ Scoped in `.scratch/s5-t20-demo-dashboard/` as one bundle spec plus seven ticket
   - Acceptance: as in the issue file.
   - Completed: `config.Parse` (shared strict decode with `Load`); `App.ReloadFrom`, the one mutex-serialized load → validate → apply → record operation that the SIGHUP loop and the endpoint both call; `POST /admin/reload` (YAML body, 1 MiB cap, 200/422/405/413, 503 before `Run`) and `GET /admin/reload/last` on the metrics listener; reloads through the endpoint run on the app's run context. ADR-0015 amendment (decisions 13–17) and ADR-0013 amendment. Tests Red-first; `make test`, `make test-race`, `go vet`, `make fmt` clean. Live check on the demo stack: an unknown-algorithm body to `lb-roundrobin` returned 422 naming `"p3c_ewma"`, `last` showed `rejected`, generators saw zero errors and drops. Details in `docs/sessions/2026-10-07-claude.md`.
 
-- [TODO] S5.T20.2 — Control page: state header, invalid-reload button, controls, `/metrics`
+- [DONE] S5.T20.2 — Control page: state header, invalid-reload button, controls, `/metrics` (Claude Code, started 2026-10-07T13:40:37Z, completed 2026-10-07T14:00:00Z)
   - Spec: `.scratch/s5-t20-demo-dashboard/issues/03-t20-2-control-page-extensions.md`
   - Depends: S5.T20.1 (and the owner's review of it)
   - Acceptance: as in the issue file.
+  - Completed: control service reads each LB's `GET /admin/reload/last` (`LB_ADMINS`), adds `POST /api/reload-invalid` (fixed `p3c_ewma` body to the active LB; 409 when generators disagree; no caller input) and `GET /metrics` with `demo_active_lb`, scraped by the demo Prometheus. Page rewritten plainly: header (algorithm, last reload), four algorithm buttons, invalid-reload button, one backend table with Apply/Clear/Stop/Start, client totals, one embedded dashboard. ADR-0025 amendment (decisions 12–15). Tests Red-first; gates clean. Live: invalid reload rejected by `lb-roundrobin` with `config: unsupported algorithm "p3c_ewma"`, header showed it, `demo_active_lb` correct. Details in `docs/sessions/2026-10-07-claude.md`.
 
-- [TODO] S5.T20.4 — Demo-only dashboard: zone A and B panels
+- [DONE] S5.T20.4 — Demo-only dashboard: zone A and B panels (Claude Code, started 2026-10-07T13:43:47Z, completed 2026-10-07T14:00:00Z)
   - Spec: `.scratch/s5-t20-demo-dashboard/issues/04-t20-4-demo-dashboard-panels.md`
   - Depends: S5.T20.2
   - Acceptance: as in the issue file.
+  - Completed: `demo/grafana/dashboards/l7lb-demo.json` (11 panels: C1, C2 ×3 with `increase(...[$__range])`, C3, B1 stacked share with `demo_active_lb` switch markers, B2, B3 bar gauge, B4/B7 requests in progress, B5, B6 for the active LB) and a demo-only provider; the shared dashboard JSON and provisioning unchanged. ADR-0023 amendment (decisions 11–12). Dry-run rows 5–8 passed live (RR 25/25/25/25 with backend3 p99 249 ms; P2C backend3 0.0 %, others 32.8/35.0/32.3 %; markers present; backend1 stop → unhealthy, circuit open, 0 %; start → 25 %). B7's EWMA view waits for S5.T18.
+
+- [DONE] S5.T20.7 — Algorithm hot reload (Claude Code, started 2026-10-07T17:28:06Z, completed 2026-10-07T17:36:00Z)
+  - Spec: `.scratch/s5-t20-demo-dashboard/issues/08-t20-7-algorithm-hot-reload.md`
+  - Depends: S5.T20.1
+  - Acceptance: as in the issue file.
+  - Completed: `algorithm` is reloadable. `NonBackendChanges` no longer names it; the proxy reads its selector through an atomic pointer (`SetSelector`); `App.Reload` builds the new selector before applying anything, applies the backend diff, swaps, then records; `config_reloaded` carries `previous_algorithm`/`algorithm`; new `lb_algorithm_info{algorithm}` gauge. ADR-0015 amendment (decisions 18–21), ADR-0013 and ADR-0023 amendments; CONTEXT, design-decisions, architecture and README corrected; demo docs flagged as superseded in part. Tests Red-first, including 60 algorithm swaps under 12 concurrent clients with zero failed requests; `make test`, `make test-race`, `go vet`, `make fmt` clean; `make e2e` (1000 in-flight SIGHUP zero-drop) passes. Live on the demo stack at 5000 req/s: SIGHUP of `lb-roundrobin` round_robin → p2c_ewma → round_robin with no restart; backend3 (200 ms) 25 % → 0.0 % → 25 %; zero client errors across the reload (96,213 requests in the window). The demo reshape (one LB, no algorithm buttons) is not done and needs its own ticket.
+
+- [DONE] S5.T20.8 — Reshape the demo around one hot-reloaded LB (Claude Code, started 2026-10-07T17:38:49Z, completed 2026-10-07T17:50:00Z)
+  - Spec: `.scratch/s5-t20-demo-dashboard/issues/09-t20-8-demo-one-hot-reloaded-lb.md`
+  - Depends: S5.T20.7
+  - Acceptance: as in the issue file.
+  - Completed: the demo runs one LB (`lb`, `demo/configs/lb.yaml`, config directory bind-mounted); the four per-algorithm LBs and configs are removed (16 containers). Control service reads each LB's algorithm from `lb_algorithm_info`; `demo_active_lb` and the page's algorithm buttons are withdrawn; the page shows the two hot-reload steps. Demo dashboard on `job="lb"` with markers from `lb_algorithm_info`. `demo/acceptance.sh` phase 2 is a hot reload through `/admin/reload` asserting success, the new algorithm, no container restart, zero client errors and backend3 < 15 %. `demo/README.md`, `demo/DEMO-SCRIPT.md` and `docs/demo/video-script.md` rewritten; gap report §8–§9 marked superseded. ADR-0023 (decisions 14–16) and ADR-0025 (decisions 16–17) amended. Verified on a fresh stack: acceptance passed (backend3 0.00 %, 0 client errors); an editor-style save (new inode) plus SIGHUP reloaded to `least_conn` and back; the on-camera flow (backend3 200 ms, edit to `p2c_ewma`, SIGHUP) showed SUCCESS, the marker, backend3 0 % and 0 client errors.
 
 - [TODO] S5.T18 — `lb_p2c_ewma_seconds{backend}` gauge
   - Spec: `.scratch/s5-t20-demo-dashboard/issues/05-t18-p2c-ewma-gauge.md`

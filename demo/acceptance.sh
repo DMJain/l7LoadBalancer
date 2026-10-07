@@ -1,21 +1,24 @@
 #!/usr/bin/env bash
 #
-# Latency-isolation acceptance check for the local live demo (S5.T16.5,
-# ADR-0023 decision 10).
+# Acceptance check for the local live demo (S5.T16.5, ADR-0023 decisions 10
+# and 16).
 #
-# Proves the demo rig is sound before any UI is built on it: latency injected on
-# one backend stays on that backend (phase 1, through the round-robin LB), and
-# the p2c-ewma selector moves traffic off it (phase 2). It is the guard against
-# the failure mode that sank the published `degraded` slice, where the injected
-# delay reached every backend.
+# Proves the demo rig is sound: latency injected on one backend stays on that
+# backend (phase 1, round robin), and a hot reload of the one LB's algorithm to
+# p2c_ewma, with no restart, moves traffic off it with zero client errors
+# (phase 2, S5.T20.8). Phase 1 is the guard against the failure mode that sank
+# the published `degraded` slice, where the injected delay reached every
+# backend.
 #
 # Run against a live stack:
 #   docker compose -f demo/docker-compose.yml up -d --build
 #   demo/acceptance.sh
 #
-# It drives the generators' control endpoints and the backends' admin listeners
-# directly and reads Prometheus's HTTP API; it does not depend on the control
-# service (S5.T16.4). Those ports stay on the demo's internal network, so the
+# It drives the generators' control endpoints, the backends' admin listeners and
+# the LB's reload admin endpoint directly, and reads Prometheus's HTTP API; it
+# does not depend on the control service (S5.T16.4). The reload goes through
+# POST /admin/reload, the same operation SIGHUP runs (ADR-0015 decision 14), so
+# the check never edits demo/configs/lb.yaml. Those ports stay on the demo's internal network, so the
 # check reaches them by exec'ing `wget` inside the running Prometheus container
 # (the only service with busybox) rather than publishing anything — ADR-0023
 # decision 2.
@@ -27,9 +30,10 @@
 # `INJECT_BACKENDS="backend2 backend3" demo/acceptance.sh` makes phase 1 fail,
 # naming the backend whose latency is not isolated.
 #
-# Every failure names the assertion, the LB and the measured value. An EXIT trap
-# restores every backend's profile and the generators' rate and target, pass or
-# fail, so a failed check leaves the stack usable.
+# Every failure names the assertion and the measured value. An EXIT trap
+# restores every backend's profile, the generators' rate and target, and the
+# LB's config from demo/configs/lb.yaml (re-posted, so the file is
+# authoritative again, ADR-0015 decision 15), pass or fail.
 
 set -euo pipefail
 
@@ -46,10 +50,10 @@ readonly SLOW_P50_MIN_MS=150    # phase 1: the slow backend must show the delay
 readonly FAST_P50_MAX_MS=20     # phase 1: every other backend must stay fast
 readonly SHARE_MAX_PCT=15       # phase 2: backend3's request share ceiling
 
-readonly RR_JOB=lb-roundrobin
-readonly P2C_JOB=lb-p2c-ewma
-readonly RR_URL="http://lb-roundrobin:8080"
-readonly P2C_URL="http://lb-p2c-ewma:8080"
+readonly LB_JOB=lb
+readonly LB_URL="http://lb:8080"
+readonly LB_ADMIN="http://lb:9090"
+readonly LB_CONFIG="$here/configs/lb.yaml"
 
 readonly BACKENDS=(backend1 backend2 backend3 backend4)
 readonly GENS=(gen1 gen2 gen3 gen4 gen5 gen6 gen7 gen8)
@@ -141,6 +145,29 @@ gen_get() { in_prom "http://$1:9090/"; }
 # gen_set <gen> <json> updates the generator's total rate and/or target.
 gen_set() { in_prom --post-data="$2" --header "Content-Type: application/json" "http://$1:9090/"; }
 
+# lb_reload <yaml> hot-reloads the LB with a config body through its admin
+# endpoint and prints the result JSON; it fails (wget exits non-zero) on a 422.
+lb_reload() { in_prom --post-data="$1" --header "Content-Type: application/yaml" "$LB_ADMIN/admin/reload"; }
+
+# config_with_algorithm <algorithm> prints demo/configs/lb.yaml with its
+# algorithm replaced; every other field is the file's, so only the algorithm
+# differs from what the LB runs.
+config_with_algorithm() { sed -E "s/^algorithm:.*/algorithm: \"$1\"/" "$LB_CONFIG"; }
+
+# client_errors prints the sum of the eight generators' transport-error counters.
+client_errors() {
+	local g total=0 n
+	for g in "${GENS[@]}"; do
+		n=$(json_field "$(gen_get "$g")" errors) || fail "generator $g did not answer"
+		total=$((total + n))
+	done
+	echo "$total"
+}
+
+# lb_started_at prints the LB container's start time; unchanged means the
+# process was never restarted.
+lb_started_at() { docker inspect -f '{{.State.StartedAt}}' "$("${compose[@]}" ps -q lb)"; }
+
 # restore undoes every change this script made: backends to their snapshotted
 # profile, generators to their snapshotted rate and target. It runs on EXIT, so
 # a failed check leaves the stack usable.
@@ -157,6 +184,9 @@ restore() {
 		while IFS=$'\t' read -r g rate target; do
 			gen_set "$g" "{\"total_rate\":$rate,\"target\":\"$target\"}" >/dev/null 2>&1 || true
 		done <"$gen_snapshot"
+	fi
+	if [ -f "$LB_CONFIG" ]; then
+		lb_reload "$(cat "$LB_CONFIG")" >/dev/null 2>&1 || true
 	fi
 	rm -rf "$tmpdir"
 	exit "$status"
@@ -179,16 +209,19 @@ for _ in $(seq 1 60); do
 done
 [ "$ready" = 1 ] || fail "Prometheus never became ready — is the demo stack up? (make demo-up)"
 
-# Both LBs are healthy Prometheus targets and every backend is selectable.
-for job in "$RR_JOB" "$P2C_JOB"; do
-	wait_metric "up{job=\"$job\"}" 1 60 "$job is not a healthy Prometheus target"
+# The LB is a healthy Prometheus target and every backend is selectable.
+wait_metric "up{job=\"$LB_JOB\"}" 1 60 "$LB_JOB is not a healthy Prometheus target"
+for b in "${BACKENDS[@]}"; do
+	wait_metric "lb_backend_healthy{job=\"$LB_JOB\",backend=\"$b\"}" 1 60 "$b is not selectable on $LB_JOB"
 done
-for job in "$RR_JOB" "$P2C_JOB"; do
-	for b in "${BACKENDS[@]}"; do
-		wait_metric "lb_backend_healthy{job=\"$job\",backend=\"$b\"}" 1 60 "$b is not selectable on $job"
-	done
-done
-echo "    both LBs up, all four backends selectable on each"
+echo "    LB up, all four backends selectable"
+
+# Phase 1 measures per-backend latency, which needs every backend to get
+# traffic, so the LB starts the check on round robin (by hot reload).
+lb_reload "$(config_with_algorithm round_robin)" >/dev/null \
+	|| fail "precondition: the LB rejected a round_robin reload of demo/configs/lb.yaml"
+wait_metric "lb_algorithm_info{job=\"$LB_JOB\",algorithm=\"round_robin\"}" 1 30 "precondition: the LB does not report round_robin"
+echo "    LB on round_robin"
 
 # Snapshot the backends' profiles and require the clean baseline.
 : >"$backend_snapshot"
@@ -218,12 +251,12 @@ for g in "${GENS[@]}"; do
 	rate=$(json_field "$body" total_rate)
 	target=$(json_field "$body" target)
 	printf '%s\t%s\t%s\n' "$g" "$rate" "$target" >>"$gen_snapshot"
-	gen_set "$g" "{\"total_rate\":$CHECK_TOTAL_RATE,\"target\":\"$RR_URL\"}" >/dev/null \
+	gen_set "$g" "{\"total_rate\":$CHECK_TOTAL_RATE,\"target\":\"$LB_URL\"}" >/dev/null \
 		|| fail "generator $g rejected the check rate/target update"
 done
-echo "    all eight generators at ${CHECK_TOTAL_RATE} req/s, target $RR_URL"
+echo "    all eight generators at ${CHECK_TOTAL_RATE} req/s, target $LB_URL"
 
-echo "==> 2. Phase 1: $INJECT_BACKENDS at ${SLOW_MS} ms, $RR_JOB active"
+echo "==> 2. Phase 1: $INJECT_BACKENDS at ${SLOW_MS} ms, round_robin"
 for b in $INJECT_BACKENDS; do
 	admin_set "$b" "{\"sleep_ms\":$SLOW_MS,\"jitter_ms\":0}" >/dev/null \
 		|| fail "could not set $b to sleep_ms=$SLOW_MS"
@@ -232,34 +265,43 @@ echo "    waiting ${PHASE1_WAIT_S}s for the injected latency to show..."
 sleep "$PHASE1_WAIT_S"
 
 for b in "${BACKENDS[@]}"; do
-	p=$(p50_ms "$RR_JOB" "$b")
+	p=$(p50_ms "$LB_JOB" "$b")
 	echo "    $b p50=${p} ms"
 	if [ "$b" = backend3 ]; then
 		num_cmp "$p" ">=" "$SLOW_P50_MIN_MS" \
-			|| fail "phase 1 [$RR_JOB]: backend3 p50=${p}ms < ${SLOW_P50_MIN_MS}ms (injected ${SLOW_MS}ms is not visible on backend3)"
+			|| fail "phase 1 [round_robin]: backend3 p50=${p}ms < ${SLOW_P50_MIN_MS}ms (injected ${SLOW_MS}ms is not visible on backend3)"
 	else
 		num_cmp "$p" "<=" "$FAST_P50_MAX_MS" \
-			|| fail "phase 1 [$RR_JOB]: $b p50=${p}ms > ${FAST_P50_MAX_MS}ms (injected latency is not isolated to backend3)"
+			|| fail "phase 1 [round_robin]: $b p50=${p}ms > ${FAST_P50_MAX_MS}ms (injected latency is not isolated to backend3)"
 	fi
 done
 echo "    injected latency is isolated to backend3"
 
-echo "==> 3. Phase 2: switch generators to $P2C_JOB; backend3 still at ${SLOW_MS} ms"
-for g in "${GENS[@]}"; do
-	gen_set "$g" "{\"target\":\"$P2C_URL\"}" >/dev/null \
-		|| fail "generator $g rejected the target switch to $P2C_URL"
-done
+echo "==> 3. Phase 2: hot-reload the LB to p2c_ewma; backend3 still at ${SLOW_MS} ms"
+started_before=$(lb_started_at)
+errors_before=$(client_errors)
+result=$(lb_reload "$(config_with_algorithm p2c_ewma)") \
+	|| fail "phase 2: the LB rejected the p2c_ewma reload"
+[ "$(json_field "$result" result)" = success ] || fail "phase 2: reload result is not success ($result)"
+echo "    reload accepted: $result"
+wait_metric "lb_algorithm_info{job=\"$LB_JOB\",algorithm=\"p2c_ewma\"}" 1 30 "phase 2: the LB does not report p2c_ewma after the reload"
 echo "    waiting ${PHASE2_CONVERGE_S}s for EWMA convergence..."
 sleep "$PHASE2_CONVERGE_S"
 
 slowest=backend3
-share=$(share_pct "$P2C_JOB" "$slowest")
-echo "    $slowest share=${share}%"
+share=$(share_pct "$LB_JOB" "$slowest")
+errors_after=$(client_errors)
+started_after=$(lb_started_at)
+echo "    $slowest share=${share}%  client errors across the reload: $((errors_after - errors_before))"
 num_cmp "$share" "<" "$SHARE_MAX_PCT" \
-	|| fail "phase 2 [$P2C_JOB]: $slowest request share=${share}% >= ${SHARE_MAX_PCT}% (selector did not move off the slow backend)"
+	|| fail "phase 2 [p2c_ewma]: $slowest request share=${share}% >= ${SHARE_MAX_PCT}% (the reloaded selector did not move off the slow backend)"
+[ "$errors_after" -eq "$errors_before" ] \
+	|| fail "phase 2: $((errors_after - errors_before)) client errors during the hot reload (want 0)"
+[ "$started_after" = "$started_before" ] \
+	|| fail "phase 2: the LB container restarted ($started_before -> $started_after); a hot reload must not restart it"
 
 echo
 echo "All checks passed."
-echo "  Phase 1: ${INJECT_BACKENDS} at ${SLOW_MS} ms stayed isolated on $RR_JOB"
-echo "  Phase 2: $P2C_JOB moved traffic off $slowest (share=${share}% < ${SHARE_MAX_PCT}%)"
+echo "  Phase 1: ${INJECT_BACKENDS} at ${SLOW_MS} ms stayed isolated (round_robin)"
+echo "  Phase 2: hot reload to p2c_ewma, same process, 0 client errors; $slowest share=${share}% < ${SHARE_MAX_PCT}%"
 echo

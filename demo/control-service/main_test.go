@@ -210,6 +210,7 @@ func (e *engineStub) setState(state string) {
 type rig struct {
 	gens     []*genStub
 	backends []*backendStub
+	lbAdmins []*lbAdminStub
 	engine   *engineStub
 	handler  http.Handler
 }
@@ -234,6 +235,11 @@ func newRig(t *testing.T) *rig {
 		{name: "lb-leastconn", url: "http://lb-leastconn:8080"},
 		{name: "lb-consistent-hash", url: "http://lb-consistent-hash:8080"},
 		{name: "lb-p2c-ewma", url: "http://lb-p2c-ewma:8080"},
+	}
+	for _, lb := range cfg.lbs {
+		a := newLBAdminStub(t)
+		r.lbAdmins = append(r.lbAdmins, a)
+		cfg.lbAdmins = append(cfg.lbAdmins, peer{name: lb.name, url: a.srv.URL})
 	}
 	s, err := newServer(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	require.NoError(t, err)

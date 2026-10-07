@@ -21,6 +21,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	_ "embed"
@@ -73,11 +74,25 @@ var (
 		"http://backend1:9091", "http://backend2:9091",
 		"http://backend3:9091", "http://backend4:9091",
 	}
-	defaultLBs = []string{
-		"http://lb-roundrobin:8080", "http://lb-leastconn:8080",
-		"http://lb-consistent-hash:8080", "http://lb-p2c-ewma:8080",
-	}
+	// The demo runs one LB whose algorithm changes by reload (S5.T20.8,
+	// ADR-0023 decision 14). LBS and LB_ADMINS still take a list.
+	defaultLBs = []string{"http://lb:8080"}
+	// defaultLBAdmins are the LBs' metrics listeners, which serve /metrics and
+	// the reload admin routes (ADR-0025 decisions 12 and 16). Same order as
+	// defaultLBs.
+	defaultLBAdmins = []string{"http://lb:9090"}
 )
+
+// invalidReloadBody is the one config the invalid-reload action ever sends
+// (ADR-0025 decision 13). Every field is valid except the algorithm, so the
+// LB's validation rejects exactly that and its running config never changes.
+// It is a constant: nothing a caller sends reaches an LB's reload path.
+const invalidReloadBody = `listen: ":8080"
+algorithm: "p3c_ewma"
+backends:
+  - name: "backend1"
+    url: "http://backend1:8080"
+`
 
 // defaultGrafanaURL is the browser-reachable Grafana (host loopback, not the
 // internal `http://grafana:3000`): the iframes are loaded by the owner's
@@ -100,6 +115,9 @@ type config struct {
 	generators []peer
 	backends   []peer
 	lbs        []peer
+	// lbAdmins are the LBs' metrics listeners, index-paired with lbs and
+	// named after them (S5.T20.2).
+	lbAdmins   []peer
 	grafanaURL string
 	addr       string
 	// dockerHost is the Docker Engine endpoint: a unix socket in the demo, an
@@ -260,6 +278,30 @@ type stateResponse struct {
 type peerJSON struct {
 	Name   string `json:"name"`
 	Target string `json:"target"`
+	// LastReload is the LB's GET /admin/reload/last answer; LastReloadError
+	// replaces it when the read failed (S5.T20.2).
+	LastReload      *lastReload `json:"last_reload,omitempty"`
+	LastReloadError string      `json:"last_reload_error,omitempty"`
+	// Algorithm is the algorithm the LB reports through lb_algorithm_info;
+	// AlgorithmError replaces it when the read failed (S5.T20.8).
+	Algorithm      string `json:"algorithm,omitempty"`
+	AlgorithmError string `json:"algorithm_error,omitempty"`
+}
+
+// lastReload is the LB's last-reload record (S5.T20.1, ADR-0015 decision 16).
+type lastReload struct {
+	Result string `json:"result"`
+	Time   string `json:"time,omitempty"`
+	Error  string `json:"error,omitempty"`
+}
+
+// reloadInvalidResponse is the invalid-reload action's response: which LB was
+// asked, and its answer, or Error alone when the call itself failed.
+type reloadInvalidResponse struct {
+	LB     string `json:"lb"`
+	Result string `json:"result,omitempty"`
+	Time   string `json:"time,omitempty"`
+	Error  string `json:"error,omitempty"`
 }
 
 // backendState and generatorState embed the peer's own contract type, so a
@@ -360,6 +402,9 @@ func newServer(cfg config, logger *slog.Logger) (*server, error) {
 	if len(cfg.lbs) == 0 {
 		return nil, errors.New("at least one LB is required")
 	}
+	if len(cfg.lbAdmins) != len(cfg.lbs) {
+		return nil, fmt.Errorf("LB_ADMINS lists %d URLs but LBS lists %d; they must pair one to one", len(cfg.lbAdmins), len(cfg.lbs))
+	}
 	if cfg.grafanaURL == "" {
 		return nil, errors.New("grafana URL is required")
 	}
@@ -388,6 +433,7 @@ func (s *server) handler() http.Handler {
 	mux.HandleFunc("POST /api/backend", s.handleBackend)
 	mux.HandleFunc("POST /api/backend/kill", s.handleKill)
 	mux.HandleFunc("POST /api/backend/revive", s.handleRevive)
+	mux.HandleFunc("POST /api/reload-invalid", s.handleReloadInvalid)
 	return mux
 }
 
@@ -542,10 +588,7 @@ func (s *server) handleState(w http.ResponseWriter, r *http.Request) {
 	generators := s.gatherGenerators(ctx)
 	backends := s.gatherBackends(ctx)
 
-	lbs := make([]peerJSON, 0, len(s.cfg.lbs))
-	for _, lb := range s.cfg.lbs {
-		lbs = append(lbs, peerJSON{Name: lb.name, Target: lb.url})
-	}
+	lbs := s.gatherLBs(ctx)
 
 	writeJSON(w, stateResponse{
 		GrafanaURL: s.cfg.grafanaURL,
@@ -555,6 +598,146 @@ func (s *server) handleState(w http.ResponseWriter, r *http.Request) {
 		Backends:   backends,
 		Generators: generators,
 	})
+}
+
+// gatherLBs lists the LBs with each one's last reload and current algorithm,
+// read from its metrics listener concurrently; a failed read is reported on
+// that LB (ADR-0025 decisions 12 and 16).
+func (s *server) gatherLBs(ctx context.Context) []peerJSON {
+	lbs := make([]peerJSON, len(s.cfg.lbs))
+	forEachPeer(s.cfg.lbAdmins, func(i int, admin peer) {
+		base := strings.TrimRight(admin.url, "/")
+		lb := peerJSON{Name: s.cfg.lbs[i].name, Target: s.cfg.lbs[i].url}
+		var last lastReload
+		if _, err := s.call(ctx, http.MethodGet, base+"/admin/reload/last", nil, &last); err != nil {
+			lb.LastReloadError = err.Error()
+		} else {
+			lb.LastReload = &last
+		}
+		if algorithm, err := s.readAlgorithm(ctx, base+"/metrics"); err != nil {
+			lb.AlgorithmError = err.Error()
+		} else {
+			lb.Algorithm = algorithm
+		}
+		lbs[i] = lb
+	})
+	return lbs
+}
+
+// readAlgorithm fetches an LB's Prometheus exposition and returns the
+// algorithm lb_algorithm_info reports (ADR-0025 decision 16).
+func (s *server) readAlgorithm(ctx context.Context, rawURL string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return "", fmt.Errorf("build request: %w", err)
+	}
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("call %s: %w", rawURL, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return "", errors.New(resp.Status)
+	}
+	return parseAlgorithm(resp.Body)
+}
+
+// algorithmSeries is the exposition prefix of the LB's algorithm gauge
+// (ADR-0013 amendment, S5.T20.7).
+const algorithmSeries = `lb_algorithm_info{algorithm="`
+
+// parseAlgorithm returns the label of the lb_algorithm_info series whose value
+// is 1. The gauge has exactly one such series (the LB sets the new one before
+// deleting the old), so the first match is the answer.
+func parseAlgorithm(r io.Reader) (string, error) {
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for sc.Scan() {
+		line := sc.Text()
+		rest, ok := strings.CutPrefix(line, algorithmSeries)
+		if !ok {
+			continue
+		}
+		name, value, ok := strings.Cut(rest, `"} `)
+		if ok && strings.TrimSpace(value) == "1" {
+			return name, nil
+		}
+	}
+	if err := sc.Err(); err != nil {
+		return "", fmt.Errorf("read metrics: %w", err)
+	}
+	return "", errors.New("no lb_algorithm_info series")
+}
+
+// handleReloadInvalid posts the fixed invalid config to the active LB and
+// returns its answer (ADR-0025 decision 13). It takes no input: an empty body
+// or `{}` is accepted and any field is a 400. With no agreed active LB it is a
+// 409 and no LB is called. The LB's 422 is the expected answer, so it is
+// reported in a 200 body like every other action's outcome (decision 4).
+func (s *server) handleReloadInvalid(w http.ResponseWriter, r *http.Request) {
+	raw, err := io.ReadAll(io.LimitReader(r.Body, 1<<10))
+	if err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if len(bytes.TrimSpace(raw)) > 0 {
+		dec := json.NewDecoder(bytes.NewReader(raw))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&struct{}{}); err != nil {
+			http.Error(w, "this action takes no input", http.StatusBadRequest)
+			return
+		}
+	}
+
+	active := activeLB(s.gatherGenerators(r.Context()), s.cfg.lbs)
+	if active == "" {
+		http.Error(w, "no active LB: the generators disagree", http.StatusConflict)
+		return
+	}
+	var admin peer
+	for i, lb := range s.cfg.lbs {
+		if lb.name == active {
+			admin = s.cfg.lbAdmins[i]
+		}
+	}
+
+	out := reloadInvalidResponse{LB: active}
+	var answer lastReload
+	if _, err := s.call(r.Context(), http.MethodPost, strings.TrimRight(admin.url, "/")+"/admin/reload",
+		strings.NewReader(invalidReloadBody), &answer); err != nil {
+		out.Error = err.Error()
+	} else {
+		out.Result, out.Time, out.Error = answer.Result, answer.Time, answer.Error
+	}
+	writeJSON(w, out)
+}
+
+// call performs one request against an exact URL (no trailing-slash rewrite,
+// unlike doJSON) and decodes a JSON answer into out. Any status with a JSON
+// body is decoded, because the LB reports a rejected reload as a 422 with a
+// JSON body; a non-JSON non-2xx answer is an error carrying the status.
+func (s *server) call(ctx context.Context, method, rawURL string, body io.Reader, out any) (int, error) {
+	req, err := http.NewRequestWithContext(ctx, method, rawURL, body)
+	if err != nil {
+		return 0, fmt.Errorf("build request: %w", err)
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/yaml")
+	}
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("call %s: %w", rawURL, err)
+	}
+	defer resp.Body.Close()
+	if !strings.HasPrefix(resp.Header.Get("Content-Type"), "application/json") {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return resp.StatusCode, errors.New(resp.Status)
+	}
+	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+		return resp.StatusCode, fmt.Errorf("decode %s: %w", rawURL, err)
+	}
+	return resp.StatusCode, nil
 }
 
 // forEachPeer runs fn for every peer concurrently and waits. Each call writes
@@ -763,10 +946,22 @@ func configFromEnv() (config, error) {
 	if err != nil {
 		return config{}, err
 	}
+	lbAdmins, err := envPeers("LB_ADMINS", defaultLBAdmins)
+	if err != nil {
+		return config{}, err
+	}
+	// An admin peer is named after the LB it pairs with, so the page and the
+	// state report one name per LB (ADR-0025 decision 12).
+	for i := range lbAdmins {
+		if i < len(lbs) {
+			lbAdmins[i].name = lbs[i].name
+		}
+	}
 	return config{
 		generators: generators,
 		backends:   backends,
 		lbs:        lbs,
+		lbAdmins:   lbAdmins,
 		grafanaURL: envString("GRAFANA_URL", defaultGrafanaURL),
 		dockerHost: envString("DOCKER_HOST", defaultDockerHost),
 	}, nil

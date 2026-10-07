@@ -6,73 +6,84 @@
 <title>l7LoadBalancer demo control</title>
 <style>
   :root { color-scheme: light dark; }
-  body { font-family: system-ui, sans-serif; margin: 1.5rem; max-width: 1100px; }
-  h1 { font-size: 1.4rem; }
-  h2 { font-size: 1.05rem; margin-top: 1.5rem; }
+  body { font-family: system-ui, sans-serif; margin: 1.5rem; max-width: 1400px; }
+  h1 { font-size: 1.4rem; margin-bottom: .5rem; }
+  h2 { font-size: 1.05rem; margin: 0 0 .6rem; }
   section { border: 1px solid #8884; border-radius: 8px; padding: 1rem; margin: 1rem 0; }
-  label { display: inline-block; min-width: 6rem; }
-  input { width: 6rem; }
-  button { margin-left: .5rem; }
-  .row { margin: .35rem 0; }
+  #header { font-size: 1.2rem; line-height: 1.8; }
+  #header b { font-size: 1.3rem; }
+  input { width: 5rem; }
+  button { margin: 0 .4rem .3rem 0; padding: .3rem .7rem; }
+  code { font-size: .95rem; }
+  ol { margin: .3rem 0 .6rem 1.2rem; padding: 0; line-height: 1.8; }
   .muted { opacity: .7; }
   .ok { color: #2e7d32; }
   .bad { color: #c62828; font-weight: 600; }
-  table { border-collapse: collapse; margin-top: .5rem; }
-  th, td { border: 1px solid #8884; padding: .2rem .5rem; font-variant-numeric: tabular-nums; }
-  iframe { border: 1px solid #8884; border-radius: 8px; width: 100%; height: 280px; }
-  #result { min-height: 1.2rem; }
+  table { border-collapse: collapse; }
+  th, td { border: 1px solid #8884; padding: .25rem .5rem; font-variant-numeric: tabular-nums; text-align: left; }
+  iframe { border: 1px solid #8884; border-radius: 8px; width: 100%; height: 1000px; }
+  #result { min-height: 1.4rem; margin-top: .4rem; }
 </style>
 </head>
 <body>
-<h1>l7LoadBalancer — local demo control</h1>
-<p class="muted">Loopback only. The charts are panels of the demo Grafana dashboard, at <code>var-window=15s&amp;refresh=5s</code>.</p>
+<h1>l7LoadBalancer — demo control</h1>
 
-<section>
-  <h2>Active LB</h2>
-  <div class="row">
-    <select id="lb-select"></select>
-    <button onclick="applyLB()">Switch active LB</button>
-    <span id="active-lb" class="muted"></span>
-  </div>
+<!-- State header (S1, S2): what the viewer needs to read at a glance. -->
+<section id="header">
+  <div>Algorithm: <b id="algo">…</b> <span id="algo-lb" class="muted"></span></div>
+  <div>Last reload: <span id="reload">…</span></div>
 </section>
 
 <section>
-  <h2>Total load rate</h2>
-  <div class="row">
-    <label for="rate">Total req/s</label>
-    <input id="rate" type="number" min="0" step="10">
-    <button onclick="applyRate()">Set rate</button>
-    <span id="rate-now" class="muted"></span>
-  </div>
+  <h2>Change the algorithm (hot reload)</h2>
+  <ol>
+    <li>Edit <code>demo/configs/lb.yaml</code> and set <code>algorithm:</code> to
+      <code>round_robin</code>, <code>least_conn</code>, <code>consistent_hash</code> or <code>p2c_ewma</code>.</li>
+    <li>Send the reload signal: <code>docker compose -f demo/docker-compose.yml kill -s HUP lb</code></li>
+  </ol>
+  <p class="muted">The same process keeps serving: no restart, no dropped requests. The header above changes and the traffic-share chart gets a marker.</p>
+  <h2 style="margin-top:1rem">Reload check</h2>
+  <button onclick="reloadInvalid()">Try a reload with an invalid config</button>
+  <span class="muted">sends a config with the unknown algorithm "p3c_ewma" to the load balancer; it must be rejected and nothing must change</span>
+  <div id="result"></div>
 </section>
 
 <section>
-  <h2>Backends — profile, kill/revive</h2>
-  <div id="backends"></div>
+  <h2>Load</h2>
+  <label for="rate">Total requests per second</label>
+  <input id="rate" type="number" min="0" step="10">
+  <button onclick="applyRate()">Set</button>
+  <span id="rate-now" class="muted"></span>
+  <div id="clients" class="muted" style="margin-top:.4rem"></div>
 </section>
 
 <section>
-  <h2>Generators</h2>
-  <div class="row" id="gen-totals"></div>
-  <table id="gen-table"><thead><tr><th>client</th><th>target</th><th>offered</th><th>sent</th><th>dropped</th></tr></thead><tbody></tbody></table>
+  <h2>Backends</h2>
+  <table>
+    <thead><tr><th>backend</th><th>delay ms</th><th>jitter ms</th><th>fail rate</th><th>actions</th><th>container</th></tr></thead>
+    <tbody id="backends"></tbody>
+  </table>
 </section>
 
-<div id="result"></div>
-
 <section>
-  <h2>Charts</h2>
-  <iframe id="chart-rate" title="Request rate by backend" loading="lazy"></iframe>
-  <iframe id="chart-latency" title="Request latency p50 / p99" loading="lazy" style="margin-top:1rem"></iframe>
-  <iframe id="chart-share" title="Request share by backend" loading="lazy" style="margin-top:1rem"></iframe>
+  <h2>Dashboard</h2>
+  <iframe id="dashboard" title="l7LoadBalancer demo dashboard"></iframe>
 </section>
 
 <script>
 "use strict";
 
-// Panel ids in the single dashboard JSON (l7loadbalancer): 1 request rate,
-// 2 latency p50/p99, 6 request share. The iframe query is fixed at the demo
-// window/refresh; the LB is the active one (ADR-0025 decision 5).
-const PANELS = { "chart-rate": 1, "chart-latency": 2, "chart-share": 6 };
+// Display names for the algorithm the LB reports through lb_algorithm_info.
+// The page offers no algorithm control: the algorithm changes by reload
+// (ADR-0023 decision 14, ADR-0025 decisions 16–17).
+const ALGORITHMS = {
+  "round_robin": "Round robin",
+  "least_conn": "Least connections",
+  "consistent_hash": "Consistent hash",
+  "p2c_ewma": "P2C-EWMA"
+};
+// The demo-only dashboard (S5.T20.4), whole, in kiosk mode, at the demo window.
+const DASHBOARD = "/d/l7lb-demo/?var-window=15s&refresh=5s&from=now-15m&to=now&kiosk";
 let state = null;
 
 function el(id) { return document.getElementById(id); }
@@ -83,41 +94,50 @@ function setResult(ok, text) {
   r.textContent = text;
 }
 
-// actionResult turns a fan-out or forward response body into a page message.
-function actionResult(body) {
-  if (body.ok) return { ok: true, text: "ok" };
-  const failed = (body.failed && body.failed.length) ? body.failed.join(", ") : "";
-  const text = body.error ? body.error : ("failed: " + failed);
-  return { ok: false, text: text };
+function clock(iso) {
+  return new Date(iso).toLocaleTimeString([], { hour12: false });
 }
 
-async function post(path, payload) {
+async function send(path, payload) {
+  const resp = await fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  if (!resp.ok) throw new Error(await resp.text());
+  return resp.json();
+}
+
+// act runs one action and reports it; fan-out failures name every failed peer.
+async function act(path, payload) {
   try {
-    const resp = await fetch(path, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    });
-    if (!resp.ok) {
-      setResult(false, await resp.text());
-      return;
-    }
-    const result = actionResult(await resp.json());
-    setResult(result.ok, result.text);
-    await refresh();
+    const body = await send(path, payload);
+    if (body.ok) setResult(true, "done");
+    else setResult(false, body.error || ("failed: " + (body.failed || []).join(", ")));
   } catch (err) {
-    setResult(false, String(err));
+    setResult(false, String(err.message || err));
   }
+  await refresh();
 }
 
-function applyLB() {
-  post("/api/lb", { lb: el("lb-select").value });
+async function reloadInvalid() {
+  try {
+    const body = await send("/api/reload-invalid", {});
+    if (body.result === "rejected") {
+      setResult(true, "Rejected by " + body.lb + " as expected: " + body.error);
+    } else {
+      setResult(false, body.lb + " answered: " + (body.result || "") + " " + (body.error || ""));
+    }
+  } catch (err) {
+    setResult(false, String(err.message || err));
+  }
+  await refresh();
 }
-function applyRate() {
-  post("/api/rate", { total_rate: Number(el("rate").value) });
-}
+
+function applyRate() { act("/api/rate", { total_rate: Number(el("rate").value) }); }
+
 function applyBackend(name) {
-  post("/api/backend", {
+  act("/api/backend", {
     backend: name,
     sleep_ms: Number(el("sleep-" + name).value),
     jitter_ms: Number(el("jitter-" + name).value),
@@ -125,130 +145,118 @@ function applyBackend(name) {
   });
 }
 
-// setInput updates an input's value unless the owner is typing in it, so the
-// 2 s refresh cannot clobber a value mid-edit.
+// setInput updates an input unless the owner is typing in it, so the 2 s
+// refresh cannot clobber a value mid-edit.
 function setInput(input, value) {
   if (document.activeElement !== input) input.value = value;
 }
 
-function numberField(kind, name, min, step) {
-  const wrap = document.createElement("span");
-  wrap.append(kind === "fail" ? " fail_rate " : " " + kind + "_ms ");
+function button(text, onclick) {
+  const b = document.createElement("button");
+  b.textContent = text;
+  b.onclick = onclick;
+  return b;
+}
+
+function numberCell(id, step) {
+  const td = document.createElement("td");
   const input = document.createElement("input");
   input.type = "number";
-  input.min = String(min);
+  input.min = "0";
   input.step = String(step);
-  input.id = kind + "-" + name;
-  wrap.appendChild(input);
-  return wrap;
-}
-
-function backendRow(name) {
-  const row = document.createElement("div");
-  row.className = "row";
-  const label = document.createElement("label");
-  label.textContent = name;
-  row.appendChild(label);
-  row.appendChild(numberField("sleep", name, 0, 1));
-  row.appendChild(numberField("jitter", name, 0, 1));
-  row.appendChild(numberField("fail", name, 0, 0.05));
-  const btn = document.createElement("button");
-  btn.textContent = "Apply";
-  btn.onclick = function () { applyBackend(name); };
-  row.appendChild(btn);
-  const kill = document.createElement("button");
-  kill.textContent = "Kill";
-  kill.onclick = function () { post("/api/backend/kill", { backend: name }); };
-  row.appendChild(kill);
-  const revive = document.createElement("button");
-  revive.textContent = "Revive";
-  revive.onclick = function () { post("/api/backend/revive", { backend: name }); };
-  row.appendChild(revive);
-  const cstate = document.createElement("span");
-  cstate.className = "container-state muted";
-  row.appendChild(cstate);
-  const status = document.createElement("span");
-  status.className = "status bad";
-  row.appendChild(status);
-  return row;
-}
-
-function cell(text, cls) {
-  const td = document.createElement("td");
-  td.textContent = text;
-  if (cls) td.className = cls;
+  input.id = id;
+  td.appendChild(input);
   return td;
 }
 
-// Peer-derived strings (names, targets, errors) are set with textContent, never
-// innerHTML, so a peer cannot inject markup into the page.
-function renderBackends(backends) {
-  const box = el("backends");
-  if (box.children.length !== backends.length) {
-    box.innerHTML = "";
-    for (const b of backends) box.appendChild(backendRow(b.name));
+function backendRow(name) {
+  const tr = document.createElement("tr");
+  const label = document.createElement("td");
+  label.textContent = name;
+  tr.appendChild(label);
+  tr.appendChild(numberCell("sleep-" + name, 1));
+  tr.appendChild(numberCell("jitter-" + name, 1));
+  tr.appendChild(numberCell("fail-" + name, 0.05));
+  const actions = document.createElement("td");
+  actions.appendChild(button("Apply", function () { applyBackend(name); }));
+  actions.appendChild(button("Clear", function () {
+    act("/api/backend", { backend: name, sleep_ms: 0, jitter_ms: 0, fail_rate: 0 });
+  }));
+  // Stop is the Engine's abrupt kill; Start starts the same container
+  // (ADR-0025 amendment decision 9, decision 17).
+  actions.appendChild(button("Stop", function () { act("/api/backend/kill", { backend: name }); }));
+  actions.appendChild(button("Start", function () { act("/api/backend/revive", { backend: name }); }));
+  tr.appendChild(actions);
+  const container = document.createElement("td");
+  container.className = "container";
+  tr.appendChild(container);
+  return tr;
+}
+
+// Peer-derived strings are set with textContent, never innerHTML, so a peer
+// cannot inject markup into the page.
+function renderHeader() {
+  // The LB the clients send to; with one LB in the demo, that is the only one.
+  const lb = state.lbs.find(function (l) { return l.name === state.active_lb; }) || state.lbs[0];
+  const reload = el("reload");
+  reload.textContent = "";
+  if (!lb) { el("algo").textContent = "—"; reload.textContent = "—"; return; }
+
+  el("algo").textContent = lb.algorithm
+    ? (ALGORITHMS[lb.algorithm] || lb.algorithm)
+    : ("unknown" + (lb.algorithm_error ? ": " + lb.algorithm_error : ""));
+  el("algo-lb").textContent = lb.algorithm ? "(" + lb.algorithm + " on " + lb.name + ")" : "";
+
+  if (lb.last_reload_error) { reload.className = "bad"; reload.textContent = "unreadable: " + lb.last_reload_error; return; }
+  const last = lb.last_reload;
+  if (!last || last.result === "none") { reload.className = "muted"; reload.textContent = "no reload yet"; return; }
+  reload.className = "";
+  const word = document.createElement("b");
+  word.className = last.result === "success" ? "ok" : "bad";
+  word.textContent = last.result.toUpperCase();
+  reload.appendChild(word);
+  reload.append(" at " + clock(last.time) + (last.error ? " — " + last.error : ""));
+}
+
+function renderBackends() {
+  const body = el("backends");
+  if (body.children.length !== state.backends.length) {
+    body.innerHTML = "";
+    for (const b of state.backends) body.appendChild(backendRow(b.name));
   }
-  backends.forEach(function (b, i) {
-    const row = box.children[i];
-    setInput(row.querySelector("#sleep-" + b.name), b.sleep_ms);
-    setInput(row.querySelector("#jitter-" + b.name), b.jitter_ms);
-    setInput(row.querySelector("#fail-" + b.name), b.fail_rate);
-    const cstate = row.querySelector(".container-state");
-    cstate.textContent = b.container_error
-      ? ("container: " + b.container_error)
-      : ("container: " + (b.container_state || "?"));
-    row.querySelector(".status").textContent = b.error || "";
+  state.backends.forEach(function (b, i) {
+    const tr = body.children[i];
+    setInput(tr.querySelector("#sleep-" + b.name), b.sleep_ms);
+    setInput(tr.querySelector("#jitter-" + b.name), b.jitter_ms);
+    setInput(tr.querySelector("#fail-" + b.name), b.fail_rate);
+    const c = tr.querySelector(".container");
+    const text = b.error || b.container_error || b.container_state || "?";
+    c.textContent = text;
+    c.className = "container " + (text === "running" ? "ok" : "bad");
   });
 }
 
-function renderGenerators(gens) {
-  let offered = 0, sent = 0, dropped = 0, errors = 0;
-  for (const g of gens) { offered += g.offered; sent += g.sent; dropped += g.dropped; errors += g.errors; }
-  el("gen-totals").textContent =
-    "offered " + offered + " · sent " + sent + " · dropped " + dropped + " · errors " + errors;
-  const tbody = el("gen-table").querySelector("tbody");
-  tbody.innerHTML = "";
-  for (const g of gens) {
-    const tr = document.createElement("tr");
-    tr.appendChild(cell(g.name));
-    tr.appendChild(g.error ? cell(g.error, "bad") : cell(g.target));
-    tr.appendChild(cell(g.offered));
-    tr.appendChild(cell(g.sent));
-    tr.appendChild(cell(g.dropped));
-    tbody.appendChild(tr);
+function renderLoad() {
+  if (state.total_rate !== null) {
+    el("rate-now").textContent = "now: " + state.total_rate + " req/s";
+    setInput(el("rate"), state.total_rate);
   }
-}
-
-function renderCharts(lb) {
-  for (const id of Object.keys(PANELS)) {
-    const panel = PANELS[id];
-    el(id).src = state.grafana_url + "/d/l7loadbalancer/?panelId=" + panel +
-      "&viewPanel=" + panel + "&var-window=15s&refresh=5s&var-lb=" + encodeURIComponent(lb) + "&kiosk";
+  let offered = 0, sent = 0, dropped = 0, errors = 0, down = [];
+  for (const g of state.generators) {
+    if (g.error) { down.push(g.name); continue; }
+    offered += g.offered; sent += g.sent; dropped += g.dropped; errors += g.errors;
   }
+  el("clients").textContent = "8 clients — offered " + offered + " · sent " + sent +
+    " · dropped " + dropped + " · errors " + errors + (down.length ? " · unreachable: " + down.join(", ") : "");
 }
 
 function render() {
-  el("active-lb").textContent = state.active_lb
-    ? ("active: " + state.active_lb)
-    : "active: mixed / unknown";
-  if (state.total_rate !== null) el("rate-now").textContent = "now: " + state.total_rate + " req/s";
-
-  const sel = el("lb-select");
-  if (sel.options.length === 0) {
-    for (const lb of state.lbs) {
-      const o = document.createElement("option");
-      o.value = lb.name;
-      o.textContent = lb.name;
-      sel.appendChild(o);
-    }
-  }
-  if (state.active_lb) sel.value = state.active_lb;
-
-  renderBackends(state.backends);
-  renderGenerators(state.generators);
-  // Charts follow the selected LB; when the generators are mixed the selection
-  // keeps the last active LB rather than blanking (ADR-0025 decision 5).
-  renderCharts(sel.value);
+  renderHeader();
+  renderLoad();
+  renderBackends();
+  // Load the dashboard once; reassigning src would reload it every refresh.
+  const frame = el("dashboard");
+  if (!frame.src) frame.src = state.grafana_url + DASHBOARD;
 }
 
 async function refresh() {

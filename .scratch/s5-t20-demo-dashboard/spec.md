@@ -43,3 +43,7 @@ The six tickets below, each per its issue file.
 | 05 | S5.T18 | `lb_p2c_ewma_seconds{backend}` gauge | S5.T20.4 |
 | 06 | S5.T20.5 | Benchmark summary page | S5.T18 |
 | 07 | S5.T20.6 | Cold-start guard, then full-matrix re-run | S5.T20.5 |
+
+## Addendum (owner, 2026-10-07): algorithm hot reload supersedes D1
+
+The owner rejected D1's framing: production load balancers apply an algorithm change on reload without touching client requests, and the demo must show that rather than moving traffic between processes. S5.T20.7 makes `algorithm` reloadable (ADR-0015 amendment). The dashboard (S5.T20.2, S5.T20.4) stays; the algorithm buttons are to be removed and the demo reshaped around one hot-reloaded LB in a follow-up ticket after the owner reviews S5.T20.7.

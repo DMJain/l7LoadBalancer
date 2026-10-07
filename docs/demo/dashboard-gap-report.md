@@ -1,5 +1,7 @@
 # Demo dashboard: gap report and frame-by-frame script
 
+> **Superseded in part (2026-10-07, S5.T20.7–T20.8):** the algorithm is now hot-reloadable and the demo runs one load balancer. §1's "Demo B as written cannot happen", decision 1 and the frame-by-frame script in §8–§9 are out of date. The current shot list, voiceover and checklist are in [`video-script.md`](video-script.md), and the operator scenarios are in [`demo/DEMO-SCRIPT.md`](../../demo/DEMO-SCRIPT.md). The panel and control analysis in §2–§5 still describes what was built.
+
 This report checks the demo dashboard specified in Addendum 3 against the repository as it stands (HEAD `632c7c2`). It lists what exists, what is missing, the tasks that would close each gap, and a frame-by-frame recording script with a dry-run checklist. Nothing here is implemented or approved. Every proposed task below needs the owner's approval before it goes into `PROGRESS.md` (`AGENTS.md`, Step 2.5).
 
 **Status (2026-10-07):** the owner resolved every decision in §6. The approved tickets are tracked in `PROGRESS.md` (*Sprint 5 — Demo dashboard (S5.T20)*) and scoped in `.scratch/s5-t20-demo-dashboard/spec.md`. The script in §8 and the checklist in §9 use the resolved wording.

@@ -7,25 +7,29 @@
 # is edited or affected; see ADR-0023 decision 3.
 #
 # Topology:
-#   * four LB instances, one per algorithm, all built from the repo-root image,
-#     each bind-mounting its own config from demo/configs/ and sharing the same
-#     four backends;
+#   * one LB, `lb`, built from the repo-root image, in front of four backends.
+#     Its algorithm changes by hot reload: edit demo/configs/lb.yaml and send
+#     `docker compose -f demo/docker-compose.yml kill -s HUP lb` (S5.T20.8,
+#     ADR-0023 decision 14, ADR-0015 decisions 18–21). The whole demo/configs
+#     directory is mounted, so an editor that saves by rename is still seen
+#     (ADR-0023 decision 15);
 #   * four dummy backends with the runtime admin listener enabled (only this
 #     stack sets ADMIN_ENABLED=true, ADR-0023 decision 7);
 #   * eight traffic clients expanded from one anchor with RANK=1..8, so each is
 #     a distinct container IP and therefore a distinct consistent-hash key
 #     (ADR-0023 decision 6);
-#   * a demo Prometheus scraping each LB as its own job every 1 s (ADR-0023
+#   * a demo Prometheus scraping the LB (job `lb`) every 1 s (ADR-0023
 #     decision 9);
 #   * a demo Grafana provisioning the same single dashboard JSON the root stack
 #     ships, with embedding and anonymous Viewer access enabled;
-#   * a control service serving the page from which the owner switches LB, sets
-#     the rate, sets backend profiles, and kills/revives backends, reaching
+#   * a control service serving the page from which the owner sets the rate,
+#     sets backend profiles, tries an invalid reload, and stops/starts backends,
+#     reaching
 #     generators and admin listeners over the internal network only, and the
 #     Docker Engine over the mounted socket (S5.T16.4.1–T16.4.2, ADR-0025).
 #
-# Ports: only Grafana, the control page and the four LB client ports are
-# published, every one on 127.0.0.1. Generator control ports, backend admin
+# Ports: only Grafana, the control page and the LB client port are published,
+# every one on 127.0.0.1. Generator control ports, backend admin
 # listeners, and LB metrics and health ports stay on the internal demo network
 # (ADR-0023 decision 2). The stack is never configured or documented for any
 # other bind address. Only the control service mounts the Docker socket, and only
@@ -50,24 +54,6 @@ x-backend: &backend
     ADMIN_ENABLED: "true"
     LOG_REQUESTS: "false"
 
-# Shared LB definition: four instances built from the repo-root image, each
-# differing in its config bind-mount, its published client port, and its
-# Prometheus job (demo/prometheus/prometheus.yml).
-x-lb: &lb
-  build:
-    context: ..
-    dockerfile: Dockerfile
-  depends_on:
-    - backend1
-    - backend2
-    - backend3
-    - backend4
-  healthcheck:
-    test: ["CMD", "/l7lb", "probe", "http://127.0.0.1:8081/livez"]
-    interval: 5s
-    timeout: 3s
-    retries: 3
-
 # Shared generator definition (build + dependencies). The environment is a
 # separate anchor so each of the eight services can add its own RANK while
 # keeping one source of truth for the rest.
@@ -75,10 +61,7 @@ x-generator: &generator
   build:
     context: ./traffic-generator
   depends_on:
-    - lb-roundrobin
-    - lb-leastconn
-    - lb-consistent-hash
-    - lb-p2c-ewma
+    - lb
 
 x-generator-env: &generator-env
   CLIENTS: "8"
@@ -87,9 +70,9 @@ x-generator-env: &generator-env
   # (ADR-0024 decision 1). Sized so the rank-8 client still sends steadily and
   # every LB keeps in-flight counts above zero.
   TOTAL_RATE: "400"
-  TARGET_LB: "http://lb-roundrobin:8080"
-  # The four LBs are the only targets the generator will accept (S5.T16.2).
-  TARGET_ALLOWLIST: "http://lb-roundrobin:8080,http://lb-leastconn:8080,http://lb-consistent-hash:8080,http://lb-p2c-ewma:8080"
+  TARGET_LB: "http://lb:8080"
+  # The one LB is the only target the generator will accept (S5.T16.2).
+  TARGET_ALLOWLIST: "http://lb:8080"
   MAX_INFLIGHT: "64"
   # Bound the generator heap as ADR-0021/0022 require (ADR-0024 decision 3).
   GOMEMLIMIT: "256MiB"
@@ -116,33 +99,29 @@ services:
     container_name: l7loadbalancer-demo-backend4
     command: ["-name", "backend4"]
 
-  lb-roundrobin:
-    <<: *lb
+  # The one load balancer (S5.T20.8). Its algorithm is hot-reloaded from
+  # demo/configs/lb.yaml; the directory is mounted so any editor's save is
+  # seen, and the entrypoint points at it (the image's default config path is
+  # /etc/l7lb/config.yaml).
+  lb:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    entrypoint: ["/l7lb", "-config", "/etc/l7lb-demo/lb.yaml"]
+    depends_on:
+      - backend1
+      - backend2
+      - backend3
+      - backend4
+    healthcheck:
+      test: ["CMD", "/l7lb", "probe", "http://127.0.0.1:8081/livez"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
     ports:
       - "127.0.0.1:8080:8080"
     volumes:
-      - ./configs/roundrobin.yaml:/etc/l7lb/config.yaml:ro
-
-  lb-leastconn:
-    <<: *lb
-    ports:
-      - "127.0.0.1:8082:8080"
-    volumes:
-      - ./configs/leastconn.yaml:/etc/l7lb/config.yaml:ro
-
-  lb-consistent-hash:
-    <<: *lb
-    ports:
-      - "127.0.0.1:8083:8080"
-    volumes:
-      - ./configs/consistent-hash.yaml:/etc/l7lb/config.yaml:ro
-
-  lb-p2c-ewma:
-    <<: *lb
-    ports:
-      - "127.0.0.1:8084:8080"
-    volumes:
-      - ./configs/p2c-ewma.yaml:/etc/l7lb/config.yaml:ro
+      - ./configs:/etc/l7lb-demo:ro
 
   gen1:
     <<: *generator
@@ -195,13 +174,7 @@ services:
   prometheus:
     image: prom/prometheus:v2.53.0
     depends_on:
-      lb-roundrobin:
-        condition: service_healthy
-      lb-leastconn:
-        condition: service_healthy
-      lb-consistent-hash:
-        condition: service_healthy
-      lb-p2c-ewma:
+      lb:
         condition: service_healthy
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
@@ -228,7 +201,10 @@ services:
     environment:
       GENERATORS: "http://gen1:9090,http://gen2:9090,http://gen3:9090,http://gen4:9090,http://gen5:9090,http://gen6:9090,http://gen7:9090,http://gen8:9090"
       BACKENDS: "http://backend1:9091,http://backend2:9091,http://backend3:9091,http://backend4:9091"
-      LBS: "http://lb-roundrobin:8080,http://lb-leastconn:8080,http://lb-consistent-hash:8080,http://lb-p2c-ewma:8080"
+      LBS: "http://lb:8080"
+      # The LB's metrics listener: its algorithm, last reload and the
+      # invalid-reload action (ADR-0025 amendment decisions 12 and 16).
+      LB_ADMINS: "http://lb:9090"
       GRAFANA_URL: "http://127.0.0.1:3000"
       DOCKER_HOST: "unix:///var/run/docker.sock"
       CONTAINER_PREFIX: "l7loadbalancer-demo-"
@@ -252,5 +228,11 @@ services:
       # Same single dashboard JSON and provisioning as the root stack — mounted,
       # never copied, so the two can never drift (ADR-0023 decision 9). The
       # datasource points at the `prometheus` service on this network.
-      - ../deployments/docker/observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../deployments/docker/observability/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
       - ../deployments/docker/observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      # Demo-only (S5.T20.4, ADR-0023 amendment decision 11): a provider file
+      # listing both dashboard directories, and the demo dashboard (uid
+      # l7lb-demo) the control page embeds. The shared files above are
+      # unchanged.
+      - ./grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./grafana/dashboards:/var/lib/grafana/demo-dashboards:ro

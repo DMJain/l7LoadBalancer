@@ -1,0 +1,28 @@
+# Demo-only Grafana dashboard providers (S5.T20.4, ADR-0023 amendment
+# decision 11). The shared dashboard (deployments/docker/observability/grafana/
+# dashboards) is mounted unchanged and still provisioned; the demo-only
+# dashboard (demo/grafana/dashboards, uid l7lb-demo) is added beside it. The
+# root stack keeps its own provider file and never sees the demo dashboard.
+
+apiVersion: 1
+
+providers:
+  - name: l7loadbalancer
+    orgId: 1
+    folder: ""
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 10
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards
+
+  - name: l7loadbalancer-demo
+    orgId: 1
+    folder: ""
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 10
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/demo-dashboards
