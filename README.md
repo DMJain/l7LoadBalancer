@@ -1,4 +1,4 @@
-# l7LoadBalancer
+# l7LoadBalancer-demo
 
 A **Layer 7** load balancer in Go: it reads each HTTP request (method, path, headers) and forwards it to one of several **backends**, the servers that do the real work, through a **reverse proxy** (a component that sends a client's request to a backend and returns the response) built on `net/http/httputil`. It offers four ways to pick a backend, and it adds health checks (periodic tests of whether a backend answers), per-backend circuit breakers (a switch that stops traffic to a backend that keeps failing) and a reload that applies a new backend list or a new algorithm in place, without dropping requests. The repository also holds a reproducible benchmark against Nginx (a widely used web server and proxy) and a local demo, and it states the limits of both below.
 
@@ -76,18 +76,18 @@ Demo video: <!-- VIDEO-LINK-SLOT: owner fills in after recording -->
 **Nginx comparison, HTTP/1.1, round-robin.** Both sides ran round-robin, so the comparison is **matched**. Over HTTP/1.1, Nginx is ahead at all three response sizes, and the HTTP/2 round-robin comparison at 200 B and 10 KiB is absent because the load-balancer scenarios there were skipped. Single run, ordinal claim only: the claim gives the order, not a ratio.
 
 | Response size | Nginx peak (req/s) | Load balancer peak (req/s) | Gap (req/s) | Search step (req/s) |
-|---|---|---|---|---|
-| 200 B | 11500 | 8000 | 3500 | 500 |
-| 10 KiB | 6000 | 4500 | 1500 | 500 |
-| 1 MiB | 350 | 275 | 75 | 25 |
+| ------------- | ------------------ | -------------------------- | ----------- | ------------------- |
+| 200 B         | 11500              | 8000                       | 3500        | 500                 |
+| 10 KiB        | 6000               | 4500                       | 1500        | 500                 |
+| 1 MiB         | 350                | 275                        | 75          | 25                  |
 
 Every gap is larger than its step.
 
-**Reload under load.** A **reload** applies a new configuration to the running process when it receives the `SIGHUP` signal. A reload that removes a backend **drains** it: the backend finishes its in-flight requests and takes no new ones. Under 60 s of steady HTTP/2 round-robin load  a reload with an unchanged configuration and a reload that removed a backend both passed, with no non-2xx responses (status codes outside 200–299) and no transport errors (failed connections to a backend). The removed backend received no further requests after the reload applied. This was one run each, round-robin only.
+**Reload under load.** A **reload** applies a new configuration to the running process when it receives the `SIGHUP` signal. A reload that removes a backend **drains** it: the backend finishes its in-flight requests and takes no new ones. Under 60 s of steady HTTP/2 round-robin load a reload with an unchanged configuration and a reload that removed a backend both passed, with no non-2xx responses (status codes outside 200–299) and no transport errors (failed connections to a backend). The removed backend received no further requests after the reload applied. This was one run each, round-robin only.
 
 **Stopping a backend mid-run.** One of four backends was stopped gracefully at second 29 of a 60 s run. The target was 1750 req/s over HTTP/2 with 10 KiB responses, and the generator delivered about 1210 req/s on average. Three requests failed, all within a 9 ms span that began about 0.7 s after the stop. The load balancer never retries ([ADR-0018](docs/adr/0018-no-retry-ever.md)), so those three reached the client.
 
-**Hot keys.** A **hot key** is a hash key that carries a disproportionate share of requests. **Consistent hashing** maps each key to a backend so that the same key reaches the same backend. **Bounded loads** limit how much a backend may take and send the excess to the next one. The benchmark's load generator has one address, so every request is a hot key. 
+**Hot keys.** A **hot key** is a hash key that carries a disproportionate share of requests. **Consistent hashing** maps each key to a backend so that the same key reaches the same backend. **Bounded loads** limit how much a backend may take and send the excess to the next one. The benchmark's load generator has one address, so every request is a hot key.
 
 - In every Nginx result of the main HTTP/2 runs, whose hashing has no bound, at least 97.97% of requests landed on one backend.
 - The load balancer spilled in the same size and load combinations. At 10 KiB peak load, 82.27% went to the backend the key maps to and 17.19% to a second backend.
