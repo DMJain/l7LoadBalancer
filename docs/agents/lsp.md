@@ -13,7 +13,7 @@ OpenCode ships 28 built-in language servers but LSP is **disabled by default**. 
 }
 ```
 
-`"lsp": true` enables every built-in server. The one that matters for this repo is `gopls` for `.go` files, which OpenCode resolves on demand through the `go` toolchain — this repo already requires Go 1.22+, so no extra install step. `gopls` does not need to be pre-installed or on `PATH`.
+`"lsp": true` enables every built-in server. The one that matters for this repo is `gopls` for `.go` files, which OpenCode resolves on demand through the `go` toolchain — this repo already requires Go 1.25.1, so no extra install step. `gopls` does not need to be pre-installed or on `PATH`.
 
 ## Verifying
 

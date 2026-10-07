@@ -1,3 +1,5 @@
+> Snapshot as of 2026-09-19, superseded.
+
 # Sprint 1 + Sprint 2 (T1–T2) — Codebase Walkthrough & Spec-Drift Audit
 
 **For**: Darshan (project owner) · **Audit date**: 2026-09-19 · **Auditor**: opencode (read-only; no files modified except this one)

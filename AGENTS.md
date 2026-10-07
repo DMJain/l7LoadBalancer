@@ -188,7 +188,7 @@ All commands via `make`. Run `make help` to list them. Common:
 
 ## Code conventions
 
-- **Language**: Go 1.22+.
+- **Language**: Go 1.25.1.
 - **Style**: `gofmt` + `goimports`. No exceptions.
 - **Packages**: lowercase, single word where possible. No `util`, no `common`.
 - **Errors**: wrap with `fmt.Errorf("context: %w", err)`. No sentinel `errors.New` at call sites for dynamic messages. The only branchable exported sentinel is `balancer.ErrNoHealthyBackends`; the one further exported value is `backend.ErrDrainWindowExpired`, a `context.Cause` comparison value, not a branchable condition (ADR-0016 decision 2).
