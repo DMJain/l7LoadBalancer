@@ -26,9 +26,10 @@ Not approved, not claimed, not implemented. Surfaced by the S4 reload grilling (
 - Pre-warming added backends (probing before the swap, so a blue/green reload has no empty-selectable window).
 - ~~**S5.T13–T15 (proposed 2026-09-30, not approved)**: the README architecture diagram, `docs/design-decisions.md`, and `docs/what-id-do-differently.md`. Surfaced by the S5.T5–T12 grilling (`.scratch/s5-t5-t12-bench-execution/spec.md`, *Out of Scope*). The results document (S5.T10) is written so these can link to it rather than duplicate it. These keep their numbers; the local live demo is S5.T16–T17 (below).~~ **Promoted by S5.D2 (2026-10-02): approved by the owner** as S5.T13 (README and diagrams), S5.T14 (`docs/design-decisions.md`), S5.T15 (`docs/what-id-do-differently.md`), with S5.T19 added; see *Sprint 5 — Portfolio Documentation*.
 - **Health probes count as backend arrivals (proposed 2026-09-30 by S5.T8.1, not approved)**: spec instrumentation story 19 asks that "health probes and counter reads [be] excluded from the counter, so that it counts only benchmark traffic". `/stats` excludes itself and `/health`, but the bench LB's active health checker probes each backend's *own URL* (ADR-0011 decision 11), and every bench config points that at `/` (`internal/health/checker.go`; `deployments/docker/dummy-backend/main.go` counts `/`). So each `/stats` delta carries a few probe arrivals per window — negligible at benchmark rates, but enough that the literal hot-key spill rule ("more than one backend received traffic") always reads yes. S5.T8.1 therefore reports spill above a 1% share floor (`bench/run.sh` `SPILL_MIN_SHARE_PCT`), which is a read-side workaround, not a fix; the underlying cause is unfixed. A fix would point the checker at a configured health path or have the counter count only the payload paths.
-- **Cold-start guard for the first peak-search step (proposed 2026-10-02 by S5.T6, not approved)**: the published run skipped `roundrobin/200b/lb` and `roundrobin/10kb/lb` — the first two LB scenarios of the core slice — on a p99 failure at the seed rate, while the same algorithm passed well above that rate later in the slice, so it reads as a cold container/runtime rather than a real ceiling. A `discover_peak` retry-once (or a warmup attack right after `up_h2`/`set_lb`) before accepting a zero peak would remove this class of gap. It changes the harness, so it needs its own ADR and tests, and it gates any decision to re-run the published matrix.
+- ~~**Cold-start guard for the first peak-search step (proposed 2026-10-02 by S5.T6, not approved)**: the published run skipped `roundrobin/200b/lb` and `roundrobin/10kb/lb` — the first two LB scenarios of the core slice — on a p99 failure at the seed rate, while the same algorithm passed well above that rate later in the slice, so it reads as a cold container/runtime rather than a real ceiling. A `discover_peak` retry-once (or a warmup attack right after `up_h2`/`set_lb`) before accepting a zero peak would remove this class of gap. It changes the harness, so it needs its own ADR and tests, and it gates any decision to re-run the published matrix.~~ **Promoted by S5.D3 (2026-10-07): approved by the owner** as S5.T20.6, followed by a full-matrix re-run; see *Sprint 5 — Demo dashboard (S5.T20)*.
 - **Narrative number check misses section-boundary tables (proposed 2026-10-02 by S5.T10.4, not approved)**: `allowed_cells` in `bench/generate-results.sh` (S5.T10.3) keeps `is_table` set across `<!-- END GENERATED -->` / `<!-- BEGIN GENERATED: <section> -->` boundaries, so the first header line of a section that follows a table is consumed as a data row and the following rule line recomputes the column units from the previous section's header. The degraded and hot-key `(ms)` cells are therefore never registered as valid narrative targets, and the check silently cannot validate figures quoted from them. S5.T10.4 worked around it by quoting only cells the check can see; the fix is to reset `is_table`/`hdr`/`unit` on each section boundary (and would need the fixture test to quote a degraded cell as the red gate).
-- **S5.T18 — `lb_p2c_ewma_seconds{backend}` gauge (proposed 2026-10-02 by the S5.T16–T17 grilling, not approved)**: expose each backend's P2C-EWMA latency estimate so the demo can show the selector's internal state, not only its effect (request share). Touches `internal/metrics`, the latency-recording path, and ADR-0013; decide after a first demo recording shows whether narration needs it (ADR-0023, alternatives).
+- ~~**S5.T18 — `lb_p2c_ewma_seconds{backend}` gauge (proposed 2026-10-02 by the S5.T16–T17 grilling, not approved)**: expose each backend's P2C-EWMA latency estimate so the demo can show the selector's internal state, not only its effect (request share). Touches `internal/metrics`, the latency-recording path, and ADR-0013; decide after a first demo recording shows whether narration needs it (ADR-0023, alternatives).~~ **Promoted by S5.D3 (2026-10-07): approved by the owner** as S5.T18 in *Sprint 5 — Demo dashboard (S5.T20)*.
+- **S5.T20.3 — Client-side metrics in the demo traffic generators (proposed 2026-10-07 by the demo-dashboard gap report, deferred by the owner)**: a `/metrics` endpoint on each generator with requests by outcome (2xx+3xx, 4xx, 5xx, transport error), the cap-drop counter and a client-measured latency histogram, so dashboard zone A (C1–C3) shows what the clients see rather than the load balancer's view. Deferred 2026-10-07: the LB-side C1–C3 approximations are accepted for the demo (`.scratch/s5-t20-demo-dashboard/spec.md`, D8). Touches `demo/traffic-generator`, `demo/prometheus` and ADR-0024.
 - **Degraded-slice injection leaked to every backend (proposed 2026-10-02 by the S5.T16–T17 grilling, not approved)**: hypothesis, unverified — `bench/run.sh` *exports* `SLEEP_MS=50` and force-recreates only backend3, but all four backends read `${SLEEP_MS:-0}` from the shared `x-backend` anchor in `bench/docker-compose.yml`, so any later `compose up` (`up_h2`/`set_lb`) while the export is still 50 sees config drift on all four and recreates them slow. That matches `RESULTS.md`'s degraded p50s sitting near the injected delay on every backend. Diagnose before any re-run of the published matrix; not part of S5.T16 (the demo injects latency at runtime through the admin listener instead).
 - **Relabel the "Time to detection" column (proposed 2026-10-02 by the S5.T13–T19 grilling, not approved)**: the failure scenario's `time_to_detection_s` is computed as the last failed-request offset minus the first, i.e. the width of the error window (9 ms in the published run), not the delay between the failure and its detection (about 0.7 s in the same run: stop at 29 s, first error at 29.734 s). The label misleads a reader. A fix touches the benchmark script and the results generator and regenerates `RESULTS.md`, so it needs its own ticket and a regeneration check. Until then the README says, where it links `RESULTS.md`, that the column measures the error-window width.
 
@@ -516,4 +517,44 @@ Scoped in `.scratch/s5-t13-t19-portfolio-docs/` as one bundle spec plus ten tick
 - [TODO] S5.T19.2 — Tag `v0.1.0` (ready-for-human at the confirmation step)
   - Spec: `.scratch/s5-t13-t19-portfolio-docs/issues/10-t19-2-tag-v0-1-0.md`
   - Depends: S5.T19.1.2, S5.T17.2
+  - Acceptance: as in the issue file.
+
+## Sprint 5 — Demo dashboard (S5.T20)
+
+Scoped in `.scratch/s5-t20-demo-dashboard/` as one bundle spec plus seven tickets, from the owner's 2026-10-07 decisions on `docs/demo/dashboard-gap-report.md`. The bundle's `spec.md` is the authoritative scope boundary. Demo B is a traffic switch between the four LB processes, never an algorithm reload (ADR-0015 decision 4 stands). S5.T20.3 (client-side generator metrics) is deferred and listed under *Proposed tickets*. Order, strictly serial: S5.D3 → S5.T20.1 → S5.T20.2 → S5.T20.4 → S5.T18 → S5.T20.5 → S5.T20.6. After each ticket, the dry-run checklist rows that depend on it are run against a live `demo/` stack, and a failed row stops the bundle. The owner reviews S5.T20.1 before S5.T20.2 starts.
+
+- [DONE] S5.D3 — Tracking amendment (Claude Code, completed 2026-10-07)
+  - Spec: `.scratch/s5-t20-demo-dashboard/issues/01-d3-tracking-amendment.md`
+  - Depends: none
+  - Acceptance: as in the issue file.
+  - Completed: this section and the bundle spec with seven issue files; S5.T18 and the cold-start-guard proposal promoted; S5.T20.3 recorded as deferred; MILESTONES.md Sprint 5 gains the S5.T20 deliverable; `docs/demo/dashboard-gap-report.md` records the resolved decisions and `docs/demo/video-script.md` is committed. Docs-only, no code (TDD-exempt per AGENTS.md).
+
+- [TODO] S5.T20.1 — LB reload admin endpoint and last-reload status
+  - Spec: `.scratch/s5-t20-demo-dashboard/issues/02-t20-1-reload-admin-endpoint.md`
+  - Depends: S5.D3
+  - Acceptance: as in the issue file.
+
+- [TODO] S5.T20.2 — Control page: state header, invalid-reload button, controls, `/metrics`
+  - Spec: `.scratch/s5-t20-demo-dashboard/issues/03-t20-2-control-page-extensions.md`
+  - Depends: S5.T20.1 (and the owner's review of it)
+  - Acceptance: as in the issue file.
+
+- [TODO] S5.T20.4 — Demo-only dashboard: zone A and B panels
+  - Spec: `.scratch/s5-t20-demo-dashboard/issues/04-t20-4-demo-dashboard-panels.md`
+  - Depends: S5.T20.2
+  - Acceptance: as in the issue file.
+
+- [TODO] S5.T18 — `lb_p2c_ewma_seconds{backend}` gauge
+  - Spec: `.scratch/s5-t20-demo-dashboard/issues/05-t18-p2c-ewma-gauge.md`
+  - Depends: S5.T20.4
+  - Acceptance: as in the issue file.
+
+- [TODO] S5.T20.5 — Benchmark summary page
+  - Spec: `.scratch/s5-t20-demo-dashboard/issues/06-t20-5-benchmark-summary-page.md`
+  - Depends: S5.T18
+  - Acceptance: as in the issue file.
+
+- [TODO] S5.T20.6 — Cold-start guard, then full-matrix re-run
+  - Spec: `.scratch/s5-t20-demo-dashboard/issues/07-t20-6-cold-start-guard-and-rerun.md`
+  - Depends: S5.T20.5
   - Acceptance: as in the issue file.

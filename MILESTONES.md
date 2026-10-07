@@ -101,6 +101,7 @@ Strategic plan. Each sprint = one weekend of focused work. Tasks under each spri
 - Reader-facing documents (S5.T13–T15) follow the writing rules in the bundle spec.
 - S5.T16 — local live-demo stack under `demo/` (ADR-0023; supersedes the original live public deployment): one LB per algorithm sharing four backends, an eight-client Zipf-ranked Poisson traffic generator with a runtime rate control, a dummy-backend admin listener for runtime latency/jitter/failure, and a control service plus a single page that embeds the existing Grafana dashboard. All ports bound to `127.0.0.1`. Gated by a two-phase latency-isolation acceptance check.
 - S5.T17 — demo script: scenario sequence, click path, and expected on-screen state for each step, used to record the demo video.
+- S5.T20 — demo dashboard for the recorded video: a reload admin endpoint on the LB's internal metrics listener (body-applied reload, shared with SIGHUP, last result readable), a control-page state header with an invalid-reload control, a demo-only Grafana dashboard with client-side and per-backend zones, a P2C-EWMA gauge (S5.T18), and a benchmark summary page filled from a full-matrix re-run after a cold-start guard. Algorithm switching stays a traffic switch between LB processes (ADR-0015 decision 4).
 
 **Exit criteria**:
 - `make bench-repro` (built on `bench/run.sh`) reproduces all published numbers from a clean checkout, refusing to start on a dirty tree, running containers, or fewer than eight Docker vCPUs.
