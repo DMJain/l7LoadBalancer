@@ -529,7 +529,7 @@ Scoped in `.scratch/s5-t20-demo-dashboard/` as one bundle spec plus seven ticket
   - Acceptance: as in the issue file.
   - Completed: this section and the bundle spec with seven issue files; S5.T18 and the cold-start-guard proposal promoted; S5.T20.3 recorded as deferred; MILESTONES.md Sprint 5 gains the S5.T20 deliverable; `docs/demo/dashboard-gap-report.md` records the resolved decisions and `docs/demo/video-script.md` is committed. Docs-only, no code (TDD-exempt per AGENTS.md).
 
-- [TODO] S5.T20.1 — LB reload admin endpoint and last-reload status
+- [IN_PROGRESS] S5.T20.1 — LB reload admin endpoint and last-reload status (Claude Code, started 2026-10-07T13:27:32Z): `POST /admin/reload` and `GET /admin/reload/last` on the metrics listener, sharing one serialized reload path with SIGHUP
   - Spec: `.scratch/s5-t20-demo-dashboard/issues/02-t20-1-reload-admin-endpoint.md`
   - Depends: S5.D3
   - Acceptance: as in the issue file.
