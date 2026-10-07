@@ -238,3 +238,35 @@ algorithm changes by reload. Decisions 14 and 15 assumed the previous shape.
     algorithm control at all. `POST /api/lb` stays as a generic endpoint, but
     the page no longer calls it. Stop/Start, Clear and the fixed
     invalid-reload action (decision 13) stay.
+
+## Amendment (2026-10-08, S5.T20.9) — container CPU and memory
+
+The owner asked to see how hard the load balancer and each backend are
+working. The dashboard needs per-container CPU and memory.
+
+18. **The control service reads Docker's read-only stats for an allowlist and
+    serves them on `GET /metrics`.** The allowlist is the four backends'
+    containers (decision 8) plus each LB's container, `CONTAINER_PREFIX +
+    <LB name>` (the demo pins `container_name: l7loadbalancer-demo-lb`).
+    Names are derived from configuration and never taken from a request. Each
+    scrape calls `GET /containers/{name}/stats?stream=false&one-shot=true`
+    for every allowlisted container concurrently, and exposes:
+    - `demo_container_cpu_seconds_total{container}`, the cumulative CPU time,
+      so Prometheus's `rate()` gives cores in use;
+    - `demo_container_memory_bytes{container}`, the memory usage minus
+      inactive file cache, which is the figure `docker stats` shows;
+    - `demo_container_stats_up{container}`, 1 or 0, so a failed read is
+      visible instead of a silent gap.
+
+    The service stays stateless (decision 1): nothing is cached between
+    scrapes.
+
+### Alternatives considered (amendment, 2026-10-08)
+
+- **cAdvisor.** Tried and dropped. On Docker Desktop it needs a privileged
+  container with the VM's root filesystem, `/sys` and `/var/lib/docker`
+  mounted. That is broader access than the socket this service already holds,
+  for five containers' figures.
+- **Go process metrics in the LB** (`process_cpu_seconds_total`). This covers
+  the LB only, since the dummy backends export no metrics, and it changes
+  `internal/metrics` for a demo-only need.

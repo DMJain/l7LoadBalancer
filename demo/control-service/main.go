@@ -36,6 +36,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -123,6 +124,16 @@ type config struct {
 	// dockerHost is the Docker Engine endpoint: a unix socket in the demo, an
 	// http URL in tests (S5.T16.4.2).
 	dockerHost string
+	// containerPrefix maps a backend or LB name to its container name
+	// (ADR-0025 decisions 8 and 18).
+	containerPrefix string
+}
+
+// statsTarget is one container whose CPU and memory /metrics reports: the
+// metric label and the derived container name (ADR-0025 decision 18).
+type statsTarget struct {
+	label     string
+	container string
 }
 
 // server serves the page and the JSON API. It is immutable after construction.
@@ -131,6 +142,9 @@ type server struct {
 	logger *slog.Logger
 	client *http.Client
 	engine *engineClient
+	// stats is the fixed allowlist of containers /metrics reads, built once
+	// from the configuration (ADR-0025 decision 18).
+	stats []statsTarget
 }
 
 // fanOutResponse is the LB/rate actions' response: whether every peer accepted
@@ -239,6 +253,55 @@ func (e *engineClient) state(ctx context.Context, container string) (string, err
 		return "", fmt.Errorf("decode engine response: %w", err)
 	}
 	return body.State.Status, nil
+}
+
+// containerStats is the part of the Engine's stats answer /metrics uses.
+// memory_stats.stats carries inactive_file on cgroup v2 and
+// total_inactive_file on cgroup v1.
+type containerStats struct {
+	CPU struct {
+		Usage struct {
+			Total uint64 `json:"total_usage"`
+		} `json:"cpu_usage"`
+	} `json:"cpu_stats"`
+	Memory struct {
+		Usage uint64            `json:"usage"`
+		Stats map[string]uint64 `json:"stats"`
+	} `json:"memory_stats"`
+}
+
+// stats returns a container's cumulative CPU time in seconds and its memory in
+// use: usage minus inactive file cache, the figure `docker stats` shows. It is
+// a one-shot read, so it does not wait for a second sample (ADR-0025
+// decision 18).
+func (e *engineClient) stats(ctx context.Context, container string) (cpuSeconds float64, memBytes uint64, err error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		e.baseURL+"/containers/"+url.PathEscape(container)+"/stats?stream=false&one-shot=true", nil)
+	if err != nil {
+		return 0, 0, fmt.Errorf("build request: %w", err)
+	}
+	resp, err := e.client.Do(req)
+	if err != nil {
+		return 0, 0, fmt.Errorf("call engine: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return 0, 0, fmt.Errorf("engine returned %s", resp.Status)
+	}
+	var st containerStats
+	if err := json.NewDecoder(resp.Body).Decode(&st); err != nil {
+		return 0, 0, fmt.Errorf("decode engine response: %w", err)
+	}
+	inactive := st.Memory.Stats["inactive_file"]
+	if v, ok := st.Memory.Stats["total_inactive_file"]; ok {
+		inactive = v
+	}
+	mem := st.Memory.Usage
+	if inactive < mem {
+		mem -= inactive
+	}
+	return float64(st.CPU.Usage.Total) / 1e9, mem, nil
 }
 
 // post issues a bodyless Engine POST. A 2xx is success; 304 (already started) is
@@ -415,11 +478,23 @@ func newServer(cfg config, logger *slog.Logger) (*server, error) {
 	if err != nil {
 		return nil, err
 	}
+	prefix := cfg.containerPrefix
+	if prefix == "" {
+		prefix = defaultContainerPrefix
+	}
+	stats := make([]statsTarget, 0, len(cfg.lbs)+len(cfg.backends))
+	for _, lb := range cfg.lbs {
+		stats = append(stats, statsTarget{label: lb.name, container: prefix + lb.name})
+	}
+	for _, b := range cfg.backends {
+		stats = append(stats, statsTarget{label: b.name, container: b.container})
+	}
 	return &server{
 		cfg:    cfg,
 		logger: logger,
 		client: &http.Client{Timeout: requestTimeout},
 		engine: engine,
+		stats:  stats,
 	}, nil
 }
 
@@ -434,6 +509,7 @@ func (s *server) handler() http.Handler {
 	mux.HandleFunc("POST /api/backend/kill", s.handleKill)
 	mux.HandleFunc("POST /api/backend/revive", s.handleRevive)
 	mux.HandleFunc("POST /api/reload-invalid", s.handleReloadInvalid)
+	mux.HandleFunc("GET /metrics", s.handleMetrics)
 	return mux
 }
 
@@ -713,6 +789,56 @@ func (s *server) handleReloadInvalid(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, out)
 }
 
+// handleMetrics serves the allowlisted containers' CPU and memory in the
+// Prometheus text format, read from the Engine on each scrape and in parallel
+// (ADR-0025 decision 18). A failed read sets that container's
+// demo_container_stats_up to 0 and omits its values rather than reporting 0.
+func (s *server) handleMetrics(w http.ResponseWriter, r *http.Request) {
+	type reading struct {
+		cpu float64
+		mem uint64
+		ok  bool
+	}
+	readings := make([]reading, len(s.stats))
+	var wg sync.WaitGroup
+	for i, target := range s.stats {
+		wg.Add(1)
+		go func(i int, target statsTarget) {
+			defer wg.Done()
+			cpu, mem, err := s.engine.stats(r.Context(), target.container)
+			readings[i] = reading{cpu: cpu, mem: mem, ok: err == nil}
+		}(i, target)
+	}
+	wg.Wait()
+
+	var b strings.Builder
+	b.WriteString("# HELP demo_container_cpu_seconds_total Cumulative CPU time of the container, in seconds.\n")
+	b.WriteString("# TYPE demo_container_cpu_seconds_total counter\n")
+	for i, target := range s.stats {
+		if readings[i].ok {
+			fmt.Fprintf(&b, "demo_container_cpu_seconds_total{container=%q} %s\n", target.label, strconv.FormatFloat(readings[i].cpu, 'f', -1, 64))
+		}
+	}
+	b.WriteString("# HELP demo_container_memory_bytes Memory in use by the container (usage minus inactive file cache), in bytes.\n")
+	b.WriteString("# TYPE demo_container_memory_bytes gauge\n")
+	for i, target := range s.stats {
+		if readings[i].ok {
+			fmt.Fprintf(&b, "demo_container_memory_bytes{container=%q} %d\n", target.label, readings[i].mem)
+		}
+	}
+	b.WriteString("# HELP demo_container_stats_up Whether the container's stats were read (1) or not (0).\n")
+	b.WriteString("# TYPE demo_container_stats_up gauge\n")
+	for i, target := range s.stats {
+		up := 0
+		if readings[i].ok {
+			up = 1
+		}
+		fmt.Fprintf(&b, "demo_container_stats_up{container=%q} %d\n", target.label, up)
+	}
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+	_, _ = io.WriteString(w, b.String())
+}
+
 // call performs one request against an exact URL (no trailing-slash rewrite,
 // unlike doJSON) and decodes a JSON answer into out. Any status with a JSON
 // body is decoded, because the LB reports a rejected reload as a 422 with a
@@ -958,12 +1084,13 @@ func configFromEnv() (config, error) {
 		}
 	}
 	return config{
-		generators: generators,
-		backends:   backends,
-		lbs:        lbs,
-		lbAdmins:   lbAdmins,
-		grafanaURL: envString("GRAFANA_URL", defaultGrafanaURL),
-		dockerHost: envString("DOCKER_HOST", defaultDockerHost),
+		generators:      generators,
+		backends:        backends,
+		lbs:             lbs,
+		lbAdmins:        lbAdmins,
+		containerPrefix: prefix,
+		grafanaURL:      envString("GRAFANA_URL", defaultGrafanaURL),
+		dockerHost:      envString("DOCKER_HOST", defaultDockerHost),
 	}, nil
 }
 

@@ -160,6 +160,8 @@ type engineStub struct {
 	calls []string
 	fail  bool
 	state string
+	// queries records the raw query of each stats call (S5.T20.9).
+	queries []string
 }
 
 func newEngineStub(t *testing.T) *engineStub {
@@ -169,6 +171,9 @@ func newEngineStub(t *testing.T) *engineStub {
 		e.mu.Lock()
 		defer e.mu.Unlock()
 		e.calls = append(e.calls, r.Method+" "+r.URL.Path)
+		if strings.HasSuffix(r.URL.Path, "/stats") {
+			e.queries = append(e.queries, r.URL.RawQuery)
+		}
 		if e.fail {
 			http.Error(w, `{"message":"engine error"}`, http.StatusInternalServerError)
 			return
@@ -179,6 +184,16 @@ func newEngineStub(t *testing.T) *engineStub {
 		case strings.HasSuffix(r.URL.Path, "/json"):
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(map[string]any{"State": map[string]any{"Status": e.state}})
+		case strings.HasSuffix(r.URL.Path, "/stats"):
+			// 2.5 s of CPU; 100 MiB used of which 4 MiB is inactive file cache.
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"cpu_stats": map[string]any{"cpu_usage": map[string]any{"total_usage": 2500000000}},
+				"memory_stats": map[string]any{
+					"usage": 104857600,
+					"stats": map[string]any{"inactive_file": 4194304},
+				},
+			})
 		default:
 			http.Error(w, "not found", http.StatusNotFound)
 		}
@@ -191,6 +206,12 @@ func (e *engineStub) snapshot() []string {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return append([]string(nil), e.calls...)
+}
+
+func (e *engineStub) statsQueries() []string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return append([]string(nil), e.queries...)
 }
 
 func (e *engineStub) setFail(fail bool) {
@@ -230,6 +251,7 @@ func newRig(t *testing.T) *rig {
 		name := "backend" + strconv.Itoa(i)
 		cfg.backends = append(cfg.backends, peer{name: name, url: b.srv.URL, container: "l7loadbalancer-demo-" + name})
 	}
+	cfg.containerPrefix = "l7loadbalancer-demo-"
 	cfg.lbs = []peer{
 		{name: "lb-roundrobin", url: "http://lb-roundrobin:8080"},
 		{name: "lb-leastconn", url: "http://lb-leastconn:8080"},

@@ -199,11 +199,58 @@ func TestParseAlgorithm(t *testing.T) {
 	assert.Error(t, err)
 }
 
-// TestNoActiveLBMetric proves the withdrawn demo_active_lb endpoint is gone
-// (ADR-0025 decision 17).
+// TestNoActiveLBMetric proves the withdrawn demo_active_lb series stays gone
+// (ADR-0025 decision 17) now that /metrics serves container stats.
 func TestNoActiveLBMetric(t *testing.T) {
 	r := newRig(t)
-	assert.NotEqual(t, http.StatusOK, r.do(t, http.MethodGet, "/metrics", "").Code)
+	assert.NotContains(t, r.do(t, http.MethodGet, "/metrics", "").Body.String(), "demo_active_lb")
+}
+
+// TestMetricsReportsContainerCPUAndMemory proves /metrics serves each
+// allowlisted container's CPU time and memory from Docker's one-shot stats:
+// the four backends and every LB, nothing else (ADR-0025 decision 18).
+func TestMetricsReportsContainerCPUAndMemory(t *testing.T) {
+	r := newRig(t)
+
+	rec := r.do(t, http.MethodGet, "/metrics", "")
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Header().Get("Content-Type"), "text/plain")
+	body := rec.Body.String()
+
+	for _, c := range []string{"backend1", "backend4", "lb-roundrobin", "lb-p2c-ewma"} {
+		assert.Contains(t, body, `demo_container_cpu_seconds_total{container="`+c+`"} 2.5`)
+		assert.Contains(t, body, `demo_container_memory_bytes{container="`+c+`"} 100663296`)
+		assert.Contains(t, body, `demo_container_stats_up{container="`+c+`"} 1`)
+	}
+	assert.Contains(t, body, "# TYPE demo_container_cpu_seconds_total counter")
+	assert.Contains(t, body, "# TYPE demo_container_memory_bytes gauge")
+
+	calls := r.engine.snapshot()
+	assert.Contains(t, calls, "GET /containers/l7loadbalancer-demo-lb-roundrobin/stats")
+	assert.Contains(t, calls, "GET /containers/l7loadbalancer-demo-backend2/stats")
+	stats := 0
+	for _, c := range calls {
+		if strings.HasSuffix(c, "/stats") {
+			stats++
+		}
+	}
+	assert.Equal(t, 8, stats, "exactly the 4 backends and 4 LBs, nothing else")
+	for _, q := range r.engine.statsQueries() {
+		assert.Contains(t, q, "stream=false")
+		assert.Contains(t, q, "one-shot=true")
+	}
+}
+
+// TestMetricsReportsFailedStatsRead proves a failed Engine read is shown as
+// up 0 with no value series, never as a zero value.
+func TestMetricsReportsFailedStatsRead(t *testing.T) {
+	r := newRig(t)
+	r.engine.setFail(true)
+
+	body := r.do(t, http.MethodGet, "/metrics", "").Body.String()
+	assert.Contains(t, body, `demo_container_stats_up{container="backend1"} 0`)
+	assert.NotContains(t, body, `demo_container_cpu_seconds_total{container="backend1"}`)
+	assert.NotContains(t, body, `demo_container_memory_bytes{container="backend1"}`)
 }
 
 // TestNewServerRejectsLBAdminCountMismatch proves LB_ADMINS must pair with LBS.

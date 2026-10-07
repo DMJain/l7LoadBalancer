@@ -559,6 +559,12 @@ Scoped in `.scratch/s5-t20-demo-dashboard/` as one bundle spec plus seven ticket
   - Acceptance: as in the issue file.
   - Completed: the demo runs one LB (`lb`, `demo/configs/lb.yaml`, config directory bind-mounted); the four per-algorithm LBs and configs are removed (16 containers). Control service reads each LB's algorithm from `lb_algorithm_info`; `demo_active_lb` and the page's algorithm buttons are withdrawn; the page shows the two hot-reload steps. Demo dashboard on `job="lb"` with markers from `lb_algorithm_info`. `demo/acceptance.sh` phase 2 is a hot reload through `/admin/reload` asserting success, the new algorithm, no container restart, zero client errors and backend3 < 15 %. `demo/README.md`, `demo/DEMO-SCRIPT.md` and `docs/demo/video-script.md` rewritten; gap report §8–§9 marked superseded. ADR-0023 (decisions 14–16) and ADR-0025 (decisions 16–17) amended. Verified on a fresh stack: acceptance passed (backend3 0.00 %, 0 client errors); an editor-style save (new inode) plus SIGHUP reloaded to `least_conn` and back; the on-camera flow (backend3 200 ms, edit to `p2c_ewma`, SIGHUP) showed SUCCESS, the marker, backend3 0 % and 0 client errors.
 
+- [DONE] S5.T20.9 — CPU and memory of the LB and backends on the demo dashboard (Claude Code, started 2026-10-07T18:32:21Z, completed 2026-10-08T00:10:00Z)
+  - Spec: `.scratch/s5-t20-demo-dashboard/issues/10-t20-9-container-cpu-memory.md`
+  - Depends: S5.T20.8
+  - Acceptance: as in the issue file.
+  - Completed: the control service reads Docker's one-shot stats for an allowlist (each LB as `CONTAINER_PREFIX + name`, the four backends) and serves `demo_container_cpu_seconds_total`, `demo_container_memory_bytes` and `demo_container_stats_up` on `/metrics`; the LB container is pinned to `l7loadbalancer-demo-lb`; the demo Prometheus scrapes it every 2 s; the demo dashboard gains "CPU by container (100 % = one core)" and "Memory by container". ADR-0025 amendment (decision 18). A privileged cAdvisor probe was tried and dropped (blocked as too broad); its container was removed. Tests Red-first; gates clean. Live: all five containers `stats_up 1`; at 400 req/s the LB used about 21 % of a core and 15 MiB, each backend about 2.5 % and 10 MiB.
+
 - [TODO] S5.T18 — `lb_p2c_ewma_seconds{backend}` gauge
   - Spec: `.scratch/s5-t20-demo-dashboard/issues/05-t18-p2c-ewma-gauge.md`
   - Depends: S5.T20.4

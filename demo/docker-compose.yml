@@ -104,6 +104,9 @@ services:
   # seen, and the entrypoint points at it (the image's default config path is
   # /etc/l7lb/config.yaml).
   lb:
+    # Pinned so the control service's stats allowlist names a stated string
+    # (CONTAINER_PREFIX + "lb", ADR-0025 decision 18).
+    container_name: l7loadbalancer-demo-lb
     build:
       context: ..
       dockerfile: Dockerfile
