@@ -38,18 +38,19 @@ const reloadSignalBuffer = 1
 
 // reloadLoop consumes SIGHUP signals and reloads the running application from
 // configPath, one reload at a time. It is main's whole reload policy (S4.T3):
-// for each delivered signal it strictly parses the file, validates it, and asks
-// the application to reload; a parse or validation failure is logged as
-// config_reload_failed and the loop keeps serving the previous config. Before
-// reloading it drains any further signals already queued, so several SIGHUPs in
-// quick succession collapse into one reload. It returns when ctx is cancelled
-// (SIGINT/SIGTERM), so a reload never blocks shutdown.
+// for each delivered signal it asks the application to reload from the file.
+// Before reloading it drains any further signals already queued, so several
+// SIGHUPs in quick succession collapse into one reload. It returns when ctx is
+// cancelled (SIGINT/SIGTERM), so a reload never blocks shutdown.
+//
+// Parsing, validation, the apply, every rejection's log line and the recorded
+// outcome live in application.ReloadFrom, the operation the reload admin
+// endpoint shares (S5.T20.1, ADR-0015 decision 14); a rejected reload keeps
+// the previous config serving, so the loop only has to keep going.
 //
 // It is a standalone function rather than an inline goroutine so tests can
-// drive it with a fake signal channel, a temp config file, and a captured
-// logger. application.Reload logs its own rejection reasons (non-backend
-// change, apply error), so the loop only has to keep going.
-func reloadLoop(ctx context.Context, configPath string, sigCh <-chan os.Signal, application *app.App, log *slog.Logger) {
+// drive it with a fake signal channel and a temp config file.
+func reloadLoop(ctx context.Context, configPath string, sigCh <-chan os.Signal, application *app.App) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -58,26 +59,9 @@ func reloadLoop(ctx context.Context, configPath string, sigCh <-chan os.Signal, 
 		}
 		drainSignals(sigCh)
 
-		cfg, err := config.Load(configPath)
-		if err != nil {
-			log.Warn("config reload failed",
-				"event", logger.EventConfigReloadFailed,
-				"reason", logger.ReasonParseError,
-				"err", err,
-			)
-			continue
-		}
-		if err := cfg.Validate(); err != nil {
-			log.Warn("config reload failed",
-				"event", logger.EventConfigReloadFailed,
-				"reason", logger.ReasonValidationError,
-				"err", err,
-			)
-			continue
-		}
-		// Reload logs its own rejection reason (non-backend change, apply
-		// error); the loop only has to keep serving the previous config.
-		_ = application.Reload(ctx, cfg)
+		_, _ = application.ReloadFrom(ctx, func() (*config.Config, error) {
+			return config.Load(configPath)
+		})
 	}
 }
 
@@ -206,7 +190,7 @@ func main() {
 	reloadCh := make(chan os.Signal, reloadSignalBuffer)
 	signal.Notify(reloadCh, syscall.SIGHUP)
 	defer signal.Stop(reloadCh)
-	go reloadLoop(sigCtx, *configPath, reloadCh, application, log)
+	go reloadLoop(sigCtx, *configPath, reloadCh, application)
 
 	// Run logs its own server/shutdown failures, so main only owns the exit
 	// code: a serve failure is fatal, and a clean shutdown returns nil.

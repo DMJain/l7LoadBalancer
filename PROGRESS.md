@@ -529,10 +529,11 @@ Scoped in `.scratch/s5-t20-demo-dashboard/` as one bundle spec plus seven ticket
   - Acceptance: as in the issue file.
   - Completed: this section and the bundle spec with seven issue files; S5.T18 and the cold-start-guard proposal promoted; S5.T20.3 recorded as deferred; MILESTONES.md Sprint 5 gains the S5.T20 deliverable; `docs/demo/dashboard-gap-report.md` records the resolved decisions and `docs/demo/video-script.md` is committed. Docs-only, no code (TDD-exempt per AGENTS.md).
 
-- [IN_PROGRESS] S5.T20.1 — LB reload admin endpoint and last-reload status (Claude Code, started 2026-10-07T13:27:32Z): `POST /admin/reload` and `GET /admin/reload/last` on the metrics listener, sharing one serialized reload path with SIGHUP
+- [DONE] S5.T20.1 — LB reload admin endpoint and last-reload status (Claude Code, started 2026-10-07T13:27:32Z, completed 2026-10-07T13:36:00Z)
   - Spec: `.scratch/s5-t20-demo-dashboard/issues/02-t20-1-reload-admin-endpoint.md`
   - Depends: S5.D3
   - Acceptance: as in the issue file.
+  - Completed: `config.Parse` (shared strict decode with `Load`); `App.ReloadFrom`, the one mutex-serialized load → validate → apply → record operation that the SIGHUP loop and the endpoint both call; `POST /admin/reload` (YAML body, 1 MiB cap, 200/422/405/413, 503 before `Run`) and `GET /admin/reload/last` on the metrics listener; reloads through the endpoint run on the app's run context. ADR-0015 amendment (decisions 13–17) and ADR-0013 amendment. Tests Red-first; `make test`, `make test-race`, `go vet`, `make fmt` clean. Live check on the demo stack: an unknown-algorithm body to `lb-roundrobin` returned 422 naming `"p3c_ewma"`, `last` showed `rejected`, generators saw zero errors and drops. Details in `docs/sessions/2026-10-07-claude.md`.
 
 - [TODO] S5.T20.2 — Control page: state header, invalid-reload button, controls, `/metrics`
   - Spec: `.scratch/s5-t20-demo-dashboard/issues/03-t20-2-control-page-extensions.md`

@@ -23,6 +23,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/pprof"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -57,6 +58,14 @@ const readHeaderTimeout = 5 * time.Second
 // loaded config rather than the startup config and successive reloads compose.
 // It is an atomic pointer so a reader never sees a half-replaced config
 // (ADR-0015 decision 12).
+//
+// reloadMu serializes every reload, whichever trigger started it (SIGHUP or
+// the admin endpoint), so the registry apply keeps a single writer (ADR-0015
+// decisions 6 and 14). lastReload is the outcome of the most recent attempt,
+// one atomic pointer so a reader never sees half a record (decision 16).
+// runCtx is the context Run was given; the admin endpoint reloads on it, not on
+// the request's context, because a reload starts probers and drains that must
+// outlive the request (decision 17). It is nil until Run starts.
 type App struct {
 	log        *slog.Logger
 	collector  *metrics.Collector
@@ -67,6 +76,9 @@ type App struct {
 	metricsSrv *http.Server
 	healthSrv  *http.Server
 	loadedCfg  atomic.Pointer[config.Config]
+	reloadMu   sync.Mutex
+	lastReload atomic.Pointer[ReloadStatus]
+	runCtx     atomic.Pointer[context.Context]
 }
 
 // Build assembles the whole wiring graph from an already-validated config and
@@ -130,16 +142,16 @@ func Build(cfg *config.Config, log *slog.Logger) (*App, error) {
 		checker:   checker,
 		outlier:   outlier,
 		srv:       srv,
-		metricsSrv: &http.Server{
-			Addr:              *cfg.Metrics.Listen,
-			Handler:           buildMetricsHandler(collector),
-			ReadHeaderTimeout: readHeaderTimeout,
-		},
 		healthSrv: &http.Server{
 			Addr:              *cfg.HealthEndpoint.Listen,
 			Handler:           health.NewHandler(checker, reg, true, collector),
 			ReadHeaderTimeout: readHeaderTimeout,
 		},
+	}
+	a.metricsSrv = &http.Server{
+		Addr:              *cfg.Metrics.Listen,
+		Handler:           buildMetricsHandler(collector, a.adminHandler()),
+		ReadHeaderTimeout: readHeaderTimeout,
 	}
 	a.loadedCfg.Store(cfg)
 	return a, nil
@@ -163,8 +175,10 @@ func (a *App) LoadedConfig() *config.Config { return a.loadedCfg.Load() }
 
 // Reload replaces the running backend set with the one in cfg, an already
 // parsed and validated config, while traffic flows. It is the application's
-// reload operation (S4.T3); main's SIGHUP loop is its only production caller,
-// and it is called by one goroutine at a time (ADR-0015 decision 6).
+// reload operation (S4.T3). Production reaches it through ReloadFrom, from
+// main's SIGHUP loop or the admin endpoint; it takes the same reload mutex, so
+// it is safe to call concurrently with either (ADR-0015 decisions 6 and 14).
+// Its outcome is recorded as the last reload (decision 16).
 //
 // Only the backend list is reloadable: a change to any non-backend field
 // rejects the reload whole, logged as config_reload_failed/non_backend_change
@@ -203,6 +217,15 @@ func (a *App) LoadedConfig() *config.Config { return a.loadedCfg.Load() }
 // when unchanged is zero (the blue/green empty-selectable window) and INFO
 // otherwise (ADR-0015 decision 11).
 func (a *App) Reload(ctx context.Context, cfg *config.Config) error {
+	a.reloadMu.Lock()
+	defer a.reloadMu.Unlock()
+	err := a.reloadLocked(ctx, cfg)
+	a.recordReload(err)
+	return err
+}
+
+// reloadLocked is Reload's body; the caller holds reloadMu.
+func (a *App) reloadLocked(ctx context.Context, cfg *config.Config) error {
 	oldCfg := a.loadedCfg.Load()
 
 	if changed := config.NonBackendChanges(oldCfg, cfg); len(changed) > 0 {
@@ -283,6 +306,7 @@ func (a *App) Reload(ctx context.Context, cfg *config.Config) error {
 // buffered errCh; Run is the only reader and owns all shutdowns, so no two
 // goroutines share mutable state.
 func (a *App) Run(ctx context.Context) error {
+	a.runCtx.Store(&ctx)
 	cfg := a.loadedCfg.Load()
 	a.checker.Start(ctx)
 	a.log.Info("health checker started",
@@ -405,8 +429,13 @@ func buildClientServer(cfg *config.Config, handler http.Handler) (*http.Server, 
 // (S4.T9). pprof shares the already-on, unauthenticated operational listener
 // rather than adding a second port, so it adds no attack surface the project
 // has not already accepted; security hardening is out of scope (ADR-0005).
-func buildMetricsHandler(c *metrics.Collector) http.Handler {
+//
+// admin serves the reload admin routes under /admin/ (S5.T20.1). They are the
+// listener's first state-changing routes; the listener is never published by
+// any compose file (ADR-0013 amendment of 2026-10-07).
+func buildMetricsHandler(c *metrics.Collector, admin http.Handler) http.Handler {
 	mux := http.NewServeMux()
+	mux.Handle("/admin/", admin)
 	mux.Handle("/metrics", promhttp.HandlerFor(c.Registry(), promhttp.HandlerOpts{}))
 	mux.HandleFunc("/debug/pprof/", pprof.Index)
 	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)

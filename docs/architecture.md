@@ -554,6 +554,14 @@ collapses to one reload), then `config.Load` → `Validate` → `App.Reload`; a
 parse or validation failure is logged and the previous config keeps serving.
 `App.Reload` is called by one goroutine at a time (ADR-0015 decision 6).
 
+Since S5.T20.1 there is a second trigger for the demo and tests:
+`POST /admin/reload` on the unpublished metrics listener applies a YAML body,
+and `GET /admin/reload/last` reports the last attempt's outcome. Both triggers
+call one operation, `App.ReloadFrom` (load → `Validate` → apply → record, with
+the same log lines), under one mutex, so the single-writer rule now holds by
+lock rather than by having one caller. After a body-applied reload the file is
+not authoritative until the next SIGHUP (ADR-0015 decisions 13–17).
+
 - **The diff is pure and identity is `(name, URL)`.** `config.DiffBackends`
   reports added/unchanged in the new file's order and removed in the old
   file's; a name whose URL changed is one removed plus one added, never an

@@ -158,13 +158,13 @@ func serveBackend(t *testing.T, id string) *httptest.Server {
 
 // startReloadLoop runs reloadLoop on a cancelable context and returns the
 // context's cancel function; the loop exits when it is called.
-func startReloadLoop(t *testing.T, configPath string, sigCh <-chan os.Signal, application *app.App, log *slog.Logger) func() {
+func startReloadLoop(t *testing.T, configPath string, sigCh <-chan os.Signal, application *app.App) func() {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		reloadLoop(ctx, configPath, sigCh, application, log)
+		reloadLoop(ctx, configPath, sigCh, application)
 	}()
 	t.Cleanup(func() {
 		cancel()
@@ -205,7 +205,7 @@ func TestReloadLoopSuccess(t *testing.T) {
 	writeConfigFile(t, path, cfg2)
 
 	sigCh := make(chan os.Signal, 1)
-	startReloadLoop(t, path, sigCh, application, log)
+	startReloadLoop(t, path, sigCh, application)
 
 	sigCh <- syscall.SIGHUP
 
@@ -243,7 +243,7 @@ func TestReloadLoopParseFailureKeepsServing(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte("listen: [not: valid"), 0o644))
 
 	sigCh := make(chan os.Signal, 1)
-	startReloadLoop(t, path, sigCh, application, log)
+	startReloadLoop(t, path, sigCh, application)
 	sigCh <- syscall.SIGHUP
 
 	require.Eventually(t, func() bool {
@@ -280,7 +280,7 @@ func TestReloadLoopValidationFailureKeepsServing(t *testing.T) {
 	writeConfigFile(t, path, dup)
 
 	sigCh := make(chan os.Signal, 1)
-	startReloadLoop(t, path, sigCh, application, log)
+	startReloadLoop(t, path, sigCh, application)
 	sigCh <- syscall.SIGHUP
 
 	require.Eventually(t, func() bool {
@@ -320,7 +320,7 @@ func TestReloadLoopNonBackendChangeNamingField(t *testing.T) {
 	writeConfigFile(t, path, cfg2)
 
 	sigCh := make(chan os.Signal, 1)
-	startReloadLoop(t, path, sigCh, application, log)
+	startReloadLoop(t, path, sigCh, application)
 	sigCh <- syscall.SIGHUP
 
 	require.Eventually(t, func() bool {
@@ -365,7 +365,7 @@ func TestReloadLoopSignalBurstCollapses(t *testing.T) {
 		sigCh <- syscall.SIGHUP
 	}
 
-	startReloadLoop(t, path, sigCh, application, log)
+	startReloadLoop(t, path, sigCh, application)
 
 	require.Eventually(t, func() bool {
 		return capture.countEvent(logger.EventConfigReloaded) >= 1

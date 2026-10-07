@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/url"
 	"os"
@@ -324,14 +325,38 @@ func Load(path string) (*Config, error) {
 	}
 	defer f.Close()
 
-	var cfg Config
-	dec := yaml.NewDecoder(f)
-	dec.KnownFields(true)
-	if err := dec.Decode(&cfg); err != nil {
+	cfg, err := decode(f)
+	if err != nil {
 		return nil, fmt.Errorf("config: load %s: %w", path, err)
 	}
+	return cfg, nil
+}
+
+// Parse is Load for a config that is not a file: it reads YAML from r with the
+// same strict decoding and ${VAR} expansion, and returns the config
+// unvalidated. source names the input in errors ("config: parse <source>: …"),
+// since there is no path to name. The reload admin endpoint calls it with a
+// request body (S5.T20.1, ADR-0015 decision 13).
+func Parse(r io.Reader, source string) (*Config, error) {
+	cfg, err := decode(r)
+	if err != nil {
+		return nil, fmt.Errorf("config: parse %s: %w", source, err)
+	}
+	return cfg, nil
+}
+
+// decode is the one strict decode Load and Parse share: unknown fields are
+// rejected and backend URLs are expanded, so a file and a request body can
+// never be held to different rules.
+func decode(r io.Reader) (*Config, error) {
+	var cfg Config
+	dec := yaml.NewDecoder(r)
+	dec.KnownFields(true)
+	if err := dec.Decode(&cfg); err != nil {
+		return nil, err
+	}
 	if err := expandBackendURLs(&cfg); err != nil {
-		return nil, fmt.Errorf("config: load %s: %w", path, err)
+		return nil, err
 	}
 	return &cfg, nil
 }
