@@ -324,3 +324,20 @@ performed and has a logger. `CircuitAllow` reports `CircuitHalfOpened` when
 exactly one concurrent caller reports it — tying the report to the promotion
 rather than to winning the trial slot keeps the exactly-once guarantee under a
 race). `CircuitOpen` continues to return `bool`, not a transition.
+
+## Amendment (2026-10-07, S5.T20.1) — the metrics listener carries the reload admin routes
+
+The metrics listener (decision 8), which S4.T9 already extended with
+`net/http/pprof`, gains two routes: `POST /admin/reload` and
+`GET /admin/reload/last` (ADR-0015 decisions 13–17). No metric is added: the
+last reload's outcome is served as JSON because its error text cannot be a
+label value, and the reload-outcome counter stays the deferred proposal.
+
+This is the first route on the listener that changes state, so the exposure
+statement is now stronger than pprof's. Anyone who can reach the listener can
+replace the backend list. That is accepted because the listener stays
+operational and unpublished: the repo-root, bench and demo compose files never
+publish it (`docker-compose.yml`, `bench/docker-compose.yml`,
+`demo/docker-compose.yml`), and the bare binary's default `:9090` should be
+bound to loopback by an operator who does not want it reachable. It is not a
+production control plane, and ADR-0005 keeps authentication out of scope.

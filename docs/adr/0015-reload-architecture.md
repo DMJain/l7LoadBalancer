@@ -217,3 +217,66 @@ classification, and pre-warming follow-ups (spec Out of Scope).
 - **A `map[*Backend]state` in the reload path to carry state across**: rejected
   in decision 6 — state already lives on the instance, so keeping the instance
   for an unchanged identity is the whole mechanism.
+
+## Amendment (2026-10-07, S5.T20.1) — a second trigger: the reload admin endpoint
+
+The recorded demo needs a reload attempt that can be triggered from a page and
+whose result can be read back (`.scratch/s5-t20-demo-dashboard/spec.md`, D2).
+SIGHUP can do neither: a signal carries no payload, and its only output is a log
+line. This amendment adds a second trigger. It does not change what a reload
+is: decisions 1–12 hold, and decision 4 in particular still rejects any
+non-backend change, the algorithm included.
+
+13. **`POST /admin/reload` on the metrics listener applies a YAML config sent
+    in the request body.** The body is parsed with the same strict decoder and
+    `${VAR}` expansion as the file (`config.Parse`, which `config.Load` now
+    calls), validated, and handed to the same reload operation. The response is
+    `200` on success and `422` with the error text on any rejection (parse,
+    validation, non-backend change, apply), so a caller can show *why*. The body
+    is capped at 1 MiB (`413` above it).
+
+14. **Every reload, from either trigger, goes through one application-level
+    operation that parses, validates, applies and records the outcome, under one
+    mutex.** Decision 6's "one goroutine at a time" was true by construction
+    while SIGHUP was the only trigger; with two triggers it is enforced by the
+    mutex. The parse- and validation-failure log lines move from `main` into
+    that operation unchanged (`config_reload_failed` with `parse_error` /
+    `validation_error`), so both triggers log alike. `App.Reload` keeps its
+    contract (an already-validated config) and takes the same mutex.
+
+15. **After a body-applied reload, the file on disk is not authoritative until
+    the next SIGHUP.** The loaded-config record (decision 12) becomes the body's
+    config, and the next reload diffs against it whatever its trigger. A SIGHUP
+    therefore re-applies the file and is the documented way back to it. Keeping
+    the file in step is the caller's job. The endpoint never writes the file.
+
+16. **The last attempt's outcome is kept in memory and served by
+    `GET /admin/reload/last`** as `{"result":"none"}` before any attempt, else
+    `{"result":"success"|"rejected","time":<RFC 3339>,"error":<text>}`. It is
+    recorded for both triggers, it is one atomic pointer (readers never see a
+    half-written record), and it is lost on restart.
+
+17. **A reload through the endpoint runs on the application's run context, not
+    the request's.** Reload starts long-lived work — a prober per added backend,
+    a drain per removed one — that must outlive the HTTP request. Before `Run`
+    has started, the endpoint answers `503`.
+
+**Not a production control plane.** The endpoint has no authentication, no
+authorization, no persistence, and no audit beyond the existing reload log
+line. It exists for the demo and for tests. It inherits the metrics listener's
+exposure (ADR-0013 amendment of 2026-10-07): no compose file in this
+repository publishes that listener, and an operator who runs the bare binary
+should bind `metrics.listen` to loopback. ADR-0005 keeps security hardening out
+of scope.
+
+### Alternatives considered (amendment)
+
+- **The endpoint re-reads the config file (no body).** Rejected (owner,
+  2026-10-07): a demo "invalid config" attempt would then need a second,
+  writable config file and a way to write it from the control page.
+- **The endpoint writes the body to the config file, then reloads.** Rejected:
+  the demo mounts configs read-only, and a write path turns a reload endpoint
+  into a file-management endpoint.
+- **A separate admin listener.** Rejected: one more port and config field for
+  the same unpublished, unauthenticated exposure the metrics listener already
+  has (ADR-0013 decision 8; S4.T9's pprof reasoning).
