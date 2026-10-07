@@ -39,6 +39,9 @@
 //	added        - number of backends the reload added (config_reloaded)
 //	removed      - number of backends the reload removed (config_reloaded)
 //	unchanged    - number of backends the reload left untouched (config_reloaded)
+//	algorithm    - the algorithm a reload switched to (config_reloaded, only
+//	               when it changed; S5.T20.7)
+//	previous_algorithm - the algorithm that reload replaced (same condition)
 //	fields       - names of the changed non-backend fields (config_reload_failed
 //	               with reason non_backend_change)
 //

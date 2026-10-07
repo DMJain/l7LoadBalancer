@@ -567,9 +567,18 @@ not authoritative until the next SIGHUP (ADR-0015 decisions 13–17).
   file's; a name whose URL changed is one removed plus one added, never an
   "updated" backend, so state learned about the old host is never applied to
   the new one. `config.NonBackendChanges` names every changed non-backend
-  field — `listen`, `algorithm`, `health`, `circuit`, `metrics`,
-  `health_endpoint`, `reload`, `server`, `transport` — and any one of them
-  rejects the reload whole, logged with the fields named (ADR-0015 decision 4).
+  field — `listen`, `health`, `circuit`, `metrics`, `health_endpoint`,
+  `reload`, `server`, `transport` — and any one of them rejects the reload
+  whole, logged with the fields named (ADR-0015 decision 4).
+- **The algorithm is reloadable (S5.T20.7).** A reload that changes
+  `algorithm` builds the new selector first, applies the backend diff, then
+  swaps the selector into the proxy with one atomic store. The proxy loads the
+  selector once per request, so a request in flight keeps its backend and the
+  next request uses the new algorithm. The new selector starts warm, because
+  EWMA latency and active counts live on the backends.
+  `lb_algorithm_info{algorithm}` and the `config_reloaded` line
+  (`previous_algorithm`, `algorithm`) report the switch (ADR-0015 decisions
+  18–21).
 - **The registry swaps an immutable versioned snapshot behind one atomic
   pointer.** `Registry.Apply` is the single writer: it reuses the existing
   instance for each unchanged identity (keeping health, circuit, active

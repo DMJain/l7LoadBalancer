@@ -142,7 +142,7 @@ func TestAdminReloadRejectionsLeaveConfigUnchanged(t *testing.T) {
 	unknownAlgo = bytes.Replace(unknownAlgo, []byte("round_robin"), []byte("p3c_ewma"), 1)
 
 	nonBackend := withBackends(cfg, cfg.Backends)
-	nonBackend.Algorithm = config.AlgorithmP2CEWMA
+	nonBackend.Listen = "127.0.0.1:1"
 
 	tests := []struct {
 		name       string
@@ -159,7 +159,7 @@ func TestAdminReloadRejectionsLeaveConfigUnchanged(t *testing.T) {
 			{Name: "backend-a", URL: "ftp://127.0.0.1:9"},
 		})), `backend "backend-a" url must use http or https scheme`, logger.ReasonValidationError},
 		{"unparseable yaml", []byte("listen: [\n"), "config: parse admin request body", logger.ReasonParseError},
-		{"non-backend change", yamlBody(t, nonBackend), "non-backend fields changed: [algorithm]", logger.ReasonNonBackendChange},
+		{"non-backend change", yamlBody(t, nonBackend), "non-backend fields changed: [listen]", logger.ReasonNonBackendChange},
 	}
 
 	for _, tc := range tests {

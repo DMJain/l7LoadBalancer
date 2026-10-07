@@ -136,10 +136,12 @@ func TestNonBackendChanges(t *testing.T) {
 			want: []string{"listen"},
 		},
 		{
+			// The algorithm is reloadable since S5.T20.7 (ADR-0015 decision
+			// 18): a change to it alone is not a non-backend change.
 			name: "algorithm differs",
 			old:  oneBackendConfigYAML(base),
 			new:  oneBackendConfigYAML(base + "algorithm: \"least_conn\"\n"),
-			want: []string{"algorithm"},
+			want: nil,
 		},
 		{
 			name: "health probe_interval differs",
@@ -256,7 +258,7 @@ func TestNonBackendChanges(t *testing.T) {
 			new: oneBackendConfigYAML("listen: \":8081\"\n" +
 				"algorithm: \"least_conn\"\n" +
 				"metrics:\n  listen: \":19191\"\n"),
-			want: []string{"listen", "algorithm", "metrics"},
+			want: []string{"listen", "metrics"},
 		},
 	}
 

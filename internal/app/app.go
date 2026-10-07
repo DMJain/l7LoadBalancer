@@ -75,6 +75,7 @@ type App struct {
 	srv        *http.Server
 	metricsSrv *http.Server
 	healthSrv  *http.Server
+	proxy      *proxy.Proxy
 	loadedCfg  atomic.Pointer[config.Config]
 	reloadMu   sync.Mutex
 	lastReload atomic.Pointer[ReloadStatus]
@@ -113,6 +114,7 @@ func Build(cfg *config.Config, log *slog.Logger) (*App, error) {
 	p := proxy.New(reg, sel)
 	p.SetTransport(buildTransport(cfg))
 	p.SetMetrics(collector)
+	collector.SetAlgorithm("", cfg.Algorithm)
 	p.RegisterObserver(proxy.NewLatencyObserver())
 	outlier := health.NewOutlierDetector(log, collector)
 	p.RegisterObserver(outlier)
@@ -142,6 +144,7 @@ func Build(cfg *config.Config, log *slog.Logger) (*App, error) {
 		checker:   checker,
 		outlier:   outlier,
 		srv:       srv,
+		proxy:     p,
 		healthSrv: &http.Server{
 			Addr:              *cfg.HealthEndpoint.Listen,
 			Handler:           health.NewHandler(checker, reg, true, collector),
@@ -180,10 +183,15 @@ func (a *App) LoadedConfig() *config.Config { return a.loadedCfg.Load() }
 // it is safe to call concurrently with either (ADR-0015 decisions 6 and 14).
 // Its outcome is recorded as the last reload (decision 16).
 //
-// Only the backend list is reloadable: a change to any non-backend field
-// rejects the reload whole, logged as config_reload_failed/non_backend_change
-// with the changed fields named, and the previously loaded config keeps serving
-// (ADR-0015 decision 4). Otherwise the diff is taken against the currently
+// The backend list and the algorithm are reloadable. A change to any other
+// non-backend field rejects the reload whole, logged as
+// config_reload_failed/non_backend_change with the changed fields named, and
+// the previously loaded config keeps serving (ADR-0015 decision 4). A changed
+// algorithm is built before anything is applied, so a build failure rejects
+// the reload with nothing changed; after the backend diff is applied the new
+// selector is swapped into the proxy in one atomic store, so requests in
+// flight keep their backend and the next request uses the new algorithm
+// (ADR-0015 decisions 18–21, S5.T20.7). Otherwise the diff is taken against the currently
 // loaded config (not the startup config), applied to the registry, and the
 // loaded-config record is replaced; unchanged backends keep their instance and
 // all their state (ADR-0015 decisions 2, 6, 12).
@@ -237,6 +245,22 @@ func (a *App) reloadLocked(ctx context.Context, cfg *config.Config) error {
 		return fmt.Errorf("app: reload rejected: non-backend fields changed: %v", changed)
 	}
 
+	// Build the new selector first: a failure here must leave everything
+	// unchanged (ADR-0015 decision 18).
+	var nextSel balancer.Selector
+	if cfg.Algorithm != oldCfg.Algorithm {
+		sel, err := balancer.NewFromConfig(cfg, a.reg)
+		if err != nil {
+			a.log.Error("config reload failed",
+				"event", logger.EventConfigReloadFailed,
+				"reason", logger.ReasonApplyError,
+				"err", err,
+			)
+			return fmt.Errorf("app: reload selector build failed for algorithm %q: %w", cfg.Algorithm, err)
+		}
+		nextSel = sel
+	}
+
 	diff := config.DiffBackends(oldCfg, cfg)
 	added, removed, err := a.reg.Apply(diff, cfg.Backends)
 	if err != nil {
@@ -246,6 +270,13 @@ func (a *App) reloadLocked(ctx context.Context, cfg *config.Config) error {
 			"err", err,
 		)
 		return fmt.Errorf("app: reload apply failed: %w", err)
+	}
+
+	// The new algorithm takes over from the next request; the gauge moves with
+	// it (ADR-0015 decisions 18 and 21).
+	if nextSel != nil {
+		a.proxy.SetSelector(nextSel)
+		a.collector.SetAlgorithm(oldCfg.Algorithm, cfg.Algorithm)
 	}
 
 	// The record is replaced after the apply succeeds, so it never names a
@@ -284,12 +315,16 @@ func (a *App) reloadLocked(ctx context.Context, cfg *config.Config) error {
 	if len(diff.Unchanged) == 0 {
 		level = slog.LevelWarn
 	}
-	a.log.Log(ctx, level, "config reloaded",
+	attrs := []any{
 		"event", logger.EventConfigReloaded,
 		"added", len(added),
 		"removed", len(removed),
 		"unchanged", len(diff.Unchanged),
-	)
+	}
+	if nextSel != nil {
+		attrs = append(attrs, "previous_algorithm", oldCfg.Algorithm, "algorithm", cfg.Algorithm)
+	}
+	a.log.Log(ctx, level, "config reloaded", attrs...)
 	return nil
 }
 

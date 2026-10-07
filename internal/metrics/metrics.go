@@ -72,6 +72,7 @@ type Collector struct {
 	circuit  *prometheus.GaugeVec
 	active   *prometheus.GaugeVec
 	probes   *prometheus.CounterVec
+	algo     *prometheus.GaugeVec
 }
 
 // NewCollector returns a Collector over its own private registry. Nothing is
@@ -110,8 +111,12 @@ func NewCollector() *Collector {
 			Name: "lb_health_probe_total",
 			Help: "Total health-endpoint probe responses, by probe endpoint and response status class.",
 		}, []string{"endpoint", "status"}),
+		algo: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "lb_algorithm_info",
+			Help: "The selection algorithm currently in use (1).",
+		}, []string{"algorithm"}),
 	}
-	reg.MustRegister(c.requests, c.duration, c.healthy, c.circuit, c.active, c.probes)
+	reg.MustRegister(c.requests, c.duration, c.healthy, c.circuit, c.active, c.probes, c.algo)
 	return c
 }
 
@@ -227,4 +232,16 @@ func (c *Collector) RecordProbe(endpoint string, statusCode int) {
 // import internal/proxy (ADR-0013 decision 1).
 func statusClass(status int) string {
 	return strconv.Itoa(status/100) + "xx"
+}
+
+// SetAlgorithm moves lb_algorithm_info from previous to current: the current
+// algorithm's series is set to 1 first and the previous one deleted after, so
+// a scrape never sees no current algorithm. Build seeds it with previous "";
+// a reload that changes the algorithm moves it (S5.T20.7, ADR-0013 amendment).
+// The caller passes previous, so the collector keeps no state of its own.
+func (c *Collector) SetAlgorithm(previous, current string) {
+	c.algo.WithLabelValues(current).Set(1)
+	if previous != "" && previous != current {
+		c.algo.DeleteLabelValues(previous)
+	}
 }

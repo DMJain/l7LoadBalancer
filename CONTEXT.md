@@ -20,10 +20,12 @@ the same name can coexist: one draining, one fresh.
 _Avoid_: same backend (when only the name matches)
 
 **Reload**:
-Replacing the running backend set with the one in a re-read config file,
-triggered by SIGHUP, without restarting the process or dropping in-flight
-requests. Only the backend list may differ; a reload whose file changes any
-other field is rejected whole and the previous config keeps serving. A reload
+Replacing the running backend set, and the selection algorithm, with the ones
+in a re-read config file (SIGHUP) or a posted one (`POST /admin/reload`),
+without restarting the process or dropping in-flight requests. Only the
+backend list and the algorithm may differ (the algorithm since S5.T20.7); a
+reload that changes any other field is rejected whole and the previous config
+keeps serving. A reload
 that fails to parse or validate is likewise rejected. Reloads never overlap,
 and each one is diffed against the currently loaded config.
 _Avoid_: restart, hot-restart (process-replacement techniques this is not)

@@ -341,3 +341,14 @@ publish it (`docker-compose.yml`, `bench/docker-compose.yml`,
 `demo/docker-compose.yml`), and the bare binary's default `:9090` should be
 bound to loopback by an operator who does not want it reachable. It is not a
 production control plane, and ADR-0005 keeps authentication out of scope.
+
+## Amendment (2026-10-07, S5.T20.7) — `lb_algorithm_info`
+
+A new info-style gauge, `lb_algorithm_info{algorithm}`, is 1 for the selection
+algorithm currently in use. `Build` seeds it, and a reload that changes the
+algorithm moves it (ADR-0015 decisions 18–21). The setter takes the previous
+and the new name: it sets the new series to 1 first, then deletes the old one,
+so a scrape never sees zero current algorithms, and the leaf `Collector` stays
+stateless (decision 1). Cardinality is bounded by the four implemented
+algorithms. Dashboards use it to show the current algorithm and to mark the
+moment it changes.

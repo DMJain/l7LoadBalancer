@@ -302,3 +302,26 @@ func TestCollectorExpositionEndpoint(t *testing.T) {
 	}
 	assert.NotContains(t, text, "status_code", "status_code is deliberately never a label")
 }
+
+// TestCollectorSetAlgorithm covers lb_algorithm_info (S5.T20.7, ADR-0013
+// amendment): the current algorithm reads 1, a move sets the new series and
+// deletes the old one, and seeding passes an empty previous name.
+func TestCollectorSetAlgorithm(t *testing.T) {
+	c := NewCollector()
+
+	c.SetAlgorithm("", "round_robin")
+	m := findMetric(t, c, "lb_algorithm_info", map[string]string{"algorithm": "round_robin"})
+	require.NotNil(t, m)
+	assert.Equal(t, 1.0, m.GetGauge().GetValue())
+
+	c.SetAlgorithm("round_robin", "p2c_ewma")
+	m = findMetric(t, c, "lb_algorithm_info", map[string]string{"algorithm": "p2c_ewma"})
+	require.NotNil(t, m)
+	assert.Equal(t, 1.0, m.GetGauge().GetValue())
+	assert.Nil(t, findMetric(t, c, "lb_algorithm_info", map[string]string{"algorithm": "round_robin"}),
+		"the previous algorithm's series must be deleted")
+
+	c.SetAlgorithm("p2c_ewma", "p2c_ewma")
+	m = findMetric(t, c, "lb_algorithm_info", map[string]string{"algorithm": "p2c_ewma"})
+	require.NotNil(t, m, "an unchanged algorithm must stay reported")
+}

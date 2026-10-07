@@ -280,3 +280,59 @@ of scope.
 - **A separate admin listener.** Rejected: one more port and config field for
   the same unpublished, unauthenticated exposure the metrics listener already
   has (ADR-0013 decision 8; S4.T9's pprof reasoning).
+
+## Amendment (2026-10-07, S5.T20.7) — the algorithm is reloadable
+
+Decision 4 rejected every non-backend change, the algorithm included, so the
+Sprint 4 reload could be limited to the backend list. That was a scoping
+choice, not a property of production load balancers. Nginx applies a new
+balancing method on reload by starting new workers while the old ones finish
+their connections. HAProxy hands the listening socket to a new process. Envoy
+swaps cluster settings inside the running process. None of them refuses the
+change or drops the requests in flight. The owner decided (2026-10-07) that
+this project must behave the same way. This amendment **supersedes decision 4
+for `algorithm` only**: every other non-backend field is still rejected whole,
+for decision 4's original reason (their consumers hold derived state that a
+partial apply would leave inconsistent).
+
+18. **A reload may change `algorithm`; the selector is swapped in process.**
+    The proxy reads its selector through one atomic pointer. A reload whose
+    algorithm differs builds the new selector *before* anything is applied, so
+    a build failure rejects the whole reload with nothing changed. It then
+    applies the backend diff, swaps the selector with one atomic store, and
+    records the loaded config. An unknown algorithm is still rejected by
+    validation.
+
+19. **No request is affected by the swap.** A request asks the selector for a
+    backend exactly once, at the start of `ServeHTTP`. A request already
+    dispatched keeps its backend and finishes normally. A request arriving
+    during the swap loads either the complete old selector or the complete new
+    one, never a mix. The listener is never closed, so no connection is reset.
+
+20. **The new selector starts warm wherever the algorithm has state.** Every
+    selector is built from the registry alone, and the state that steers
+    selection lives on the backend, not on the selector. That means P2C-EWMA's
+    latency average (ADR-0010, fed by an observer registered for every
+    algorithm) and the active-request count that least-connections and
+    bounded consistent hashing read (ADR-0007, ADR-0009). The consistent-hash
+    ring is built from the current snapshot at construction (decision 9). Only
+    round-robin's rotation index starts over, which is harmless (the same
+    accepted cost as in the Consequences above).
+
+21. **The swap is observable.** The `config_reloaded` line carries
+    `previous_algorithm` and `algorithm` when the algorithm changed, the last
+    reload record (decision 16) reads success, and `lb_algorithm_info`
+    (ADR-0013 amendment of 2026-10-07, S5.T20.7) moves to the new algorithm.
+
+### Alternatives considered (amendment, S5.T20.7)
+
+- **Keep rejecting it and run one process per algorithm (the demo's previous
+  shape, ADR-0023 decision 4).** Rejected by the owner: it shows traffic moving
+  between processes, not a load balancer changing its own behaviour.
+- **Replace the process to change the algorithm (SO_REUSEPORT handoff).**
+  Rejected for the same reason as in decision 1. It would also throw away the
+  per-backend state that decision 20 lets the new selector reuse.
+- **Swap the selector before applying the backend diff.** Rejected: the order
+  does not change what a request sees, since every selector reads the
+  registry's current snapshot. Applying the diff first keeps one rule for a
+  combined reload: the backends change, then the policy over them.

@@ -9,6 +9,7 @@ import (
 	"net/http/httputil"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/DMJain/l7LoadBalancer/internal/backend"
@@ -163,9 +164,15 @@ func NewLatencyObserver() RoundTripObserver {
 // afterwards, and the metrics reference is installed via SetMetrics at
 // construction time and only read afterwards, so the request path needs no
 // lock — see RegisterObserver and SetMetrics.
+//
+// The selector is the one field that changes while serving: a reload that
+// changes the algorithm replaces it with SetSelector (S5.T20.7, ADR-0015
+// decision 18). It sits behind an atomic pointer, and each request loads it
+// once, so a request sees the whole old selector or the whole new one, and a
+// request already dispatched is never affected (decision 19).
 type Proxy struct {
 	reg       *backend.Registry
-	sel       balancer.Selector
+	sel       atomic.Pointer[selectorRef]
 	rp        *httputil.ReverseProxy
 	logger    *slog.Logger
 	observers []RoundTripObserver
@@ -185,15 +192,27 @@ type Proxy struct {
 func New(reg *backend.Registry, sel balancer.Selector) *Proxy {
 	p := &Proxy{
 		reg:    reg,
-		sel:    sel,
 		logger: slog.Default(),
 	}
+	p.SetSelector(sel)
 	p.rp = &httputil.ReverseProxy{
 		Director:       p.director,
 		ModifyResponse: p.modifyResponse,
 		ErrorHandler:   p.errorHandler,
 	}
 	return p
+}
+
+// selectorRef boxes a Selector so it can sit behind atomic.Pointer, which
+// needs a concrete type.
+type selectorRef struct{ balancer.Selector }
+
+// SetSelector replaces the selector used by the next request. It is safe to
+// call while the proxy serves: the swap is one atomic store, and a request in
+// flight keeps the backend it already selected (S5.T20.7, ADR-0015 decisions
+// 18–19).
+func (p *Proxy) SetSelector(sel balancer.Selector) {
+	p.sel.Store(&selectorRef{sel})
 }
 
 // RegisterObserver adds o to the set notified of every backend round trip.
@@ -270,7 +289,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	state := &reqState{metrics: p.metrics, clientCtx: r.Context()}
 	defer p.completeRequest(r, state, start)
 
-	b, err := p.sel.Select(r.Context(), r)
+	b, err := p.sel.Load().Select(r.Context(), r)
 	if err != nil {
 		status := http.StatusBadGateway
 		if errors.Is(err, balancer.ErrNoHealthyBackends) {

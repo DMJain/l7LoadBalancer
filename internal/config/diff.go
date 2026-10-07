@@ -45,10 +45,12 @@ func DiffBackends(oldCfg, newCfg *Config) BackendDiff {
 
 // NonBackendChanges returns the names of the non-backend config fields that
 // differ between oldCfg and newCfg, in the fixed order listen, tls, h2c,
-// algorithm, health, circuit, metrics, health_endpoint, reload, server,
-// transport. A non-empty result is what makes a reload be rejected whole; only
-// the backend list is reloadable. A section with any differing sub-field is
-// named once by its section name. See ADR-0015 decision 4, ADR-0016 decision 1
+// health, circuit, metrics, health_endpoint, reload, server, transport. A
+// non-empty result is what makes a reload be rejected whole; the backend list
+// and the algorithm are reloadable. `algorithm` is not named: since S5.T20.7 a
+// reload swaps the selector in place (ADR-0015 decision 18). A section with any
+// differing sub-field is named once by its section name. See ADR-0015 decision
+// 4, ADR-0016 decision 1
 // (reload.drain_window is a non-backend field and therefore not reloadable),
 // S4.T7 (server.read_timeout likewise), S4.T8 (transport likewise), S5.T1
 // (the listener mode — tls and h2c — and server.idle_timeout likewise), and
@@ -70,9 +72,6 @@ func NonBackendChanges(oldCfg, newCfg *Config) []string {
 	}
 	if oldCfg.H2C != newCfg.H2C {
 		changed = append(changed, "h2c")
-	}
-	if oldCfg.Algorithm != newCfg.Algorithm {
-		changed = append(changed, "algorithm")
 	}
 	if *oldCfg.Health.ProbeInterval != *newCfg.Health.ProbeInterval ||
 		*oldCfg.Health.ProbeTimeout != *newCfg.Health.ProbeTimeout {

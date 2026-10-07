@@ -1,6 +1,6 @@
 # l7LoadBalancer
 
-A **Layer 7** load balancer in Go: it reads each HTTP request (method, path, headers) and forwards it to one of several **backends**, the servers that do the real work, through a **reverse proxy** (a component that sends a client's request to a backend and returns the response) built on `net/http/httputil`. It offers four ways to pick a backend, and it adds health checks (periodic tests of whether a backend answers), per-backend circuit breakers (a switch that stops traffic to a backend that keeps failing) and a reload that applies a new backend list in place. The repository also holds a reproducible benchmark against Nginx (a widely used web server and proxy) and a local demo, and it states the limits of both below.
+A **Layer 7** load balancer in Go: it reads each HTTP request (method, path, headers) and forwards it to one of several **backends**, the servers that do the real work, through a **reverse proxy** (a component that sends a client's request to a backend and returns the response) built on `net/http/httputil`. It offers four ways to pick a backend, and it adds health checks (periodic tests of whether a backend answers), per-backend circuit breakers (a switch that stops traffic to a backend that keeps failing) and a reload that applies a new backend list or a new algorithm in place, without dropping requests. The repository also holds a reproducible benchmark against Nginx (a widely used web server and proxy) and a local demo, and it states the limits of both below.
 
 ## How a request flows
 
