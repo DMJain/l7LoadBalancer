@@ -1,19 +1,7 @@
-# Demo LB (ADR-0023 decisions 14–15).
-#
-# The demo's one load balancer. Change `algorithm` here and send
-#   docker compose -f demo/docker-compose.yml kill -s HUP lb
-# to hot-reload it: the same process keeps serving, requests in flight finish
-# on the backend they already have, and the next request uses the new
-# algorithm (ADR-0015 decisions 18–21). The backend list is hot-reloadable the
-# same way. Any other field change is rejected and the running config stays.
-#
-# One of: round_robin, least_conn, consistent_hash, p2c_ewma.
-# The directory is mounted read-only into the container, so edit this file on
-# the host with any editor. Container ports (metrics :9090, health :8081) stay
-# on the demo network; only the client port is published, on 127.0.0.1
-# (ADR-0023 decision 2).
-
 listen: ":8080"
+
+# p2c_ewma, round_robin, least_conn, consistent_hash
+# docker compose -f demo/docker-compose.yml kill -s HUP lb
 
 algorithm: "least_conn"
 

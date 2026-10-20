@@ -23,7 +23,7 @@ Decision numbers are stable because code comments cite them.
 2. **Local only.** Every published port in the demo stack binds to `127.0.0.1`. The stack is not designed or documented for any other address.
 3. **A separate compose file under `demo/`.** The repo-root stack and `bench/` do not change because the demo exists.
 4. *Superseded by decision 14.*
-5. **EWMA state is cold at first and can go stale.** At start every backend reads `EWMALatency() == 0` (ADR-0010). A backend that gets no traffic keeps its old estimate. The demo script allows a convergence period after each change before it makes any claim about the distribution.
+5. **EWMA state is cold at first and can go stale.** At start every backend reads `EWMALatency() == 0` (ADR-0010). A backend that gets no traffic keeps its old estimate. The demo allows a convergence period after each change before it makes any claim about the distribution.
 6. **Eight explicit client services give skewed hash keys.** The generator runs as eight services from one YAML anchor, each with `RANK=1..8` and its own container IP. That gives eight real hash keys with no LB change. Each client takes its Zipf share of the total rate. `deploy.replicas` is not used, because replicas share one environment and cannot have different ranks.
 7. **Backend latency and failure are set at runtime through an admin listener on the dummy backend.** The listener is on `:9091` and starts only when `ADMIN_ENABLED=true`, which only the demo compose sets. It accepts `POST` only, rejects unknown fields, and is never routed through the LB. It sets `sleep_ms`, `jitter_ms` (uniform ±, the effective sleep clamped at ≥ 0) and `fail_rate`. The `SLEEP_MS`/`FAIL_RATE` environment path does not change. Runtime changes avoid the env-and-recreate method that leaked into every backend in the `degraded` slice.
 8. **The control service mounts the Docker socket, in the demo compose only.** It uses the socket to stop and start backend containers. The socket is root-equivalent on the host. This is accepted only because the stack is local (decision 2) and the service acts only on an allowlist of the demo's own containers (ADR-0025). No other compose file mounts the socket.
@@ -43,7 +43,7 @@ Decision numbers are stable because code comments cite them.
 - The latency-isolation check protects the demo from the failure that broke the `degraded` slice.
 - The demo's numbers are not benchmark numbers. `RESULTS.md` is the only published performance evidence.
 - The control service holds the Docker socket. This is acceptable only under decision 2. The stack must never bind to a non-loopback address.
-- EWMA has no decay. A backend at the bottom of the P2C-EWMA ranking may get no more traffic, so its estimate can stay stale after its latency is restored. The demo script must not promise a recovery the algorithm does not do.
+- EWMA has no decay. A backend at the bottom of the P2C-EWMA ranking may get no more traffic, so its estimate can stay stale after its latency is restored. The demo must not promise a recovery the algorithm does not do.
 - The dummy backend has an admin listener that is off by default.
 - Rejected alternatives:
   - A public multi-region deployment (conflicts with ADR-0005, costs money, and real latency is noisier than injected latency).

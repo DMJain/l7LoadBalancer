@@ -1,0 +1,47 @@
+{
+  "schemaVersion": 1,
+  "ok": true,
+  "command": "finalize",
+  "status": "pass",
+  "type": "architecture",
+  "quality": "showcase",
+  "specification": {
+    "path": "/Users/darshan-indihood/Documents/projects/l7LoadBalancer/.archify/architecture-l7loadbalancer-20261017-173810/candidate.json",
+    "sha256": "3250f7d075c9912ae27309513306d7751e947a8b406fe9ba58278b399f966188",
+    "bytes": 4890
+  },
+  "artifact": {
+    "path": "/Users/darshan-indihood/Documents/projects/l7LoadBalancer/.archify/architecture-l7loadbalancer-20261017-173810/l7loadbalancer-architecture.html",
+    "sha256": "b2295b86f6a2da5dcb26bc3f532cac9b7e627a6581b08e7d7c65b01915c0b7c0",
+    "bytes": 825087
+  },
+  "gates": {
+    "validate": "pass",
+    "deliver": "pass",
+    "check": "pass",
+    "browser-check": "pass"
+  },
+  "diagnostics": [],
+  "diagnosticSummary": {
+    "total": 0,
+    "shown": 0,
+    "truncated": false
+  },
+  "evidence": {
+    "receipt": "/Users/darshan-indihood/Documents/projects/l7LoadBalancer/.archify/architecture-l7loadbalancer-20261017-173810/l7loadbalancer-architecture.finalize.json",
+    "summaryReceipt": "/Users/darshan-indihood/Documents/projects/l7LoadBalancer/.archify/architecture-l7loadbalancer-20261017-173810/l7loadbalancer-architecture.finalize-summary.json",
+    "browserCheckReceipt": "/Users/darshan-indihood/Documents/projects/l7LoadBalancer/.archify/architecture-l7loadbalancer-20261017-173810/l7loadbalancer-architecture.browser-check.json"
+  },
+  "update": {
+    "status": "current",
+    "installedVersion": "3.1.0",
+    "availableVersion": "3.1.0",
+    "releaseNotes": null,
+    "checkedAt": "2026-10-17T12:09:24.159Z",
+    "source": "network",
+    "noticeRequired": false,
+    "noticeText": null
+  },
+  "visualReview": "not-requested",
+  "durationMs": 2121
+}

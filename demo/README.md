@@ -14,8 +14,6 @@ make demo-down
 
 The first build takes a few minutes. Then 16 containers run, and traffic starts at 400 req/s. Open **http://127.0.0.1:8095**.
 
-The run sheet is [`DEMO-SCRIPT.md`](DEMO-SCRIPT.md). The video narration is [`docs/demo/video-script.md`](../docs/demo/video-script.md).
-
 | Host address | What |
 |---|---|
 | `http://127.0.0.1:8095` | Control page |

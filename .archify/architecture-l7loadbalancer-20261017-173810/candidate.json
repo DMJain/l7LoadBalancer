@@ -1,0 +1,82 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "l7LoadBalancer: request path and runtime subsystems",
+    "output": ".archify/architecture-l7loadbalancer-20261017-173810/l7loadbalancer-architecture.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/DMJain/l7LoadBalancer.git",
+      "provider": "github",
+      "link_mode": "web",
+      "revision": "53504fc0f6e693303f6b23e6dce5b46bdaaa211e"
+    },
+    "legend": { "mode": "auto" }
+  },
+  "components": [
+    { "id": "client", "type": "external", "label": "Client", "sublabel": "HTTP/1.1 · h2 · h2c", "pos": [40, 40], "size": [150, 64] },
+    {
+      "id": "proxy", "type": "backend", "label": "Proxy handler", "sublabel": "ServeHTTP · ReverseProxy", "tag": "503 · 502 · 499",
+      "pos": [300, 40], "size": [150, 64],
+      "sources": [{ "path": "internal/proxy/proxy.go", "line": 287, "end_line": 300 }]
+    },
+    { "id": "backends", "type": "external", "label": "Backend servers", "sublabel": "round trip", "pos": [560, 40], "size": [150, 64] },
+    {
+      "id": "selector", "type": "backend", "label": "Selector", "sublabel": "one Select per request", "pos": [300, 190], "size": [150, 64],
+      "sources": [{ "path": "internal/balancer/selector.go", "line": 19, "end_line": 21 }]
+    },
+    {
+      "id": "registry", "type": "backend", "label": "Backend registry", "sublabel": "atomic snapshot", "pos": [560, 190], "size": [150, 64],
+      "sources": [{ "path": "internal/backend/registry.go", "line": 51, "end_line": 54 }]
+    },
+    {
+      "id": "circuit", "type": "backend", "label": "Circuit breaker", "sublabel": "3 failures open", "pos": [820, 190], "size": [150, 64],
+      "sources": [{ "path": "internal/circuit/circuit.go", "line": 12, "end_line": 16 }, { "path": "internal/circuit/circuit.go", "line": 62, "end_line": 64 }]
+    },
+    {
+      "id": "checker", "type": "backend", "label": "Active checker", "sublabel": "GET probe per backend", "pos": [560, 340], "size": [150, 64],
+      "sources": [{ "path": "internal/health/checker.go", "line": 364, "end_line": 375 }, { "path": "internal/health/checker.go", "line": 29, "end_line": 41 }]
+    },
+    { "id": "config", "type": "database", "label": "YAML config", "sublabel": "backends · algorithm", "pos": [40, 340], "size": [150, 64],
+      "sources": [{ "path": "internal/config/config.go", "line": 316, "end_line": 318 }]
+    },
+    {
+      "id": "reload", "type": "backend", "label": "Reload", "sublabel": "SIGHUP · POST /admin/reload", "pos": [300, 340], "size": [150, 64],
+      "sources": [{ "path": "cmd/l7LoadBalancer/main.go", "line": 184, "end_line": 191 }, { "path": "internal/app/admin.go", "line": 96, "end_line": 100 }]
+    }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "Request path", "items": [
+      "Select runs once; Registry.Allow re-checks the circuit before IncActive",
+      "No selectable backend gives 503; other selection errors give 502",
+      "A request is never retried (ADR-0018)"
+    ] },
+    { "dot": "emerald", "title": "Round-trip observers", "items": [
+      "Latency EWMA feeds p2c_ewma",
+      "Outlier: 5 failures in last 10 ejects; only probes reinstate",
+      "Circuit: 3 consecutive failures open, 30s cooldown, one half-open trial",
+      "Response streams back to the client through the proxy"
+    ] },
+    { "dot": "amber", "title": "Reload", "items": [
+      "Only backends and algorithm reload; any other field change is rejected",
+      "Backend identity is (name, URL); unchanged backends keep health and circuit state",
+      "Removed backends drain for reload.drain_window (default 30s)"
+    ] },
+    { "dot": "slate", "title": "Scope", "items": [
+      "Standard library net/http and httputil.ReverseProxy; h2c via x/net",
+      "Not hardened against hostile traffic (ADR-0005)",
+      "Not built: SO_REUSEPORT handoff, gRPC pass-through, rate limiting, WebSocket upgrade checks"
+    ] }
+  ],
+  "connections": [
+    { "id": "client-to-proxy", "from": "client", "to": "proxy", "label": "HTTP request", "variant": "emphasis" },
+    { "id": "proxy-select", "from": "proxy", "to": "selector", "label": "Select(r)" },
+    { "id": "proxy-forward", "from": "proxy", "to": "backends", "label": "forward" },
+    { "id": "selector-registry", "from": "selector", "to": "registry", "label": "Selectable()" },
+    { "id": "registry-circuit", "from": "registry", "to": "circuit", "label": "Allow / Open", "variant": "security" },
+    { "id": "checker-registry", "from": "checker", "to": "registry", "label": "MarkHealthy / Unhealthy", "variant": "dashed" },
+    { "id": "config-reload", "from": "config", "to": "reload", "label": "reads YAML" },
+    { "id": "reload-selector", "from": "reload", "to": "selector", "label": "SetSelector" },
+    { "id": "reload-registry", "from": "reload", "to": "registry", "label": "Apply(diff)" }
+  ]
+}
